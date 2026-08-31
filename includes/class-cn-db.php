@@ -1,4 +1,4 @@
-includes/class-cn-db.php<?php
+<?php
 if ( ! defined( 'ABSPATH' ) ) exit;
 
 class CN_DB {
