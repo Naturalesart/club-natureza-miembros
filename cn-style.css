@@ -1,0 +1,723 @@
+/* Club Natureza Miembros — estilos scopeados bajo .cn-wrap. Mobile-first. */
+
+.cn-wrap {
+	--cn-verde-botanico: #1f473c !important;
+	--cn-sage: #8fa68e !important;
+	--cn-rosa-polvo: #d9a9a0 !important;
+	--cn-crema: #fbf5e9 !important;
+	--cn-terracota: #bf5c3a !important;
+	--cn-terracota-hover: #a94e2f !important;
+	--cn-dorado: #cfa15b !important;
+	--cn-texto: #43352c !important;
+	--cn-muted: #8a7663 !important;
+	--cn-borde: #efe0c8 !important;
+	--cn-card-bg: #fffdf7 !important;
+	--cn-track: #efdcc0 !important;
+
+	font-family: 'Nunito Sans', -apple-system, sans-serif !important;
+	font-size: 16px !important;
+	color: var(--cn-texto) !important;
+	max-width: 480px !important;
+	margin: 0 auto !important;
+	padding: 16px !important;
+	box-sizing: border-box !important;
+}
+
+/* El dashboard (home) va sobre un panel cálido redondeado, para el look del
+   diseño nuevo. Login y página de curso quedan sin fondo (transparentes). */
+.cn-wrap--home {
+	background: var(--cn-crema) !important;
+	border-radius: 22px !important;
+	padding: clamp(18px, 4vw, 40px) !important;
+	max-width: 1180px !important;
+}
+
+/* Textura sutil (líneas diagonales) para las portadas de color, igual que el mockup. */
+.cn-ph {
+	background-image: repeating-linear-gradient(135deg, rgba(0,0,0,0.05) 0 10px, rgba(0,0,0,0) 10px 20px) !important;
+}
+
+.cn-wrap p,
+.cn-wrap li,
+.cn-wrap label,
+.cn-wrap .cn-boton {
+	font-size: 16px !important;
+}
+
+.cn-wrap *,
+.cn-wrap *::before,
+.cn-wrap *::after {
+	box-sizing: border-box !important;
+}
+
+.cn-wrap h1,
+.cn-wrap h2,
+.cn-wrap h3,
+.cn-wrap h4,
+.cn-wrap .cn-form__titulo,
+.cn-wrap .cn-seccion__titulo {
+	font-family: 'Fraunces', Georgia, serif !important;
+	color: var(--cn-verde-botanico) !important;
+	font-weight: 600 !important;
+	margin: 0 0 16px !important;
+	line-height: 1.25 !important;
+}
+
+.cn-form__titulo { font-size: 22px !important; text-align: center !important; }
+.cn-seccion__titulo { font-size: 18px !important; }
+
+.cn-alerta {
+	padding: 12px 14px !important;
+	border-radius: 10px !important;
+	margin-bottom: 16px !important;
+	font-size: 16px !important;
+	line-height: 1.4 !important;
+}
+.cn-alerta--error {
+	background: #fbe7e2 !important;
+	color: var(--cn-terracota) !important;
+	border: 1px solid var(--cn-terracota) !important;
+}
+.cn-alerta--success {
+	background: #ecf1e9 !important;
+	color: var(--cn-verde-botanico) !important;
+	border: 1px solid var(--cn-sage) !important;
+}
+.cn-alerta a { color: inherit !important; text-decoration: underline !important; }
+
+.cn-form {
+	background: var(--cn-crema) !important;
+	border-radius: 16px !important;
+	padding: 24px 20px !important;
+	box-shadow: 0 2px 12px rgba(31, 61, 43, 0.08) !important;
+	max-width: 420px !important;
+	margin: 0 auto !important;
+}
+
+.cn-campo { margin-bottom: 16px !important; }
+.cn-campo label {
+	display: block !important;
+	font-size: 16px !important;
+	font-weight: 600 !important;
+	margin-bottom: 6px !important;
+	color: var(--cn-verde-botanico) !important;
+}
+.cn-campo input {
+	width: 100% !important;
+	padding: 12px 14px !important;
+	border: 1px solid var(--cn-sage) !important;
+	border-radius: 10px !important;
+	font-size: 16px !important;
+	font-family: 'Nunito Sans', sans-serif !important;
+	background: #fff !important;
+	color: var(--cn-texto) !important;
+}
+.cn-campo input:focus {
+	outline: none !important;
+	border-color: var(--cn-terracota) !important;
+}
+
+.cn-boton {
+	display: inline-block !important;
+	width: 100% !important;
+	text-align: center !important;
+	background: var(--cn-terracota) !important;
+	color: #fff !important;
+	border: none !important;
+	border-radius: 999px !important;
+	padding: 14px 20px !important;
+	font-size: 16px !important;
+	font-weight: 700 !important;
+	font-family: 'Nunito Sans', sans-serif !important;
+	cursor: pointer !important;
+	text-decoration: none !important;
+	box-shadow: 0 2px 8px rgba(193, 101, 63, 0.3) !important;
+}
+.cn-boton:hover { background: var(--cn-terracota-hover) !important; color: #fff !important; transform: translateY(-1px) !important; }
+
+.cn-wrap--suelto { padding: 0 !important; max-width: 320px !important; }
+
+.cn-boton--suscriptora {
+	background: var(--cn-verde-botanico) !important;
+	font-size: 17px !important;
+	padding: 16px 24px !important;
+}
+.cn-boton--suscriptora:hover { background: var(--cn-dorado) !important; }
+
+.cn-boton--ghost {
+	width: auto !important;
+	background: transparent !important;
+	color: var(--cn-verde-botanico) !important;
+	border: 1px solid var(--cn-sage) !important;
+	box-shadow: none !important;
+	padding: 8px 14px !important;
+	font-size: 13px !important;
+}
+
+.cn-seccion { margin-bottom: 28px !important; }
+
+.cn-grid {
+	display: grid !important;
+	grid-template-columns: 1fr !important;
+	gap: 20px !important;
+}
+
+.cn-card {
+	background: #fff !important;
+	border: 1px solid var(--cn-rosa-polvo) !important;
+	border-radius: 16px !important;
+	padding: 16px !important;
+	box-shadow: 0 2px 10px rgba(31, 61, 43, 0.06) !important;
+	transition: transform .18s ease, box-shadow .18s ease !important;
+}
+.cn-card--curso:hover { transform: translateY(-4px) !important; box-shadow: 0 12px 28px rgba(31, 61, 43, 0.14) !important; }
+.cn-card__titulo {
+	font-size: 16px !important;
+	margin-bottom: 12px !important;
+	color: var(--cn-verde-botanico) !important;
+}
+
+.cn-vacio {
+	color: var(--cn-sage) !important;
+	font-size: 16px !important;
+	font-style: italic !important;
+}
+
+/* ---------------------------------------------------------------------
+ * HEADER (saludo + pill de usuaria + logout)
+ * ------------------------------------------------------------------- */
+
+.cn-top {
+	display: flex !important;
+	align-items: center !important;
+	justify-content: space-between !important;
+	gap: 20px !important;
+	flex-wrap: wrap !important;
+	margin-bottom: 32px !important;
+}
+.cn-top__eyebrow {
+	margin: 0 0 4px !important;
+	font-size: 15px !important;
+	font-weight: 700 !important;
+	letter-spacing: .02em !important;
+	color: var(--cn-terracota) !important;
+}
+.cn-top__titulo {
+	margin: 0 !important;
+	font-family: 'Fraunces', Georgia, serif !important;
+	font-weight: 600 !important;
+	font-size: clamp(26px, 4vw, 38px) !important;
+	color: var(--cn-verde-botanico) !important;
+	line-height: 1.1 !important;
+}
+.cn-top__acciones { display: flex !important; align-items: center !important; gap: 12px !important; flex-wrap: wrap !important; }
+.cn-pill {
+	display: flex !important;
+	align-items: center !important;
+	gap: 12px !important;
+	background: var(--cn-card-bg) !important;
+	border: 1px solid var(--cn-borde) !important;
+	border-radius: 999px !important;
+	padding: 8px 18px !important;
+	box-shadow: 0 6px 18px -14px rgba(90,50,25,.5) !important;
+}
+.cn-pill__avatar {
+	display: inline-flex !important;
+	align-items: center !important;
+	justify-content: center !important;
+	width: 40px !important;
+	height: 40px !important;
+	border-radius: 999px !important;
+	background: var(--cn-verde-botanico) !important;
+	color: var(--cn-crema) !important;
+	font-family: 'Fraunces', serif !important;
+	font-weight: 600 !important;
+	font-size: 17px !important;
+	flex-shrink: 0 !important;
+}
+.cn-pill__texto { display: flex !important; flex-direction: column !important; line-height: 1.2 !important; }
+.cn-pill__nombre { font-weight: 700 !important; font-size: 15px !important; color: var(--cn-verde-botanico) !important; }
+.cn-pill__sub { font-size: 12.5px !important; color: var(--cn-muted) !important; }
+.cn-logout { margin: 0 !important; }
+.cn-logout__btn {
+	background: transparent !important;
+	border: 1px solid var(--cn-borde) !important;
+	color: var(--cn-muted) !important;
+	border-radius: 999px !important;
+	padding: 9px 16px !important;
+	font-size: 13px !important;
+	font-weight: 700 !important;
+	font-family: 'Nunito Sans', sans-serif !important;
+	cursor: pointer !important;
+}
+.cn-logout__btn:hover { background: #fff !important; color: var(--cn-terracota) !important; border-color: var(--cn-terracota) !important; }
+
+/* ---------------------------------------------------------------------
+ * HERO — SEGUÍ DONDE DEJASTE
+ * ------------------------------------------------------------------- */
+
+.cn-hero {
+	display: flex !important;
+	flex-direction: column !important;
+	background: var(--cn-card-bg) !important;
+	border: 1px solid var(--cn-borde) !important;
+	border-radius: 22px !important;
+	overflow: hidden !important;
+	box-shadow: 0 20px 44px -28px rgba(90,50,25,.4) !important;
+}
+.cn-hero__cover {
+	position: relative !important;
+	min-height: 150px !important;
+	background-color: var(--cn-color-curso) !important;
+	background-size: cover !important;
+	background-position: center !important;
+}
+/* Portada con foto (miniatura del primer video): velo sutil arriba-izquierda
+   para que el badge/estado se lea sobre cualquier imagen. */
+.cn-cover--foto { position: relative !important; }
+.cn-cover--foto::after {
+	content: '' !important;
+	position: absolute !important;
+	inset: 0 !important;
+	background: linear-gradient(155deg, rgba(0,0,0,.30) 0%, rgba(0,0,0,0) 45%) !important;
+	pointer-events: none !important;
+	z-index: 1 !important;
+}
+.cn-hero__badge, .cn-card__badge {
+	position: absolute !important;
+	top: 14px !important;
+	left: 14px !important;
+	z-index: 2 !important;
+	background: var(--cn-verde-botanico) !important;
+	color: var(--cn-crema) !important;
+	font-size: 11px !important;
+	font-weight: 700 !important;
+	letter-spacing: .04em !important;
+	padding: 5px 11px !important;
+	border-radius: 999px !important;
+}
+.cn-hero__cuerpo {
+	flex: 1 !important;
+	padding: 24px !important;
+	display: flex !important;
+	flex-direction: column !important;
+	justify-content: center !important;
+	gap: 16px !important;
+	min-width: 0 !important;
+}
+.cn-hero__titulo {
+	margin: 0 0 4px !important;
+	font-family: 'Fraunces', serif !important;
+	font-weight: 600 !important;
+	font-size: 24px !important;
+	color: var(--cn-verde-botanico) !important;
+}
+.cn-hero__sub { margin: 0 !important; font-size: 15px !important; color: var(--cn-muted) !important; }
+.cn-hero__sub span { color: var(--cn-texto) !important; font-weight: 600 !important; }
+.cn-hero__fila { display: flex !important; align-items: center !important; gap: 16px !important; flex-wrap: wrap !important; }
+.cn-hero__avance { flex: 1 !important; min-width: 200px !important; }
+.cn-hero__meta { margin: 8px 0 0 !important; font-size: 13.5px !important; font-weight: 600 !important; color: var(--cn-muted) !important; }
+.cn-hero__cta { width: auto !important; white-space: nowrap !important; padding: 14px 30px !important; }
+
+.cn-progressbar {
+	width: 100% !important;
+	height: 10px !important;
+	background: var(--cn-track) !important;
+	border-radius: 999px !important;
+	overflow: hidden !important;
+	margin-top: 0 !important;
+}
+.cn-progressbar__fill { height: 100% !important; background: var(--cn-color-curso, var(--cn-terracota)) !important; border-radius: 999px !important; }
+
+/* ---------------------------------------------------------------------
+ * TARJETAS DE CURSO (colores fijos por curso)
+ * ------------------------------------------------------------------- */
+
+.cn-curso-color--verde     { --cn-color-curso: var(--cn-verde-botanico); }
+.cn-curso-color--sage      { --cn-color-curso: var(--cn-sage); }
+.cn-curso-color--rosa      { --cn-color-curso: var(--cn-rosa-polvo); }
+.cn-curso-color--terracota { --cn-color-curso: var(--cn-terracota); }
+.cn-curso-color--dorado    { --cn-color-curso: var(--cn-dorado); }
+
+/* Encabezado de sección (título + contador a la derecha). */
+.cn-seccion__head {
+	display: flex !important;
+	align-items: baseline !important;
+	justify-content: space-between !important;
+	gap: 16px !important;
+	margin-bottom: 18px !important;
+}
+.cn-seccion__head .cn-seccion__titulo { margin: 0 !important; }
+.cn-seccion__count { font-size: 14px !important; color: var(--cn-muted) !important; }
+
+/* Tarjetas de curso: portada de color + cuerpo con tags y progreso. */
+.cn-card--curso {
+	padding: 0 !important;
+	overflow: hidden !important;
+	background: var(--cn-card-bg) !important;
+	border: 1px solid var(--cn-borde) !important;
+	border-radius: 20px !important;
+	box-shadow: 0 12px 30px -22px rgba(90,50,25,.4) !important;
+	display: flex !important;
+	flex-direction: column !important;
+}
+.cn-card--curso:hover { transform: translateY(-4px) !important; box-shadow: 0 22px 40px -20px rgba(90,50,25,.32) !important; }
+.cn-card__cover {
+	position: relative !important;
+	height: 150px !important;
+	background-color: var(--cn-color-curso) !important;
+	background-size: cover !important;
+	background-position: center !important;
+}
+.cn-card__cuerpo { padding: 20px 22px 22px !important; display: flex !important; flex-direction: column !important; gap: 14px !important; flex: 1 !important; }
+.cn-card__titulo {
+	margin: 0 !important;
+	font-family: 'Fraunces', serif !important;
+	font-weight: 600 !important;
+	font-size: 21px !important;
+	color: var(--cn-verde-botanico) !important;
+	line-height: 1.15 !important;
+}
+.cn-card__tags { display: flex !important; gap: 9px !important; flex-wrap: wrap !important; }
+.cn-tag {
+	display: inline-flex !important;
+	align-items: center !important;
+	gap: 6px !important;
+	background: #f7ecda !important;
+	color: #8a6a4d !important;
+	font-size: 12.5px !important;
+	font-weight: 700 !important;
+	padding: 5px 12px !important;
+	border-radius: 999px !important;
+}
+.cn-tag--vacio { background: transparent !important; color: var(--cn-muted) !important; font-weight: 400 !important; padding-left: 0 !important; }
+.cn-card__pie { margin-top: auto !important; }
+.cn-card__avance { margin-bottom: 14px !important; }
+.cn-card__avance .cn-progressbar { height: 7px !important; }
+.cn-card__meta { margin: 7px 0 0 !important; font-size: 12.5px !important; font-weight: 600 !important; color: var(--cn-muted) !important; }
+.cn-card__pie .cn-boton { display: block !important; width: 100% !important; }
+
+.cn-curso-header {
+	padding: 24px 20px !important;
+	border-radius: 16px !important;
+	background: var(--cn-color-curso) !important;
+	margin-bottom: 22px !important;
+	box-shadow: 0 6px 18px rgba(31, 61, 43, 0.16) !important;
+}
+.cn-curso-color--rosa.cn-curso-header,
+.cn-curso-color--dorado.cn-curso-header,
+.cn-curso-color--sage.cn-curso-header { color: var(--cn-verde-botanico) !important; }
+.cn-curso-color--verde.cn-curso-header,
+.cn-curso-color--terracota.cn-curso-header { color: #fff !important; }
+.cn-curso-header__titulo { color: inherit !important; margin: 6px 0 0 !important; }
+.cn-volver { color: inherit !important; font-size: 16px !important; font-weight: 700 !important; text-decoration: none !important; }
+.cn-volver:hover { text-decoration: underline !important; }
+
+/* ---------------------------------------------------------------------
+ * REPRODUCTOR + LISTA DE CLASES
+ * ------------------------------------------------------------------- */
+
+.cn-reproductor { margin-bottom: 16px !important; }
+.cn-reproductor__vacio {
+	background: var(--cn-crema) !important;
+	border-radius: 14px !important;
+	padding: 24px 16px !important;
+	text-align: center !important;
+	font-size: 16px !important;
+	color: var(--cn-verde-botanico) !important;
+	display: flex !important;
+	flex-direction: column !important;
+	gap: 12px !important;
+	align-items: center !important;
+}
+.cn-reproductor__barra {
+	display: flex !important;
+	align-items: center !important;
+	justify-content: space-between !important;
+	gap: 12px !important;
+	flex-wrap: wrap !important;
+	margin-top: 10px !important;
+}
+.cn-reproductor__titulo { font-size: 16px !important; font-weight: 700 !important; color: var(--cn-verde-botanico) !important; margin: 0 !important; flex: 1 1 auto !important; min-width: 0 !important; }
+
+.cn-fullscreen-btn {
+	background: var(--cn-verde-botanico) !important;
+	color: #fff !important;
+	flex-shrink: 0 !important;
+	display: inline-flex !important;
+	align-items: center !important;
+	gap: 6px !important;
+	white-space: nowrap !important;
+}
+.cn-fullscreen-btn:hover { background: var(--cn-dorado) !important; color: #fff !important; }
+.cn-fullscreen-btn span { font-size: 18px !important; line-height: 1 !important; }
+
+.cn-embed { position: relative !important; width: 100% !important; padding-top: 56.25% !important; border-radius: 16px !important; overflow: hidden !important; background: #000 !important; box-shadow: 0 6px 20px rgba(31, 61, 43, 0.18) !important; }
+.cn-embed iframe { position: absolute !important; top: 0 !important; left: 0 !important; width: 100% !important; height: 100% !important; border: 0 !important; }
+/* En fullscreen el contenedor deja de ser 16:9 forzado: el iframe llena todo. */
+.cn-embed:fullscreen { padding-top: 0 !important; border-radius: 0 !important; width: 100% !important; height: 100% !important; }
+.cn-embed:-webkit-full-screen { padding-top: 0 !important; border-radius: 0 !important; width: 100% !important; height: 100% !important; }
+.cn-embed:fullscreen iframe, .cn-embed:-webkit-full-screen iframe { position: absolute !important; height: 100% !important; }
+.cn-embed--audio { padding-top: 0 !important; height: 90px !important; background: transparent !important; border-radius: 10px !important; }
+
+/* Galería de clases: miniaturas con botón de play centrado. */
+.cn-galeria {
+	list-style: none !important;
+	margin: 0 !important;
+	padding: 0 !important;
+	display: grid !important;
+	grid-template-columns: 1fr 1fr !important;
+	gap: 14px !important;
+}
+.cn-galeria .cn-clase__link {
+	display: flex !important;
+	flex-direction: column !important;
+	height: 100% !important;
+	background: #fff !important;
+	border: 1px solid var(--cn-rosa-polvo) !important;
+	border-radius: 14px !important;
+	overflow: hidden !important;
+	text-decoration: none !important;
+	transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease !important;
+}
+.cn-galeria .cn-clase__link:hover {
+	transform: translateY(-3px) !important;
+	box-shadow: 0 8px 22px rgba(31, 61, 43, 0.14) !important;
+	border-color: var(--cn-sage) !important;
+}
+.cn-clase__thumb {
+	position: relative !important;
+	display: block !important;
+	width: 100% !important;
+	padding-top: 56.25% !important;
+	background-color: var(--cn-verde-botanico) !important;
+	background-size: cover !important;
+	background-position: center !important;
+}
+.cn-clase__play {
+	position: absolute !important;
+	top: 50% !important;
+	left: 50% !important;
+	transform: translate(-50%, -50%) !important;
+	width: 46px !important;
+	height: 46px !important;
+	border-radius: 50% !important;
+	background: rgba(255, 255, 255, 0.92) !important;
+	box-shadow: 0 3px 10px rgba(0, 0, 0, 0.28) !important;
+	transition: transform .18s ease, background .18s ease !important;
+	display: flex !important;
+	align-items: center !important;
+	justify-content: center !important;
+}
+.cn-clase__play::before {
+	content: '' !important;
+	position: static !important;
+	transform: none !important;
+	width: 0 !important;
+	height: 0 !important;
+	margin-left: 4px !important;
+	border-style: solid !important;
+	border-width: 8px 0 8px 13px !important;
+	border-color: transparent transparent transparent var(--cn-terracota) !important;
+}
+.cn-galeria .cn-clase__link:hover .cn-clase__play { transform: translate(-50%, -50%) scale(1.08) !important; background: #fff !important; }
+.cn-clase__num {
+	position: absolute !important;
+	top: 8px !important;
+	left: 8px !important;
+	min-width: 24px !important;
+	height: 24px !important;
+	padding: 0 7px !important;
+	display: inline-flex !important;
+	align-items: center !important;
+	justify-content: center !important;
+	border-radius: 999px !important;
+	background: rgba(31, 61, 43, 0.82) !important;
+	color: #fff !important;
+	font-size: 13px !important;
+	font-weight: 700 !important;
+}
+.cn-clase__vista {
+	position: absolute !important;
+	top: 8px !important;
+	right: 8px !important;
+	width: 26px !important;
+	height: 26px !important;
+	display: inline-flex !important;
+	align-items: center !important;
+	justify-content: center !important;
+	border-radius: 50% !important;
+	background: var(--cn-verde-botanico) !important;
+	color: #fff !important;
+	font-size: 14px !important;
+	font-weight: 700 !important;
+}
+.cn-clase__reproduciendo {
+	position: absolute !important;
+	bottom: 8px !important;
+	left: 8px !important;
+	padding: 3px 10px !important;
+	border-radius: 999px !important;
+	background: var(--cn-terracota) !important;
+	color: #fff !important;
+	font-size: 11px !important;
+	font-weight: 700 !important;
+	text-transform: uppercase !important;
+	letter-spacing: 0.04em !important;
+}
+.cn-clase__pie {
+	display: flex !important;
+	align-items: center !important;
+	justify-content: space-between !important;
+	gap: 8px !important;
+	padding: 12px 14px !important;
+}
+.cn-clase__titulo { font-size: 15px !important; font-weight: 700 !important; color: var(--cn-verde-botanico) !important; line-height: 1.3 !important; }
+.cn-clase__estado { font-size: 11px !important; font-weight: 700 !important; color: var(--cn-sage) !important; text-transform: uppercase !important; letter-spacing: 0.04em !important; flex-shrink: 0 !important; }
+.cn-clase--vista .cn-clase__link { border-color: var(--cn-sage) !important; }
+.cn-clase--activa .cn-clase__link { border-color: var(--cn-terracota) !important; box-shadow: 0 0 0 2px var(--cn-terracota) !important; }
+
+/* ---------------------------------------------------------------------
+ * MATERIAL DESCARGABLE
+ * ------------------------------------------------------------------- */
+
+.cn-lista-archivos { list-style: none !important; margin: 0 !important; padding: 0 !important; display: flex !important; flex-direction: column !important; gap: 10px !important; }
+.cn-archivo {
+	display: flex !important;
+	align-items: center !important;
+	gap: 12px !important;
+	background: #fff !important;
+	border: 1px solid var(--cn-rosa-polvo) !important;
+	border-radius: 12px !important;
+	padding: 12px 14px !important;
+	flex-wrap: wrap !important;
+}
+.cn-archivo__icono {
+	display: inline-flex !important;
+	align-items: center !important;
+	justify-content: center !important;
+	min-width: 44px !important;
+	height: 32px !important;
+	padding: 0 8px !important;
+	border-radius: 8px !important;
+	background: var(--cn-terracota) !important;
+	color: #fff !important;
+	font-size: 13px !important;
+	font-weight: 700 !important;
+	flex-shrink: 0 !important;
+}
+.cn-archivo__nombre { flex: 1 !important; font-size: 16px !important; font-weight: 600 !important; color: var(--cn-texto) !important; min-width: 140px !important; }
+
+.cn-boton--chico { width: auto !important; padding: 10px 18px !important; font-size: 15px !important; }
+
+/* ---------------------------------------------------------------------
+ * AUDIOS PARA INSPIRAR
+ * ------------------------------------------------------------------- */
+
+.cn-lista-audios { list-style: none !important; margin: 0 !important; padding: 0 !important; display: flex !important; flex-direction: column !important; gap: 14px !important; }
+.cn-audio {
+	background: #fff !important;
+	border: 1px solid var(--cn-dorado) !important;
+	border-radius: 12px !important;
+	padding: 12px 14px !important;
+}
+.cn-audio__cabecera { display: flex !important; align-items: baseline !important; justify-content: space-between !important; gap: 10px !important; margin-bottom: 10px !important; flex-wrap: wrap !important; }
+.cn-audio__nombre { font-size: 16px !important; font-weight: 600 !important; color: var(--cn-texto) !important; }
+.cn-audio__duracion { font-size: 14px !important; color: var(--cn-sage) !important; font-weight: 700 !important; }
+
+@media (min-width: 640px) {
+	.cn-wrap { max-width: 640px !important; padding: 24px !important; }
+	.cn-wrap--home { max-width: 720px !important; }
+	.cn-grid { grid-template-columns: 1fr 1fr !important; }
+	.cn-galeria { grid-template-columns: repeat(3, 1fr) !important; }
+	/* Hero horizontal: portada a la izquierda, info a la derecha. */
+	.cn-hero { flex-direction: row !important; }
+	.cn-hero__cover { flex: 0 0 240px !important; height: auto !important; }
+	.cn-hero__cuerpo { padding: 28px 34px !important; }
+}
+
+@media (min-width: 900px) {
+	.cn-wrap { max-width: 1040px !important; padding: 32px !important; }
+	.cn-wrap--home { max-width: 1180px !important; }
+	.cn-grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)) !important; }
+	.cn-galeria { grid-template-columns: repeat(3, 1fr) !important; }
+}
+
+/* En pantallas muy angostas, una sola columna para que el título de la clase
+   se lea cómodo. */
+@media (max-width: 360px) {
+	.cn-galeria { grid-template-columns: 1fr !important; }
+}
+
+/* ---------------------------------------------------------------------
+ * VER EN PANTALLA COMPLETA (móvil)
+ * En celular el player embebido de Drive muestra una barra de controles
+ * fija que no se puede ocultar (iframe de otro dominio). Por eso en móvil
+ * ocultamos el embed y mostramos una tarjeta-póster que abre el video en
+ * el visor de Drive a pantalla completa, que sí se ve limpio. En desktop
+ * el embed queda como está y esta tarjeta se oculta.
+ * ------------------------------------------------------------------- */
+.cn-verdrive { display: none !important; }
+
+@media (max-width: 768px) {
+	.cn-reproductor .cn-embed { display: none !important; }
+	.cn-reproductor__barra { display: none !important; }
+	.cn-verdrive {
+		display: flex !important;
+		flex-direction: column !important;
+		justify-content: flex-end !important;
+		position: relative !important;
+		width: 100% !important;
+		aspect-ratio: 16 / 9 !important;
+		border-radius: 16px !important;
+		overflow: hidden !important;
+		background: var(--cn-verde-botanico) center / cover no-repeat !important;
+		text-decoration: none !important;
+		box-shadow: 0 6px 20px rgba(31, 61, 43, 0.18) !important;
+	}
+	.cn-verdrive::before {
+		content: '' !important;
+		position: absolute !important;
+		inset: 0 !important;
+		background: linear-gradient(180deg, rgba(0,0,0,0) 45%, rgba(0,0,0,0.65) 100%) !important;
+	}
+	.cn-verdrive__play {
+		position: absolute !important;
+		top: 50% !important;
+		left: 50% !important;
+		transform: translate(-50%, -50%) !important;
+		width: 64px !important;
+		height: 64px !important;
+		border-radius: 50% !important;
+		background: rgba(255, 255, 255, 0.92) !important;
+		box-shadow: 0 3px 12px rgba(0, 0, 0, 0.35) !important;
+		display: flex !important;
+		align-items: center !important;
+		justify-content: center !important;
+	}
+	.cn-verdrive__play::after {
+		content: '' !important;
+		width: 0 !important;
+		height: 0 !important;
+		margin-left: 5px !important;
+		border-style: solid !important;
+		border-width: 11px 0 11px 18px !important;
+		border-color: transparent transparent transparent var(--cn-terracota) !important;
+	}
+	.cn-verdrive__texto {
+		position: relative !important;
+		padding: 14px 16px !important;
+		color: #fff !important;
+		display: flex !important;
+		flex-direction: column !important;
+		gap: 2px !important;
+	}
+	.cn-verdrive__texto strong { font-size: 16px !important; font-weight: 700 !important; line-height: 1.25 !important; }
+	.cn-verdrive__texto small { font-size: 12px !important; opacity: 0.9 !important; }
+
+	/* La tarjeta-póster de arriba es el reproductor principal. Las miniaturas de
+	   la galería son solo para elegir clase, así que en móvil achicamos su botón
+	   de play para que no compita visualmente y no haya duda de dónde tocar. */
+	.cn-galeria .cn-clase__play { width: 32px !important; height: 32px !important; background: rgba(255, 255, 255, 0.72) !important; }
+	.cn-galeria .cn-clase__play::before { border-width: 6px 0 6px 9px !important; }
+}
