@@ -5,7 +5,7 @@ class CN_DB {
 		global $wpdb;
 		return $wpdb->prefix . 'cn_' . $nombre;
 	}
-	const DB_VERSION = '2.2.0';
+	const DB_VERSION = '2.3.0';
 	public static function maybe_upgrade() {
 		if ( get_option( 'cn_db_version' ) !== self::DB_VERSION ) {
 			self::instalar();
@@ -38,6 +38,7 @@ class CN_DB {
 			trial_payment_id varchar(191) DEFAULT NULL,
 			trial_monto decimal(10,2) DEFAULT NULL,
 			fecha_modificacion datetime DEFAULT NULL,
+			email varchar(191) DEFAULT NULL,
 			notas text DEFAULT NULL,
 			PRIMARY KEY  (id),
 			KEY celular_hint (celular_hint),
