@@ -90,3 +90,17 @@ add_action( 'template_redirect', function () {
 	// desactivar QUIC/CDN desde hPanel — pero es inocuo intentarlo acá.
 	header( 'Alt-Svc: clear' );
 } );
+
+
+add_action( 'cn_cron_revocar_trials', array( 'CN_Auth', 'revocar_trials_vencidos' ) );
+// IMPORTANTE: como el plugin ya estaba activo en producción antes de este
+// cambio, register_activation_hook NO se va a disparar solo (ese hook solo
+// corre al pasar de inactivo → activo). Esta red de seguridad, mismo patrón
+// que CN_DB::maybe_upgrade(), programa el cron en la primera carga si todavía
+// no está programado — así funciona tanto en instalaciones nuevas como en
+// esta actualización sobre un plugin que ya venía corriendo.
+add_action( 'init', function () {
+	if ( ! wp_next_scheduled( 'cn_cron_revocar_trials' ) ) {
+		wp_schedule_event( time(), 'daily', 'cn_cron_revocar_trials' );
+	}
+} );
