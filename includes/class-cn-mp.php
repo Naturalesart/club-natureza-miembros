@@ -21,11 +21,6 @@ class CN_MP {
 	public static function trial_webhook_url() {
 		return rest_url( 'cn/v1/trial-alta' );
 	}
-	/**
-	 * Crea una preapproval (suscripción) en Mercado Pago.
-	 *
-	 * @return array { ok: bool, init_point: string, error: string }
-	 */
 	public static function crear_preapproval( $nombre, $celular_normalizado ) {
 		$token = self::get_access_token();
 		if ( ! $token ) {
@@ -79,15 +74,6 @@ class CN_MP {
 		);
 		return array( 'ok' => true, 'init_point' => $data['init_point'], 'error' => '' );
 	}
-	/**
-	 * Crea una Preference de Checkout Pro para el pago único del trial de 7 días.
-	 * A diferencia de la preapproval (suscripción recurrente), esto es un pago
-	 * único de $7.000 ARS. El nombre y el celular viajan en "metadata" — MP los
-	 * copia automáticamente al payment resultante, así el endpoint /trial-alta
-	 * no depende de ninguna tabla de "pendientes" para reconstruir quién pagó.
-	 *
-	 * @return array { ok: bool, init_point: string, error: string }
-	 */
 	public static function crear_preference_trial( $nombre, $celular_normalizado ) {
 		$token = self::get_access_token();
 		if ( ! $token ) {
@@ -139,6 +125,17 @@ class CN_MP {
 			$mensaje = isset( $data['message'] ) ? $data['message'] : 'Mercado Pago rechazó la solicitud.';
 			return array( 'ok' => false, 'init_point' => '', 'error' => $mensaje );
 		}
+		global $wpdb;
+		$wpdb->insert(
+			CN_DB::tabla( 'trial_pendientes' ),
+			array(
+				'nombre_apellido'    => $nombre,
+				'celular'            => $celular_normalizado,
+				'external_reference' => $external_reference,
+				'fecha'              => current_time( 'mysql', true ),
+			),
+			array( '%s', '%s', '%s', '%s' )
+		);
 		return array( 'ok' => true, 'init_point' => $data['init_point'], 'error' => '' );
 	}
 	public static function obtener_preapproval( $id ) {
