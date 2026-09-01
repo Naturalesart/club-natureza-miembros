@@ -16,6 +16,11 @@ class CN_Webhook {
 			'callback'            => array( __CLASS__, 'manejar_trial' ),
 			'permission_callback' => '__return_true',
 		) );
+		register_rest_route( 'cn/v1', '/crear-preference-trial', array(
+			'methods'             => 'POST',
+			'callback'            => array( __CLASS__, 'crear_preference_trial_endpoint' ),
+			'permission_callback' => '__return_true',
+		) );
 	}
 	public static function manejar( WP_REST_Request $request ) {
 		global $wpdb;
@@ -24,7 +29,6 @@ class CN_Webhook {
 		if ( ! is_array( $json ) ) {
 			$json = array();
 		}
-		// El "tipo" puede venir en el body o como query params (formatos distintos de MP).
 		$tipo = '';
 		$id   = '';
 		if ( ! empty( $json['type'] ) ) {
@@ -43,7 +47,6 @@ class CN_Webhook {
 		} elseif ( ! empty( $json['id'] ) ) {
 			$id = sanitize_text_field( (string) $json['id'] );
 		}
-		// 1. Loguear el payload crudo siempre, sin importar si lo podemos procesar.
 		$wpdb->insert(
 			CN_DB::tabla( 'mp_log' ),
 			array(
@@ -53,13 +56,11 @@ class CN_Webhook {
 			),
 			array( '%s', '%s', '%s' )
 		);
-		// 2. Nunca confiar en el payload: pedirle a la API real el estado.
 		if ( $id && in_array( $tipo, array( 'preapproval', 'subscription_preapproval' ), true ) ) {
 			self::procesar_preapproval( $id );
 		} elseif ( $id && in_array( $tipo, array( 'payment', 'subscription_authorized_payment' ), true ) ) {
 			self::procesar_payment( $id );
 		}
-		// 3. Responder rápido y siempre 200 para que MP no reintente en loop.
 		return new WP_REST_Response( array( 'status' => 'ok' ), 200 );
 	}
 	protected static function procesar_preapproval( $id ) {
@@ -91,7 +92,7 @@ class CN_Webhook {
 		$estados_activo  = array( 'authorized', 'approved' );
 		$estados_pausado = array( 'cancelled', 'rejected', 'paused' );
 		if ( ! in_array( $status, array_merge( $estados_activo, $estados_pausado ), true ) ) {
-			return; // pending u otro estado transitorio: no hacemos nada todavía.
+			return;
 		}
 		$pendiente = null;
 		if ( $external_reference ) {
@@ -180,7 +181,6 @@ class CN_Webhook {
 		} elseif ( ! empty( $json['id'] ) ) {
 			$id = sanitize_text_field( (string) $json['id'] );
 		}
-		// Loguear siempre, aunque no podamos procesar (misma tabla que el webhook de suscripción).
 		$wpdb->insert(
 			CN_DB::tabla( 'mp_log' ),
 			array(
@@ -190,10 +190,7 @@ class CN_Webhook {
 			),
 			array( '%s', '%s', '%s' )
 		);
-		// Solo nos importan notificaciones de "payment" — el trial es pago único, no preapproval.
 		if ( ! $id || ! in_array( $tipo, array( 'payment', '' ), true ) ) {
-			// MP a veces manda la notificación sin "type" explícito en query params viejos;
-			// si hay id igual intentamos, si no, no hay nada que hacer.
 			if ( ! $id ) {
 				return new WP_REST_Response( array( 'status' => 'ok' ), 200 );
 			}
@@ -206,39 +203,43 @@ class CN_Webhook {
 				'mensaje'    => $e->getMessage(),
 			) );
 		}
-		// Siempre 200: evita que MP reintente en loop. La idempotencia la garantiza
-		// la columna UNIQUE trial_payment_id, no el código de respuesta HTTP.
 		return new WP_REST_Response( array( 'status' => 'ok' ), 200 );
 	}
 	protected static function procesar_trial_payment( $id ) {
 		global $wpdb;
-		// 1. Nunca confiar en el payload de la notificación: pedirle el estado real a MP.
 		$data = CN_MP::obtener_pago( $id );
 		if ( ! is_array( $data ) || empty( $data['status'] ) ) {
 			self::avisar_error_n8n( 'pago_no_encontrado', array( 'payment_id' => $id ) );
 			return;
 		}
-		// 2. Solo procesamos pagos de trial (distinguidos por external_reference "trial_...").
 		$external_reference = isset( $data['external_reference'] ) ? (string) $data['external_reference'] : '';
 		if ( 0 !== strpos( $external_reference, 'trial_' ) ) {
-			return; // No es un pago de trial (puede ser de suscripción u otra cosa) — lo ignoramos acá.
-		}
-		if ( 'approved' !== $data['status'] ) {
-			// pending, rejected, in_process, etc. — no damos alta todavía.
-			// MP vuelve a notificar cuando cambie de estado.
 			return;
 		}
-		// 3. Idempotencia: si este payment_id ya fue procesado, no hacer nada más.
+		if ( 'approved' !== $data['status'] ) {
+			return;
+		}
 		$t_miembros = CN_DB::tabla( 'miembros' );
 		$ya_procesado = $wpdb->get_var(
 			$wpdb->prepare( "SELECT id FROM {$t_miembros} WHERE trial_payment_id = %s", $id )
 		);
 		if ( $ya_procesado ) {
-			return; // Notificación duplicada de MP — ya dimos el alta antes, no repetir.
+			return;
 		}
-		// 4. Reconstruir nombre y celular desde metadata (los pusimos ahí al crear la Preference).
 		$nombre  = isset( $data['metadata']['cn_nombre'] ) ? sanitize_text_field( $data['metadata']['cn_nombre'] ) : '';
 		$celular = isset( $data['metadata']['cn_celular'] ) ? sanitize_text_field( $data['metadata']['cn_celular'] ) : '';
+		if ( ( '' === $nombre || '' === $celular ) && $external_reference ) {
+			$pendiente = $wpdb->get_row(
+				$wpdb->prepare(
+					"SELECT * FROM " . CN_DB::tabla( 'trial_pendientes' ) . " WHERE external_reference = %s",
+					$external_reference
+				)
+			);
+			if ( $pendiente ) {
+				$nombre  = $pendiente->nombre_apellido;
+				$celular = $pendiente->celular;
+			}
+		}
 		if ( '' === $nombre || '' === $celular ) {
 			self::avisar_error_n8n( 'metadata_incompleta', array(
 				'payment_id'         => $id,
@@ -249,8 +250,6 @@ class CN_Webhook {
 		$monto           = isset( $data['transaction_amount'] ) ? (float) $data['transaction_amount'] : 0;
 		$ahora            = current_time( 'mysql', true );
 		$fecha_fin_trial  = gmdate( 'Y-m-d H:i:s', time() + self::TRIAL_DIAS * DAY_IN_SECONDS );
-		// 5. Alta idempotente por celular: si ya existe (cualquier estado, incluida 'cancelada'),
-		// la reactivamos como trial. Si no existe, la creamos.
 		$hint       = CN_Helpers::hint_celular( $celular );
 		$candidatos = $wpdb->get_results(
 			$wpdb->prepare( "SELECT id, celular_hash FROM {$t_miembros} WHERE celular_hint = %s", $hint )
@@ -292,18 +291,11 @@ class CN_Webhook {
 				),
 				array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%f', '%s' )
 			);
-			// Si el insert falló por la UNIQUE de trial_payment_id (dos notificaciones
-			// concurrentes procesadas casi al mismo tiempo), no es un error real: alguna
-			// de las dos ganó la carrera y la socia ya quedó dada de alta.
 			if ( $wpdb->last_error && false !== strpos( $wpdb->last_error, 'trial_payment_id' ) ) {
 				return;
 			}
 		}
 	}
-	/**
-	 * Aviso fire-and-forget a n8n. Nunca bloquea ni hace fallar el alta —
-	 * timeout corto y sin esperar respuesta (regla #2 del proyecto).
-	 */
 	protected static function avisar_error_n8n( $motivo, $detalle ) {
 		wp_remote_post( self::N8N_ALERTA_URL, array(
 			'timeout'  => 5,
@@ -315,5 +307,45 @@ class CN_Webhook {
 				'fecha'   => current_time( 'mysql', true ),
 			) ),
 		) );
+	}
+	// ==========================================================================
+	// FORMULARIO DE LANDING → PREFERENCE DINÁMICA
+	// ==========================================================================
+	const RATE_LIMIT_MAX_INTENTOS = 8;
+	const RATE_LIMIT_VENTANA_MIN  = 10;
+	public static function crear_preference_trial_endpoint( WP_REST_Request $request ) {
+		$ip  = CN_Helpers::get_client_ip();
+		$key = 'cn_pref_fails_' . md5( $ip );
+		if ( (int) get_transient( $key ) >= self::RATE_LIMIT_MAX_INTENTOS ) {
+			return new WP_REST_Response( array( 'ok' => false, 'error' => 'Demasiados intentos. Probá de nuevo en unos minutos.' ), 429 );
+		}
+		$nombre_raw  = $request->get_param( 'nombre' );
+		$celular_raw = $request->get_param( 'celular' );
+		$nombre = trim( sanitize_text_field( (string) $nombre_raw ) );
+		$norm    = CN_Helpers::normalizar_celular( (string) $celular_raw );
+		$celular = $norm['normalizado'];
+		if ( '' === $nombre || strlen( $nombre ) < 3 ) {
+			self::registrar_intento_pref_fallido( $key );
+			return new WP_REST_Response( array( 'ok' => false, 'error' => 'Ingresá tu nombre y apellido.' ), 400 );
+		}
+		if ( '' === $celular ) {
+			self::registrar_intento_pref_fallido( $key );
+			return new WP_REST_Response( array( 'ok' => false, 'error' => 'Ingresá un celular válido.' ), 400 );
+		}
+		$resultado = CN_MP::crear_preference_trial( $nombre, $celular );
+		if ( ! $resultado['ok'] ) {
+			self::registrar_intento_pref_fallido( $key );
+			self::avisar_error_n8n( 'crear_preference_trial_fallo', array(
+				'nombre'  => $nombre,
+				'celular' => $celular,
+				'error'   => $resultado['error'],
+			) );
+			return new WP_REST_Response( array( 'ok' => false, 'error' => 'No pudimos iniciar el pago. Probá de nuevo en un minuto.' ), 500 );
+		}
+		return new WP_REST_Response( array( 'ok' => true, 'init_point' => $resultado['init_point'] ), 200 );
+	}
+	protected static function registrar_intento_pref_fallido( $key ) {
+		$intentos = (int) get_transient( $key );
+		set_transient( $key, $intentos + 1, self::RATE_LIMIT_VENTANA_MIN * MINUTE_IN_SECONDS );
 	}
 }
