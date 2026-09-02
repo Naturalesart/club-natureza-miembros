@@ -1,8 +1,6 @@
 <?php
 if ( ! defined( 'ABSPATH' ) ) exit;
-
 class CN_Admin {
-
 	public static function registrar_menu() {
 		add_menu_page( 'Club Natureza', 'Club Natureza', 'manage_options', 'cn-socias', array( __CLASS__, 'pagina_socias' ), 'dashicons-groups', 58 );
 		add_submenu_page( 'cn-socias', 'Socias', 'Socias', 'manage_options', 'cn-socias', array( __CLASS__, 'pagina_socias' ) );
@@ -11,26 +9,21 @@ class CN_Admin {
 		add_submenu_page( 'cn-socias', 'Videos', 'Videos', 'manage_options', 'cn-videos', array( __CLASS__, 'pagina_videos' ) );
 		add_submenu_page( 'cn-socias', 'Config', 'Config', 'manage_options', 'cn-config', array( __CLASS__, 'pagina_config' ) );
 	}
-
 	protected static function aviso( $texto, $tipo = 'success' ) {
 		echo '<div class="notice notice-' . esc_attr( $tipo ) . ' is-dismissible"><p>' . esc_html( $texto ) . '</p></div>';
 	}
-
 	/* ---------------------------------------------------------------------
 	 * SOCIAS
 	 * ------------------------------------------------------------------- */
-
 	public static function pagina_socias() {
 		if ( ! current_user_can( 'manage_options' ) ) return;
 		global $wpdb;
 		$tabla = CN_DB::tabla( 'miembros' );
-
 		// Alta rápida.
 		if ( isset( $_POST['cn_admin_alta_socia'] ) && check_admin_referer( 'cn_alta_socia', 'cn_alta_socia_nonce' ) ) {
 			$nombre  = sanitize_text_field( wp_unslash( $_POST['cn_nombre'] ?? '' ) );
 			$celular = sanitize_text_field( wp_unslash( $_POST['cn_celular'] ?? '' ) );
 			$norm    = CN_Helpers::normalizar_celular( $celular );
-
 			if ( '' === trim( $nombre ) || '' === $norm['normalizado'] ) {
 				self::aviso( 'Faltan datos para dar de alta a la socia.', 'error' );
 			} else {
@@ -52,13 +45,11 @@ class CN_Admin {
 				}
 			}
 		}
-
 		// Editar / notas.
 		if ( isset( $_POST['cn_admin_editar_socia'] ) && check_admin_referer( 'cn_editar_socia', 'cn_editar_socia_nonce' ) ) {
 			$id     = absint( $_POST['cn_id'] ?? 0 );
 			$nombre = sanitize_text_field( wp_unslash( $_POST['cn_nombre'] ?? '' ) );
 			$notas  = sanitize_textarea_field( wp_unslash( $_POST['cn_notas'] ?? '' ) );
-
 			$wpdb->update(
 				$tabla,
 				array( 'nombre_apellido' => trim( $nombre ), 'notas' => $notas ),
@@ -68,12 +59,10 @@ class CN_Admin {
 			);
 			self::aviso( 'Socia actualizada.' );
 		}
-
 		// Acciones rápidas: pausar / reactivar / borrar.
 		if ( isset( $_GET['cn_action'], $_GET['id'], $_GET['_wpnonce'] ) ) {
 			$id = absint( $_GET['id'] );
 			$accion = sanitize_key( $_GET['cn_action'] );
-
 			if ( 'pausar' === $accion && wp_verify_nonce( sanitize_text_field( wp_unslash( $_GET['_wpnonce'] ) ), 'cn_pausar_' . $id ) ) {
 				$wpdb->update( $tabla, array( 'estado' => 'pausado' ), array( 'id' => $id ), array( '%s' ), array( '%d' ) );
 				self::aviso( 'Socia pausada.' );
@@ -86,15 +75,12 @@ class CN_Admin {
 				self::aviso( 'Socia borrada.' );
 			}
 		}
-
 		$editar_id = isset( $_GET['editar'] ) ? absint( $_GET['editar'] ) : 0;
 		$socia_editar = $editar_id ? $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$tabla} WHERE id = %d", $editar_id ) ) : null;
-
 		$socias = $wpdb->get_results( "SELECT * FROM {$tabla} ORDER BY fecha_alta DESC" );
 		?>
 		<div class="wrap">
 			<h1>Socias</h1>
-
 			<?php if ( $socia_editar ) : ?>
 				<h2>Editar socia</h2>
 				<form method="post" style="max-width:480px;">
@@ -114,7 +100,6 @@ class CN_Admin {
 				</form>
 				<hr>
 			<?php endif; ?>
-
 			<h2>Alta rápida</h2>
 			<form method="post" style="max-width:480px;">
 				<?php wp_nonce_field( 'cn_alta_socia', 'cn_alta_socia_nonce' ); ?>
@@ -130,7 +115,6 @@ class CN_Admin {
 				</table>
 				<?php submit_button( 'Dar de alta', 'primary', 'cn_admin_alta_socia' ); ?>
 			</form>
-
 			<h2>Listado</h2>
 			<table class="widefat striped">
 				<thead>
@@ -169,16 +153,13 @@ class CN_Admin {
 		</div>
 		<?php
 	}
-
 	/* ---------------------------------------------------------------------
 	 * CURSOS
 	 * ------------------------------------------------------------------- */
-
 	public static function pagina_cursos() {
 		if ( ! current_user_can( 'manage_options' ) ) return;
 		global $wpdb;
 		$tabla = CN_DB::tabla( 'cursos' );
-
 		if ( isset( $_POST['cn_admin_alta_curso'] ) && check_admin_referer( 'cn_alta_curso', 'cn_alta_curso_nonce' ) ) {
 			$total_actual = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$tabla}" );
 			$wpdb->insert(
@@ -193,7 +174,6 @@ class CN_Admin {
 			);
 			self::aviso( 'Curso creado.' );
 		}
-
 		if ( isset( $_POST['cn_admin_editar_curso'] ) && check_admin_referer( 'cn_editar_curso', 'cn_editar_curso_nonce' ) ) {
 			$id = absint( $_POST['cn_id'] ?? 0 );
 			$wpdb->update(
@@ -210,11 +190,9 @@ class CN_Admin {
 			);
 			self::aviso( 'Curso actualizado.' );
 		}
-
 		if ( isset( $_GET['cn_action'], $_GET['id'], $_GET['_wpnonce'] ) ) {
 			$id     = absint( $_GET['id'] );
 			$accion = sanitize_key( $_GET['cn_action'] );
-
 			if ( 'borrar_curso' === $accion && wp_verify_nonce( sanitize_text_field( wp_unslash( $_GET['_wpnonce'] ) ), 'cn_borrar_curso_' . $id ) ) {
 				$wpdb->delete( $tabla, array( 'id' => $id ), array( '%d' ) );
 				$wpdb->delete( CN_DB::tabla( 'contenidos' ), array( 'curso_id' => $id ), array( '%d' ) );
@@ -228,17 +206,14 @@ class CN_Admin {
 				}
 			}
 		}
-
 		$editar_id = isset( $_GET['editar'] ) ? absint( $_GET['editar'] ) : 0;
 		$curso_editar = $editar_id ? $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$tabla} WHERE id = %d", $editar_id ) ) : null;
-
 		$cursos = $wpdb->get_results( "SELECT * FROM {$tabla} ORDER BY orden ASC, id ASC" );
 		$paleta = CN_Helpers::paleta_cursos();
 		?>
 		<div class="wrap">
 			<h1>Cursos</h1>
 			<p>Pegá el link de la <strong>carpeta</strong> de Google Drive del curso (no un archivo suelto). Después usá "Sincronizar con Drive" para traer automáticamente los videos, PDFs y audios que haya adentro — o cargalos a mano desde <a href="<?php echo esc_url( admin_url( 'admin.php?page=cn-contenido' ) ); ?>">Contenido</a> si la sincronización todavía no está lista.</p>
-
 			<?php if ( $curso_editar ) : ?>
 				<h2>Editar curso</h2>
 				<form method="post" style="max-width:480px;">
@@ -263,7 +238,6 @@ class CN_Admin {
 				</form>
 				<hr>
 			<?php endif; ?>
-
 			<h2>Alta rápida</h2>
 			<form method="post" style="max-width:480px;">
 				<?php wp_nonce_field( 'cn_alta_curso', 'cn_alta_curso_nonce' ); ?>
@@ -274,7 +248,6 @@ class CN_Admin {
 				</table>
 				<?php submit_button( 'Crear curso', 'primary', 'cn_admin_alta_curso' ); ?>
 			</form>
-
 			<h2>Listado</h2>
 			<table class="widefat striped">
 				<thead><tr><th>Nombre</th><th>Color</th><th>Link</th><th>Orden</th><th>Última sinc. Drive</th><th>Acciones</th></tr></thead>
@@ -302,21 +275,17 @@ class CN_Admin {
 		</div>
 		<?php
 	}
-
 	/* ---------------------------------------------------------------------
 	 * CONTENIDO (videos / PDFs / audios por curso — fallback manual + Drive)
 	 * ------------------------------------------------------------------- */
-
 	public static function pagina_contenido() {
 		if ( ! current_user_can( 'manage_options' ) ) return;
 		global $wpdb;
 		$tabla        = CN_DB::tabla( 'contenidos' );
 		$tabla_cursos = CN_DB::tabla( 'cursos' );
-
 		if ( isset( $_POST['cn_admin_alta_contenido'] ) && check_admin_referer( 'cn_alta_contenido', 'cn_alta_contenido_nonce' ) ) {
 			$curso_id = absint( $_POST['cn_curso_id'] ?? 0 );
 			$tipo     = sanitize_key( wp_unslash( $_POST['cn_tipo'] ?? '' ) );
-
 			if ( ! $curso_id || ! in_array( $tipo, array( 'video', 'pdf', 'audio' ), true ) ) {
 				self::aviso( 'Elegí un curso y un tipo de contenido válidos.', 'error' );
 			} else {
@@ -337,7 +306,6 @@ class CN_Admin {
 				self::aviso( 'Contenido agregado.' );
 			}
 		}
-
 		if ( isset( $_GET['cn_action'], $_GET['id'], $_GET['_wpnonce'] ) && 'borrar_contenido' === $_GET['cn_action'] ) {
 			$id = absint( $_GET['id'] );
 			if ( wp_verify_nonce( sanitize_text_field( wp_unslash( $_GET['_wpnonce'] ) ), 'cn_borrar_contenido_' . $id ) ) {
@@ -345,17 +313,14 @@ class CN_Admin {
 				self::aviso( 'Contenido borrado.' );
 			}
 		}
-
 		$curso_filtro = isset( $_GET['curso_id'] ) ? absint( $_GET['curso_id'] ) : 0;
 		$cursos = $wpdb->get_results( "SELECT id, nombre FROM {$tabla_cursos} ORDER BY orden ASC" );
-
 		$where = $curso_filtro ? $wpdb->prepare( 'WHERE c.curso_id = %d', $curso_filtro ) : '';
 		$contenidos = $wpdb->get_results( "SELECT c.*, cu.nombre AS curso_nombre FROM {$tabla} c LEFT JOIN {$tabla_cursos} cu ON cu.id = c.curso_id {$where} ORDER BY cu.orden ASC, c.tipo ASC, c.orden ASC, c.id ASC" );
 		?>
 		<div class="wrap">
 			<h1>Contenido de los cursos</h1>
 			<p>Esta pantalla es el <strong>fallback manual</strong>: cargá acá videos, PDFs o audios sueltos cuando la sincronización automática con Drive (en Cursos) todavía no esté configurada, o para corregir algo puntual.</p>
-
 			<h2>Agregar contenido</h2>
 			<form method="post" style="max-width:520px;">
 				<?php wp_nonce_field( 'cn_alta_contenido', 'cn_alta_contenido_nonce' ); ?>
@@ -388,7 +353,6 @@ class CN_Admin {
 				</table>
 				<?php submit_button( 'Agregar contenido', 'primary', 'cn_admin_alta_contenido' ); ?>
 			</form>
-
 			<h2>Listado <?php echo $curso_filtro ? '(filtrado)' : ''; ?></h2>
 			<p>
 				<a href="<?php echo esc_url( admin_url( 'admin.php?page=cn-contenido' ) ); ?>">Ver todos los cursos</a>
@@ -418,17 +382,14 @@ class CN_Admin {
 		</div>
 		<?php
 	}
-
 	/* ---------------------------------------------------------------------
 	 * VIDEOS
 	 * ------------------------------------------------------------------- */
-
 	public static function pagina_videos() {
 		if ( ! current_user_can( 'manage_options' ) ) return;
 		global $wpdb;
 		$tabla       = CN_DB::tabla( 'videos' );
 		$tabla_cursos = CN_DB::tabla( 'cursos' );
-
 		if ( isset( $_POST['cn_admin_alta_video'] ) && check_admin_referer( 'cn_alta_video', 'cn_alta_video_nonce' ) ) {
 			$curso_id = absint( $_POST['cn_curso_id'] ?? 0 );
 			$wpdb->insert(
@@ -443,7 +404,6 @@ class CN_Admin {
 			);
 			self::aviso( 'Video creado.' );
 		}
-
 		if ( isset( $_GET['cn_action'], $_GET['id'], $_GET['_wpnonce'] ) && 'borrar_video' === $_GET['cn_action'] ) {
 			$id = absint( $_GET['id'] );
 			if ( wp_verify_nonce( sanitize_text_field( wp_unslash( $_GET['_wpnonce'] ) ), 'cn_borrar_video_' . $id ) ) {
@@ -451,13 +411,11 @@ class CN_Admin {
 				self::aviso( 'Video borrado.' );
 			}
 		}
-
 		$cursos = $wpdb->get_results( "SELECT id, nombre FROM {$tabla_cursos} ORDER BY orden ASC" );
 		$videos = $wpdb->get_results( "SELECT v.*, c.nombre AS curso_nombre FROM {$tabla} v LEFT JOIN {$tabla_cursos} c ON c.id = v.curso_id ORDER BY v.orden ASC, v.id ASC" );
 		?>
 		<div class="wrap">
 			<h1>Videos</h1>
-
 			<h2>Alta rápida</h2>
 			<form method="post" style="max-width:480px;">
 				<?php wp_nonce_field( 'cn_alta_video', 'cn_alta_video_nonce' ); ?>
@@ -479,7 +437,6 @@ class CN_Admin {
 				</table>
 				<?php submit_button( 'Crear video', 'primary', 'cn_admin_alta_video' ); ?>
 			</form>
-
 			<h2>Listado</h2>
 			<table class="widefat striped">
 				<thead><tr><th>Título</th><th>Curso</th><th>Orden</th><th>Acciones</th></tr></thead>
@@ -500,26 +457,26 @@ class CN_Admin {
 		</div>
 		<?php
 	}
-
 	/* ---------------------------------------------------------------------
 	 * CONFIG
 	 * ------------------------------------------------------------------- */
-
 	public static function pagina_config() {
 		if ( ! current_user_can( 'manage_options' ) ) return;
-
 		if ( isset( $_POST['cn_admin_guardar_config'] ) && check_admin_referer( 'cn_config', 'cn_config_nonce' ) ) {
 			update_option( 'cn_mp_access_token', sanitize_text_field( wp_unslash( $_POST['cn_mp_access_token'] ?? '' ) ) );
+			update_option( 'cn_mp_access_token_trial', sanitize_text_field( wp_unslash( $_POST['cn_mp_access_token_trial'] ?? '' ) ) );
 			update_option( 'cn_mp_precio_mensual', (float) sanitize_text_field( wp_unslash( $_POST['cn_mp_precio_mensual'] ?? '0' ) ) );
+			update_option( 'cn_mp_precio_trial', (float) sanitize_text_field( wp_unslash( $_POST['cn_mp_precio_trial'] ?? '7000' ) ) );
 			update_option( 'cn_mp_razon_plan', sanitize_text_field( wp_unslash( $_POST['cn_mp_razon_plan'] ?? '' ) ) );
 			update_option( 'cn_google_drive_api_key', sanitize_text_field( wp_unslash( $_POST['cn_google_drive_api_key'] ?? '' ) ) );
 			self::aviso( 'Configuración guardada.' );
 		}
-
-		$token       = CN_MP::get_access_token();
-		$precio      = CN_MP::get_precio_mensual();
-		$razon       = CN_MP::get_razon_plan();
-		$drive_key   = CN_Drive::get_api_key();
+		$token        = CN_MP::get_access_token();
+		$token_trial  = CN_MP::get_access_token_trial();
+		$precio       = CN_MP::get_precio_mensual();
+		$precio_trial = CN_MP::get_precio_trial();
+		$razon        = CN_MP::get_razon_plan();
+		$drive_key    = CN_Drive::get_api_key();
 		?>
 		<div class="wrap">
 			<h1>Config</h1>
@@ -527,12 +484,27 @@ class CN_Admin {
 				<?php wp_nonce_field( 'cn_config', 'cn_config_nonce' ); ?>
 				<table class="form-table">
 					<tr>
-						<th><label>Access Token de Mercado Pago (producción)</label></th>
+						<th><label>Access Token de Mercado Pago — Suscripciones (producción)</label></th>
 						<td><input type="text" name="cn_mp_access_token" class="regular-text" value="<?php echo esc_attr( $token ); ?>"></td>
+					</tr>
+					<tr>
+						<th><label>Access Token de Mercado Pago — Trial / Checkout Pro (producción)</label></th>
+						<td>
+							<input type="text" name="cn_mp_access_token_trial" class="regular-text" value="<?php echo esc_attr( $token_trial ); ?>">
+							<p class="description">
+								Token de una app de Mercado Pago DISTINTA a la de Suscripciones — MP exige una app
+								por producto integrado, así que el trial (Checkout Pro) necesita su propia app y su
+								propio token, aunque sea la misma cuenta de Mercado Pago.
+							</p>
+						</td>
 					</tr>
 					<tr>
 						<th><label>Precio mensual (ARS)</label></th>
 						<td><input type="number" step="0.01" name="cn_mp_precio_mensual" value="<?php echo esc_attr( $precio ); ?>"></td>
+					</tr>
+					<tr>
+						<th><label>Precio del trial de 7 días (ARS)</label></th>
+						<td><input type="number" step="0.01" name="cn_mp_precio_trial" value="<?php echo esc_attr( $precio_trial ); ?>"></td>
 					</tr>
 					<tr>
 						<th><label>Razón / título del plan</label></th>
@@ -554,10 +526,11 @@ class CN_Admin {
 				</table>
 				<?php submit_button( 'Guardar configuración', 'primary', 'cn_admin_guardar_config' ); ?>
 			</form>
-
-			<h2>Webhook de Mercado Pago</h2>
-			<p>Pegá esta URL en el panel de Mercado Pago → Tu aplicación → Webhooks:</p>
+			<h2>Webhooks de Mercado Pago</h2>
+			<p>Suscripciones — pegá esta URL en la app de Suscripciones → Webhooks:</p>
 			<input type="text" readonly class="regular-text" style="width:100%;max-width:600px;" onclick="this.select();" value="<?php echo esc_url( CN_MP::webhook_url() ); ?>">
+			<p style="margin-top:14px;">Trial (Checkout Pro) — esta URL se configura sola en cada Preference que se crea, no hace falta pegarla en ningún lado del panel de MP.</p>
+			<input type="text" readonly class="regular-text" style="width:100%;max-width:600px;" onclick="this.select();" value="<?php echo esc_url( CN_MP::trial_webhook_url() ); ?>">
 		</div>
 		<?php
 	}
