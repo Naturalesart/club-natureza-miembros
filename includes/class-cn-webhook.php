@@ -1,8 +1,6 @@
 <?php
 if ( ! defined( 'ABSPATH' ) ) exit;
 class CN_Webhook {
-	// Path del workflow de alertas de n8n (Club Natureza - Alerta de errores (Trial),
-	// ID YmU7WWLAkWwj8xZT). Fire-and-forget: si n8n está caído, el trial igual sucede.
 	const N8N_ALERTA_URL = 'https://n8n.naturalesart.com/webhook/club-trial-alerta';
 	const TRIAL_DIAS = 7;
 	public static function registrar_rutas() {
@@ -156,9 +154,6 @@ class CN_Webhook {
 			array( '%s', '%s', '%s', '%s', '%s', '%s' )
 		);
 	}
-	// ==========================================================================
-	// TRIAL DE 7 DÍAS — endpoint nuevo, separado del flujo de suscripción mensual.
-	// ==========================================================================
 	public static function manejar_trial( WP_REST_Request $request ) {
 		global $wpdb;
 		$json = json_decode( $request->get_body(), true );
@@ -228,6 +223,7 @@ class CN_Webhook {
 		}
 		$nombre  = isset( $data['metadata']['cn_nombre'] ) ? sanitize_text_field( $data['metadata']['cn_nombre'] ) : '';
 		$celular = isset( $data['metadata']['cn_celular'] ) ? sanitize_text_field( $data['metadata']['cn_celular'] ) : '';
+		$email = isset( $data['payer']['email'] ) ? sanitize_email( $data['payer']['email'] ) : '';
 		if ( ( '' === $nombre || '' === $celular ) && $external_reference ) {
 			$pendiente = $wpdb->get_row(
 				$wpdb->prepare(
@@ -270,9 +266,10 @@ class CN_Webhook {
 					'trial_payment_id'   => $id,
 					'trial_monto'        => $monto,
 					'fecha_modificacion' => $ahora,
+					'email'              => $email ? $email : null,
 				),
 				array( 'id' => $miembro_id ),
-				array( '%s', '%s', '%s', '%f', '%s' ),
+				array( '%s', '%s', '%s', '%f', '%s', '%s' ),
 				array( '%d' )
 			);
 		} else {
@@ -288,8 +285,9 @@ class CN_Webhook {
 					'trial_payment_id'   => $id,
 					'trial_monto'        => $monto,
 					'fecha_modificacion' => $ahora,
+					'email'              => $email ? $email : null,
 				),
-				array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%f', '%s' )
+				array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%f', '%s', '%s' )
 			);
 			if ( $wpdb->last_error && false !== strpos( $wpdb->last_error, 'trial_payment_id' ) ) {
 				return;
@@ -308,9 +306,6 @@ class CN_Webhook {
 			) ),
 		) );
 	}
-	// ==========================================================================
-	// FORMULARIO DE LANDING → PREFERENCE DINÁMICA
-	// ==========================================================================
 	const RATE_LIMIT_MAX_INTENTOS = 8;
 	const RATE_LIMIT_VENTANA_MIN  = 10;
 	public static function crear_preference_trial_endpoint( WP_REST_Request $request ) {
