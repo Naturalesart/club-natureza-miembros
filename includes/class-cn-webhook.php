@@ -293,6 +293,7 @@ class CN_Webhook {
 				return;
 			}
 		}
+		self::enviar_mail_bienvenida( $nombre, $celular, $email );
 	}
 	protected static function avisar_error_n8n( $motivo, $detalle ) {
 		wp_remote_post( self::N8N_ALERTA_URL, array(
@@ -305,6 +306,24 @@ class CN_Webhook {
 				'fecha'   => current_time( 'mysql', true ),
 			) ),
 		) );
+	}
+	protected static function enviar_mail_bienvenida( $nombre, $celular, $email ) {
+		if ( '' === $email ) {
+			return;
+		}
+		$login_url = home_url( '/club-natureza-miembros/' );
+		$asunto    = 'Ya sos parte del Club Natureza 🎉 — tus datos de acceso';
+		$cuerpo  = "Hola {$nombre},\n\n";
+		$cuerpo .= "Tu prueba de 7 días en el Club Natureza ya está activa.\n\n";
+		$cuerpo .= "Para entrar, usá estos datos:\n";
+		$cuerpo .= "Usuario (nombre y apellido): {$nombre}\n";
+		$cuerpo .= "Contraseña (tu celular): {$celular}\n\n";
+		$cuerpo .= "Entrá acá: {$login_url}\n\n";
+		$cuerpo .= "Tu acceso dura 7 días. Cuando termine, si querés seguir en el Club de forma mensual, ";
+		$cuerpo .= "podés sumarte a la suscripción cuando quieras — nunca se te cobra nada de forma automática.\n\n";
+		$cuerpo .= "Cualquier duda, escribinos por WhatsApp.\n\n";
+		$cuerpo .= "¡Bienvenida!";
+		wp_mail( $email, $asunto, $cuerpo );
 	}
 	const RATE_LIMIT_MAX_INTENTOS = 8;
 	const RATE_LIMIT_VENTANA_MIN  = 10;
