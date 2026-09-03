@@ -94,7 +94,7 @@ class CN_MP {
 	 * copia automáticamente al payment resultante, así el endpoint /trial-alta
 	 * no depende de ninguna tabla de "pendientes" para reconstruir quién pagó.
 	 *
-	 * @return array { ok: bool, init_point: string, error: string }
+	 * @return array { ok: bool, init_point: string, external_reference: string, error: string }
 	 */
 	public static function crear_preference_trial( $nombre, $celular_normalizado ) {
 		$token = self::get_access_token_trial();
@@ -161,7 +161,7 @@ class CN_MP {
 			),
 			array( '%s', '%s', '%s', '%s' )
 		);
-		return array( 'ok' => true, 'init_point' => $data['init_point'], 'error' => '' );
+		return array( 'ok' => true, 'init_point' => $data['init_point'], 'external_reference' => $external_reference, 'error' => '' );
 	}
 	public static function obtener_preapproval( $id ) {
 		return self::get( '/preapproval/' . rawurlencode( $id ), self::get_access_token() );
