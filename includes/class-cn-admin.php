@@ -468,6 +468,7 @@ class CN_Admin {
 			update_option( 'cn_mp_precio_mensual', (float) sanitize_text_field( wp_unslash( $_POST['cn_mp_precio_mensual'] ?? '0' ) ) );
 			update_option( 'cn_mp_precio_trial', (float) sanitize_text_field( wp_unslash( $_POST['cn_mp_precio_trial'] ?? '7000' ) ) );
 			update_option( 'cn_mp_razon_plan', sanitize_text_field( wp_unslash( $_POST['cn_mp_razon_plan'] ?? '' ) ) );
+			update_option( 'cn_meta_capi_token', sanitize_text_field( wp_unslash( $_POST['cn_meta_capi_token'] ?? '' ) ) );
 			update_option( 'cn_google_drive_api_key', sanitize_text_field( wp_unslash( $_POST['cn_google_drive_api_key'] ?? '' ) ) );
 			self::aviso( 'Configuración guardada.' );
 		}
@@ -476,6 +477,7 @@ class CN_Admin {
 		$precio       = CN_MP::get_precio_mensual();
 		$precio_trial = CN_MP::get_precio_trial();
 		$razon        = CN_MP::get_razon_plan();
+		$capi_token   = CN_Meta_Capi::get_token();
 		$drive_key    = CN_Drive::get_api_key();
 		?>
 		<div class="wrap">
@@ -509,6 +511,17 @@ class CN_Admin {
 					<tr>
 						<th><label>Razón / título del plan</label></th>
 						<td><input type="text" name="cn_mp_razon_plan" class="regular-text" value="<?php echo esc_attr( $razon ); ?>"></td>
+					</tr>
+					<tr>
+						<th><label>Meta Conversions API — Token</label></th>
+						<td>
+							<input type="text" name="cn_meta_capi_token" class="regular-text" value="<?php echo esc_attr( $capi_token ); ?>">
+							<p class="description">
+								Token de acceso del sistema (System User) del pixel <code>424753682060500</code>,
+								generado en Events Manager → Configuración → Conversions API.
+								Se usa para mandar el Purchase del trial deduplicado con el Pixel.
+							</p>
+						</td>
 					</tr>
 					<tr>
 						<th><label>API key de Google Drive</label></th>
