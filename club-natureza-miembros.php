@@ -23,6 +23,7 @@ require_once CN_PATH . 'includes/class-cn-meta-capi.php';
 require_once CN_PATH . 'includes/class-cn-webhook.php';
 require_once CN_PATH . 'includes/class-cn-shortcodes.php';
 require_once CN_PATH . 'includes/class-cn-admin.php';
+require_once CN_PATH . 'includes/class-cn-clarity.php';
 register_activation_hook( __FILE__, array( 'CN_Activator', 'activar' ) );
 add_action( 'init', array( 'CN_Shortcodes', 'registrar' ) );
 add_action( 'rest_api_init', array( 'CN_Webhook', 'registrar_rutas' ) );
