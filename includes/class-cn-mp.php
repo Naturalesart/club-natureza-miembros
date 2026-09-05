@@ -124,8 +124,8 @@ class CN_MP {
 			),
 			'notification_url' => self::trial_webhook_url(),
 			'back_urls'         => array(
-				'success' => home_url( '/gracias-prueba/' ),
-				'pending' => home_url( '/gracias-prueba/' ),
+				'success' => add_query_arg( 'eid', $external_reference, home_url( '/gracias-prueba/' ) ),
+				'pending' => add_query_arg( 'eid', $external_reference, home_url( '/gracias-prueba/' ) ),
 				'failure' => home_url( '/prueba-club/' ),
 			),
 			'auto_return' => 'approved',
