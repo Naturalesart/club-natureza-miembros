@@ -5,11 +5,6 @@ class CN_MP {
 	public static function get_access_token() {
 		return trim( (string) get_option( 'cn_mp_access_token', '' ) );
 	}
-	/**
-	 * Token de la app de Checkout Pro (trial). Mercado Pago exige una app por
-	 * producto integrado — la app de Suscripciones no puede usarse para crear
-	 * Preferences, así que el trial vive en una app separada, con su propio token.
-	 */
 	public static function get_access_token_trial() {
 		return trim( (string) get_option( 'cn_mp_access_token_trial', '' ) );
 	}
@@ -29,11 +24,6 @@ class CN_MP {
 	public static function trial_webhook_url() {
 		return rest_url( 'cn/v1/trial-alta' );
 	}
-	/**
-	 * Crea una preapproval (suscripción) en Mercado Pago.
-	 *
-	 * @return array { ok: bool, init_point: string, error: string }
-	 */
 	public static function crear_preapproval( $nombre, $celular_normalizado ) {
 		$token = self::get_access_token();
 		if ( ! $token ) {
@@ -88,15 +78,12 @@ class CN_MP {
 		return array( 'ok' => true, 'init_point' => $data['init_point'], 'error' => '' );
 	}
 	/**
-	 * Crea una Preference de Checkout Pro para el pago único del trial de 7 días.
-	 * A diferencia de la preapproval (suscripción recurrente), esto es un pago
-	 * único de $7.000 ARS. El nombre y el celular viajan en "metadata" — MP los
-	 * copia automáticamente al payment resultante, así el endpoint /trial-alta
-	 * no depende de ninguna tabla de "pendientes" para reconstruir quién pagó.
-	 *
-	 * @return array { ok: bool, init_point: string, external_reference: string, error: string }
+	 * $fbp/$fbc/$ip/$user_agent: capturados en el navegador al momento del
+	 * formulario (única oportunidad — el webhook de pago es servidor-a-servidor
+	 * y no tiene acceso a cookies ni IP real). Se guardan en trial_pendientes
+	 * para que el CAPI Purchase los recupere al confirmarse el pago.
 	 */
-	public static function crear_preference_trial( $nombre, $celular_normalizado ) {
+	public static function crear_preference_trial( $nombre, $celular_normalizado, $fbp = '', $fbc = '', $ip = '', $user_agent = '' ) {
 		$token = self::get_access_token_trial();
 		if ( ! $token ) {
 			return array( 'ok' => false, 'init_point' => '', 'error' => 'Falta configurar el access token de Mercado Pago para el trial (Checkout Pro).' );
@@ -147,9 +134,6 @@ class CN_MP {
 			$mensaje = isset( $data['message'] ) ? $data['message'] : 'Mercado Pago rechazó la solicitud.';
 			return array( 'ok' => false, 'init_point' => '', 'error' => $mensaje );
 		}
-		// Respaldo ante la posibilidad (documentada en casos de pago offline/express)
-		// de que "metadata" no viaje completo hasta el payment. El webhook de trial
-		// intenta primero con metadata; si viene vacío, cae acá por external_reference.
 		global $wpdb;
 		$wpdb->insert(
 			CN_DB::tabla( 'trial_pendientes' ),
@@ -158,8 +142,12 @@ class CN_MP {
 				'celular'            => $celular_normalizado,
 				'external_reference' => $external_reference,
 				'fecha'              => current_time( 'mysql', true ),
+				'fbp'                => $fbp ? $fbp : null,
+				'fbc'                => $fbc ? $fbc : null,
+				'ip'                 => $ip ? $ip : null,
+				'user_agent'         => $user_agent ? $user_agent : null,
 			),
-			array( '%s', '%s', '%s', '%s' )
+			array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s' )
 		);
 		return array( 'ok' => true, 'init_point' => $data['init_point'], 'external_reference' => $external_reference, 'error' => '' );
 	}
@@ -169,11 +157,6 @@ class CN_MP {
 	public static function obtener_pago( $id ) {
 		return self::get( '/v1/payments/' . rawurlencode( $id ), self::get_access_token() );
 	}
-	/**
-	 * Igual que obtener_pago(), pero con el token de la app de Checkout Pro
-	 * (trial) — necesario porque el pago del trial se creó con esa app, y MP
-	 * exige consultarlo con el mismo token/app que lo generó.
-	 */
 	public static function obtener_pago_trial( $id ) {
 		return self::get( '/v1/payments/' . rawurlencode( $id ), self::get_access_token_trial() );
 	}
