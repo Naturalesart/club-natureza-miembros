@@ -2,14 +2,14 @@
 /**
  * Plugin Name: Club Natureza Miembros
  * Description: Sistema propio de membresías para el Club Natureza (naturalesart.com) — login por nombre y celular, cursos, videos y suscripción vía Mercado Pago. Se embebe en el theme mediante shortcodes.
- * Version: 1.5.0
+ * Version: 1.6.0
  * Author: Naturales Art
  * Text Domain: club-natureza-miembros
  */
 if ( ! defined( 'ABSPATH' ) ) exit;
 // Número de WhatsApp de soporte para socias en pausa (formato wa.me, solo dígitos con código de país).
 define( 'CN_WA_SOPORTE', '5491162076549' );
-define( 'CN_VERSION', '1.5.0' );
+define( 'CN_VERSION', '1.6.0' );
 define( 'CN_PATH', plugin_dir_path( __FILE__ ) );
 define( 'CN_URL', plugin_dir_url( __FILE__ ) );
 require_once CN_PATH . 'includes/class-cn-helpers.php';
@@ -75,5 +75,11 @@ add_action( 'cn_cron_revocar_trials', array( 'CN_Auth', 'revocar_trials_vencidos
 add_action( 'init', function () {
 	if ( ! wp_next_scheduled( 'cn_cron_revocar_trials' ) ) {
 		wp_schedule_event( time(), 'daily', 'cn_cron_revocar_trials' );
+	}
+} );
+add_action( 'cn_cron_aviso_dia5_trial', array( 'CN_Webhook', 'avisar_dia5_trial' ) );
+add_action( 'init', function () {
+	if ( ! wp_next_scheduled( 'cn_cron_aviso_dia5_trial' ) ) {
+		wp_schedule_event( time(), 'daily', 'cn_cron_aviso_dia5_trial' );
 	}
 } );

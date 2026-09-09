@@ -470,6 +470,8 @@ class CN_Admin {
 			update_option( 'cn_mp_razon_plan', sanitize_text_field( wp_unslash( $_POST['cn_mp_razon_plan'] ?? '' ) ) );
 			update_option( 'cn_meta_capi_token', sanitize_text_field( wp_unslash( $_POST['cn_meta_capi_token'] ?? '' ) ) );
 			update_option( 'cn_google_drive_api_key', sanitize_text_field( wp_unslash( $_POST['cn_google_drive_api_key'] ?? '' ) ) );
+			update_option( 'cn_clase_especial_link', esc_url_raw( wp_unslash( $_POST['cn_clase_especial_link'] ?? '' ) ) );
+			update_option( 'cn_admin_alerta_email', sanitize_email( wp_unslash( $_POST['cn_admin_alerta_email'] ?? '' ) ) );
 			self::aviso( 'Configuración guardada.' );
 		}
 		$token        = CN_MP::get_access_token();
@@ -479,6 +481,8 @@ class CN_Admin {
 		$razon        = CN_MP::get_razon_plan();
 		$capi_token   = CN_Meta_Capi::get_token();
 		$drive_key    = CN_Drive::get_api_key();
+		$clase_link   = get_option( 'cn_clase_especial_link', '' );
+		$alerta_email = get_option( 'cn_admin_alerta_email', get_option( 'admin_email' ) );
 		?>
 		<div class="wrap">
 			<h1>Config</h1>
@@ -534,6 +538,20 @@ class CN_Admin {
 								como "Cualquier persona con el enlace — Lector". Si no se configura, el contenido se puede seguir cargando
 								a mano desde <a href="<?php echo esc_url( admin_url( 'admin.php?page=cn-contenido' ) ); ?>">Contenido</a>.
 							</p>
+						</td>
+					</tr>
+					<tr>
+						<th><label>Link de la clase especial ("Yo no pinto, pinta el pincel")</label></th>
+						<td>
+							<input type="url" name="cn_clase_especial_link" class="regular-text" value="<?php echo esc_attr( $clase_link ); ?>" placeholder="https://...">
+							<p class="description">Se usa en el aviso automático del día 5 de trial. Mientras esté vacío, el aviso no se manda.</p>
+						</td>
+					</tr>
+					<tr>
+						<th><label>Mail para el aviso de día 5 (WhatsApp)</label></th>
+						<td>
+							<input type="email" name="cn_admin_alerta_email" class="regular-text" value="<?php echo esc_attr( $alerta_email ); ?>">
+							<p class="description">Acá llega el aviso con el link wa.me ya armado, para cada socia que llega al día 5.</p>
 						</td>
 					</tr>
 				</table>

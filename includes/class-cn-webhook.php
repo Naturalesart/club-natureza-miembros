@@ -5,6 +5,8 @@ class CN_Webhook {
 	// ID YmU7WWLAkWwj8xZT). Fire-and-forget: si n8n está caído, el trial igual sucede.
 	const N8N_ALERTA_URL = 'https://n8n.naturalesart.com/webhook/club-trial-alerta';
 	const TRIAL_DIAS = 7;
+	const DIAS_AVISO_TRIAL = 5;
+	const NOMBRE_CLASE_ESPECIAL = 'Yo no pinto, pinta el pincel';
 	public static function registrar_rutas() {
 		register_rest_route( 'cn/v1', '/mp-webhook', array(
 			'methods'             => 'POST',
@@ -296,9 +298,10 @@ class CN_Webhook {
 					'trial_monto'        => $monto,
 					'fecha_modificacion' => $ahora,
 					'email'              => $email ? $email : null,
+					'celular_texto_plano' => $celular,
 				),
 				array( 'id' => $miembro_id ),
-				array( '%s', '%s', '%s', '%f', '%s', '%s' ),
+				array( '%s', '%s', '%s', '%f', '%s', '%s', '%s' ),
 				array( '%d' )
 			);
 		} else {
@@ -315,8 +318,9 @@ class CN_Webhook {
 					'trial_monto'        => $monto,
 					'fecha_modificacion' => $ahora,
 					'email'              => $email ? $email : null,
+					'celular_texto_plano' => $celular,
 				),
-				array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%f', '%s', '%s' )
+				array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%f', '%s', '%s', '%s' )
 			);
 			// Si el insert falló por la UNIQUE de trial_payment_id (dos notificaciones
 			// concurrentes procesadas casi al mismo tiempo), no es un error real: alguna
@@ -340,6 +344,58 @@ class CN_Webhook {
 			$pendiente ? (string) $pendiente->ip : '',
 			$pendiente ? (string) $pendiente->user_agent : ''
 		);
+	}
+	/**
+	 * Aviso automático a las socias que llegan al día 5 de su trial (quedan 2 días):
+	 * les mandamos, por WhatsApp, el link a la clase especial grabada. No enviamos
+	 * el WhatsApp directo (no hay integración de envío) — le mandamos al admin un
+	 * mail con un link wa.me ya armado para que lo toque y se lo mande a mano.
+	 */
+	public static function avisar_dia5_trial() {
+		global $wpdb;
+		$t_miembros = CN_DB::tabla( 'miembros' );
+		$candidatas = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT id, nombre_apellido, celular_texto_plano
+				FROM {$t_miembros}
+				WHERE estado = 'activo'
+				AND fecha_fin_trial IS NOT NULL
+				AND dia5_avisado = 0
+				AND fecha_alta <= %s",
+				gmdate( 'Y-m-d H:i:s', time() - self::DIAS_AVISO_TRIAL * DAY_IN_SECONDS )
+			)
+		);
+		if ( ! $candidatas ) return;
+		$link_clase = trim( (string) get_option( 'cn_clase_especial_link', '' ) );
+		foreach ( $candidatas as $candidata ) {
+			$wpdb->update( $t_miembros, array( 'dia5_avisado' => 1 ), array( 'id' => $candidata->id ), array( '%d' ), array( '%d' ) );
+			if ( '' === $link_clase ) {
+				self::avisar_error_n8n( 'aviso_dia5_sin_link_clase', array( 'miembro_id' => $candidata->id, 'nombre' => $candidata->nombre_apellido ) );
+				continue;
+			}
+			if ( '' === (string) $candidata->celular_texto_plano ) {
+				self::avisar_error_n8n( 'aviso_dia5_sin_celular', array( 'miembro_id' => $candidata->id, 'nombre' => $candidata->nombre_apellido ) );
+				continue;
+			}
+			self::enviar_aviso_dia5( $candidata->nombre_apellido, $candidata->celular_texto_plano, $link_clase );
+		}
+	}
+	protected static function enviar_aviso_dia5( $nombre, $celular_texto_plano, $link_clase ) {
+		$mensaje = '¡Hola ' . $nombre . '! 👋 Soy Naty, del Club Natureza.' . "\n\n";
+		$mensaje .= 'Quería avisarte algo que tenés incluido en tu prueba de 7 días y quizás ';
+		$mensaje .= 'todavía no viste: una clase especial grabada que se llama "' . self::NOMBRE_CLASE_ESPECIAL . '" 🎨' . "\n\n";
+		$mensaje .= 'Es una clase pensada para ese momento en el que sentís que no te sale o ';
+		$mensaje .= 'que te trabás con el pincel — capaz te cambia la forma de mirarlo.' . "\n\n";
+		$mensaje .= '¿Querés que te pase el link para verla? Te lo mando ahora mismo ✨';
+		$wa_numero = CN_Helpers::celular_whatsapp( $celular_texto_plano );
+		$wa_link = 'https://wa.me/' . rawurlencode( $wa_numero ) . '?text=' . rawurlencode( $mensaje );
+		$destino = trim( (string) get_option( 'cn_admin_alerta_email', get_option( 'admin_email' ) ) );
+		if ( '' === $destino ) return;
+		$asunto = 'Día 5 de trial — ' . $nombre . ' — avisale de la clase por WhatsApp';
+		$cuerpo = 'Hola,' . "\n\n" . $nombre . ' se dio de alta hace 5 días — quedan 2 días de prueba.' . "\n\n";
+		$cuerpo .= 'Tocá para abrirle WhatsApp con el mensaje ya cargado:' . "\n" . $wa_link . "\n\n";
+		$cuerpo .= 'Celular: ' . $celular_texto_plano;
+		wp_mail( $destino, $asunto, $cuerpo );
 	}
 	/**
 	 * Aviso fire-and-forget a n8n. Nunca bloquea ni hace fallar el alta —

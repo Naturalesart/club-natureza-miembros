@@ -55,6 +55,13 @@ class CN_Helpers {
 		public static function verificar_celular( $celular_normalizado, $hash ) {
 					return password_verify( $celular_normalizado, $hash );
 		}
+		public static function celular_whatsapp( $celular_normalizado ) {
+					$digits = preg_replace( '/\D+/', '', (string) $celular_normalizado );
+					if ( 10 === strlen( $digits ) ) {
+								return '549' . $digits;
+					}
+					return $digits;
+		}
 		public static function generar_token() {
 					return bin2hex( random_bytes( 32 ) ); // 64 caracteres hex.
 		}
