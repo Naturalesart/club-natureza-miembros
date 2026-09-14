@@ -352,9 +352,11 @@ class CN_Webhook {
 	}
 	/**
 	 * Aviso automático a las socias que llegan al día 5 de su trial (quedan 2 días):
-	 * les mandamos, por WhatsApp, el link a la clase especial grabada. No enviamos
-	 * el WhatsApp directo (no hay integración de envío) — le mandamos al admin un
-	 * mail con un link wa.me ya armado para que lo toque y se lo mande a mano.
+	 * le mandamos, por WhatsApp, el link directo de pago del plan mensual de $15.500
+	 * (autoservicio, sin esperar respuesta) y la invitamos a preguntar por el plan
+	 * Full si le interesa el contacto por WhatsApp + los encuentros en vivo. No
+	 * enviamos el WhatsApp directo (no hay integración de envío) — le mandamos al
+	 * admin un mail con un link wa.me ya armado para que lo toque y se lo mande a mano.
 	 */
 	public static function avisar_dia5_trial() {
 		global $wpdb;
@@ -371,34 +373,29 @@ class CN_Webhook {
 			)
 		);
 		if ( ! $candidatas ) return;
-		$link_clase = trim( (string) get_option( 'cn_clase_especial_link', '' ) );
 		foreach ( $candidatas as $candidata ) {
 			$wpdb->update( $t_miembros, array( 'dia5_avisado' => 1 ), array( 'id' => $candidata->id ), array( '%d' ), array( '%d' ) );
-			if ( '' === $link_clase ) {
-				self::avisar_error_n8n( 'aviso_dia5_sin_link_clase', array( 'miembro_id' => $candidata->id, 'nombre' => $candidata->nombre_apellido ) );
-				continue;
-			}
 			if ( '' === (string) $candidata->celular_texto_plano ) {
 				self::avisar_error_n8n( 'aviso_dia5_sin_celular', array( 'miembro_id' => $candidata->id, 'nombre' => $candidata->nombre_apellido ) );
 				continue;
 			}
-			self::enviar_aviso_dia5( $candidata->nombre_apellido, $candidata->celular_texto_plano, $link_clase );
+			self::enviar_aviso_dia5( $candidata->nombre_apellido, $candidata->celular_texto_plano );
 		}
 	}
-	protected static function enviar_aviso_dia5( $nombre, $celular_texto_plano, $link_clase ) {
-		$mensaje = '¡Hola ' . $nombre . '! 👋 Soy Naty, del Club Natureza.' . "\n\n";
-		$mensaje .= 'Quería avisarte algo que tenés incluido en tu prueba de 7 días y quizás ';
-		$mensaje .= 'todavía no viste: una clase especial grabada que se llama "' . self::NOMBRE_CLASE_ESPECIAL . '" 🎨' . "\n\n";
-		$mensaje .= 'Es una clase pensada para ese momento en el que sentís que no te sale o ';
-		$mensaje .= 'que te trabás con el pincel — capaz te cambia la forma de mirarlo.' . "\n\n";
-		$mensaje .= '¿Querés que te pase el link para verla? Te lo mando ahora mismo ✨';
+	protected static function enviar_aviso_dia5( $nombre, $celular_texto_plano ) {
+		$mensaje  = '¡Hola ' . $nombre . '! 👋 Soy Naty, del Club Natureza.' . "\n\n";
+		$mensaje .= 'Ya casi terminan tus 7 días de prueba — espero que hayas disfrutado de pintar 🎨' . "\n\n";
+		$mensaje .= 'Si querés seguir con acceso ilimitado a toda la biblioteca de cursos, activá tu lugar acá: ';
+		$mensaje .= 'https://mpago.la/1FsDjhK ($15.500/mes)' . "\n\n";
+		$mensaje .= 'Y si además te gustaría sumarte a los encuentros en vivo conmigo y al grupo de WhatsApp de socias, ';
+		$mensaje .= 'contame y te cuento del plan Full ✨';
 		$wa_numero = CN_Helpers::celular_whatsapp( $celular_texto_plano );
 		$wa_link = 'https://wa.me/' . rawurlencode( $wa_numero ) . '?text=' . rawurlencode( $mensaje );
 		$destino = trim( (string) get_option( 'cn_admin_alerta_email', get_option( 'admin_email' ) ) );
 		if ( '' === $destino ) return;
-		$asunto = 'Día 5 de trial — ' . $nombre . ' — avisale de la clase por WhatsApp';
+		$asunto = 'Día 5 de trial — ' . $nombre . ' — mandale el link de pago (o contale del plan Full) por WhatsApp';
 		$cuerpo = 'Hola,' . "\n\n" . $nombre . ' se dio de alta hace 5 días — quedan 2 días de prueba.' . "\n\n";
-		$cuerpo .= 'Tocá para abrirle WhatsApp con el mensaje ya cargado:' . "\n" . $wa_link . "\n\n";
+		$cuerpo .= 'Tocá para abrirle WhatsApp con el mensaje ya cargado (incluye el link de pago del plan de $15.500):' . "\n" . $wa_link . "\n\n";
 		$cuerpo .= 'Celular: ' . $celular_texto_plano;
 		wp_mail( $destino, $asunto, $cuerpo );
 	}
@@ -452,6 +449,35 @@ class CN_Webhook {
 		$cuerpo .= '<p style="font-size:14px;color:#555;line-height:1.6;margin:24px 0 0;">Tu acceso dura 7 días. Cuando termine, si querés seguir en el Club de forma mensual, podés sumarte a la suscripción cuando quieras — <strong>nunca se te cobra nada de forma automática.</strong></p>';
 		$cuerpo .= '<p style="font-size:14px;color:#555;margin:20px 0 0;">Cualquier duda, escribinos por WhatsApp.</p>';
 		$cuerpo .= '<p style="font-size:15px;color:#2f3b2c;margin:20px 0 0;">¡Bienvenida! 🌿</p>';
+		$cuerpo .= '</td></tr></table></td></tr></table></body></html>';
+		wp_mail( $email, $asunto, $cuerpo, array( 'Content-Type: text/html; charset=UTF-8' ) );
+	}
+	/**
+	 * Mail de fin de trial (7 días cumplidos y NO se suscribió). Mismo wrapper HTML
+	 * que enviar_mail_bienvenida(). Se llama desde CN_Auth::revocar_trials_vencidos()
+	 * solo cuando el miembro no tiene preapproval_id (o sea, no se suscribió).
+	 */
+	public static function enviar_mail_fin_trial( $nombre, $email ) {
+		if ( '' === $email ) {
+			return;
+		}
+		$asunto = 'Tu prueba de 7 días en el Club Natureza ya terminó';
+		$cuerpo  = '<!DOCTYPE html><html><body style="margin:0;padding:0;background:#f5f3ef;font-family:Georgia,serif;">';
+		$cuerpo .= '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f5f3ef;padding:32px 16px;">';
+		$cuerpo .= '<tr><td align="center">';
+		$cuerpo .= '<table role="presentation" width="100%" style="max-width:480px;background:#ffffff;border-radius:12px;overflow:hidden;">';
+		$cuerpo .= '<tr><td style="background:#2f3b2c;padding:28px 32px;text-align:center;">';
+		$cuerpo .= '<span style="color:#f5f3ef;font-size:22px;letter-spacing:1px;">🌿 Club Natureza</span></td></tr>';
+		$cuerpo .= '<tr><td style="padding:32px;">';
+		$cuerpo .= '<h1 style="font-size:20px;color:#2f3b2c;margin:0 0 16px;">¡Hola, ' . esc_html( $nombre ) . '! 🌿</h1>';
+		$cuerpo .= '<p style="font-size:15px;color:#333;line-height:1.6;margin:0 0 20px;">Tu prueba de 7 días en el Club Natureza terminó, así que tu acceso quedó pausado por ahora.</p>';
+		$cuerpo .= '<p style="font-size:15px;color:#333;line-height:1.6;margin:0 0 20px;">Ojalá hayas podido asomarte a los cursos y disfrutar un poco de pintar.</p>';
+		$cuerpo .= '<p style="font-size:15px;color:#333;line-height:1.6;margin:0 0 20px;">Si querés seguir con nosotras, podés sumarte a la suscripción mensual cuando quieras — no se te va a cobrar nada más de forma automática, esto es solo por si te interesa.</p>';
+		$cuerpo .= '<table role="presentation" width="100%"><tr><td align="center">';
+		$cuerpo .= '<a href="https://naturalesart.com/club-naturales/" style="display:inline-block;background:#2f3b2c;color:#f5f3ef;text-decoration:none;padding:14px 32px;border-radius:8px;font-size:15px;margin-bottom:24px;">Ver la suscripción →</a>';
+		$cuerpo .= '</td></tr></table>';
+		$cuerpo .= '<p style="font-size:14px;color:#555;margin:20px 0 0;">Cualquier duda, escribinos por WhatsApp.</p>';
+		$cuerpo .= '<p style="font-size:15px;color:#2f3b2c;margin:20px 0 0;">¡Gracias por probarnos! 🌿</p>';
 		$cuerpo .= '</td></tr></table></td></tr></table></body></html>';
 		wp_mail( $email, $asunto, $cuerpo, array( 'Content-Type: text/html; charset=UTF-8' ) );
 	}
