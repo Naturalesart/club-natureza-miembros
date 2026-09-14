@@ -42,28 +42,28 @@ class CN_Auth {
 					$tabla = CN_DB::tabla( 'miembros' );
 					$candidatos = $wpdb->get_results(
 									$wpdb->prepare(
-														"SELECT id, nombre_apellido, celular_hash, estado, fecha_fin_trial FROM {$tabla} WHERE LOWER(TRIM(nombre_apellido)) = LOWER(TRIM(%s))",
-														$nombre
-													)
-								);
+													"SELECT id, nombre_apellido, celular_hash, estado, fecha_fin_trial FROM {$tabla} WHERE LOWER(TRIM(nombre_apellido)) = LOWER(TRIM(%s))",
+													$nombre
+												)
+									);
 					foreach ( $candidatos as $candidato ) {
 									if ( CN_Helpers::verificar_celular( $celular_normalizado, $candidato->celular_hash ) ) {
-														if ( self::trial_vencido( $candidato->fecha_fin_trial ) ) {
-																				self::marcar_cancelada_si_hace_falta( (int) $candidato->id, $candidato->estado );
-																				self::limpiar_intentos();
-																				return array( 'ok' => false, 'motivo' => 'vencido' );
-														}
-														if ( 'pausado' === $candidato->estado ) {
-																				self::limpiar_intentos();
-																				return array( 'ok' => false, 'motivo' => 'pausado' );
-														}
-														if ( 'cancelada' === $candidato->estado ) {
-																				self::limpiar_intentos();
-																				return array( 'ok' => false, 'motivo' => 'vencido' );
-														}
-														self::crear_sesion( (int) $candidato->id );
-														self::limpiar_intentos();
-														return array( 'ok' => true, 'motivo' => 'ok' );
+													if ( self::trial_vencido( $candidato->fecha_fin_trial ) ) {
+																	self::marcar_cancelada_si_hace_falta( (int) $candidato->id, $candidato->estado );
+																	self::limpiar_intentos();
+																	return array( 'ok' => false, 'motivo' => 'vencido' );
+													}
+													if ( 'pausado' === $candidato->estado ) {
+																	self::limpiar_intentos();
+																	return array( 'ok' => false, 'motivo' => 'pausado' );
+													}
+													if ( 'cancelada' === $candidato->estado ) {
+																	self::limpiar_intentos();
+																	return array( 'ok' => false, 'motivo' => 'vencido' );
+													}
+													self::crear_sesion( (int) $candidato->id );
+													self::limpiar_intentos();
+													return array( 'ok' => true, 'motivo' => 'ok' );
 									}
 					}
 					self::registrar_intento_fallido();
@@ -77,10 +77,10 @@ class CN_Auth {
 					$wpdb->insert(
 									$tabla,
 									array(
-														'miembro_id' => $miembro_id,
-														'token'      => $token,
-														'expira'     => $expira,
-													),
+													'miembro_id' => $miembro_id,
+													'token'      => $token,
+													'expira'     => $expira,
+												),
 									array( '%d', '%s', '%s' )
 								);
 					$secure = is_ssl();
@@ -88,13 +88,13 @@ class CN_Auth {
 									self::COOKIE_NAME,
 									$token,
 									array(
-														'expires'  => time() + self::SESSION_DIAS * DAY_IN_SECONDS,
-														'path'     => COOKIEPATH ? COOKIEPATH : '/',
-														'domain'   => COOKIE_DOMAIN,
-														'secure'   => $secure,
-														'httponly' => true,
-														'samesite' => 'Lax',
-													)
+													'expires'  => time() + self::SESSION_DIAS * DAY_IN_SECONDS,
+													'path'     => COOKIEPATH ? COOKIEPATH : '/',
+													'domain'   => COOKIE_DOMAIN,
+													'secure'   => $secure,
+													'httponly' => true,
+													'samesite' => 'Lax',
+												),
 								);
 					$_COOKIE[ self::COOKIE_NAME ] = $token;
 		}
@@ -111,13 +111,13 @@ class CN_Auth {
 					$t_miembros = CN_DB::tabla( 'miembros' );
 					$miembro = $wpdb->get_row(
 									$wpdb->prepare(
-														"SELECT m.id, m.nombre_apellido, m.estado, m.fecha_fin_trial
-																		 FROM {$t_sesiones} s
-																		 				 INNER JOIN {$t_miembros} m ON m.id = s.miembro_id
-																						 				 WHERE s.token = %s AND s.expira > UTC_TIMESTAMP()",
-														$token
-													)
-								);
+													"SELECT m.id, m.nombre_apellido, m.estado, m.fecha_fin_trial
+																 FROM {$t_sesiones} s
+																 				 INNER JOIN {$t_miembros} m ON m.id = s.miembro_id
+																 				 				 WHERE s.token = %s AND s.expira > UTC_TIMESTAMP()",
+													$token
+												)
+									);
 					if ( ! $miembro ) {
 									return null;
 					}
@@ -138,17 +138,17 @@ class CN_Auth {
 									$tabla = CN_DB::tabla( 'sesiones' );
 									$wpdb->delete( $tabla, array( 'token' => $token ), array( '%s' ) );
 									setcookie(
-														self::COOKIE_NAME,
-														'',
-														array(
-																				'expires'  => time() - HOUR_IN_SECONDS,
-																				'path'     => COOKIEPATH ? COOKIEPATH : '/',
-																				'domain'   => COOKIE_DOMAIN,
-																				'secure'   => is_ssl(),
-																				'httponly' => true,
-																				'samesite' => 'Lax',
-																			)
-													);
+													self::COOKIE_NAME,
+													'',
+													array(
+																	'expires'  => time() - HOUR_IN_SECONDS,
+																	'path'     => COOKIEPATH ? COOKIEPATH : '/',
+																	'domain'   => COOKIE_DOMAIN,
+																	'secure'   => is_ssl(),
+																	'httponly' => true,
+																	'samesite' => 'Lax',
+																)
+												);
 									unset( $_COOKIE[ self::COOKIE_NAME ] );
 					}
 		}
@@ -166,26 +166,45 @@ class CN_Auth {
 					$wpdb->update(
 									CN_DB::tabla( 'miembros' ),
 									array(
-														'estado'             => 'cancelada',
-														'fecha_modificacion' => current_time( 'mysql', true ),
-													),
+													'estado'             => 'cancelada',
+													'fecha_modificacion' => current_time( 'mysql', true ),
+												),
 									array( 'id' => $miembro_id ),
 									array( '%s', '%s' ),
 									array( '%d' )
 								);
 		}
 		public static function revocar_trials_vencidos() {
-					global $wpdb;
-					$t_miembros = CN_DB::tabla( 'miembros' );
-					$wpdb->query(
-									$wpdb->prepare(
-														"UPDATE {$t_miembros}
-																		 SET estado = 'cancelada', fecha_modificacion = %s
-																		 				 WHERE fecha_fin_trial IS NOT NULL
-																						 				   AND fecha_fin_trial < UTC_TIMESTAMP()
-																										   				   AND estado != 'cancelada'",
-														current_time( 'mysql', true )
-													)
-								);
+			global $wpdb;
+			$t_miembros = CN_DB::tabla( 'miembros' );
+			$ahora      = current_time( 'mysql', true );
+			$vencidos   = $wpdb->get_results(
+				"SELECT id, preapproval_id, nombre_apellido, email FROM {$t_miembros}
+				 WHERE fecha_fin_trial IS NOT NULL
+				   AND fecha_fin_trial < UTC_TIMESTAMP()
+				   AND estado != 'cancelada'"
+			);
+			foreach ( $vencidos as $miembro ) {
+				if ( ! empty( $miembro->preapproval_id ) ) {
+					$wpdb->update(
+						$t_miembros,
+						array( 'fecha_fin_trial' => null, 'fecha_modificacion' => $ahora ),
+						array( 'id' => $miembro->id ),
+						array( '%s', '%s' ),
+						array( '%d' )
+					);
+					continue;
+				}
+				$wpdb->update(
+					$t_miembros,
+					array( 'estado' => 'cancelada', 'fecha_modificacion' => $ahora ),
+					array( 'id' => $miembro->id ),
+					array( '%s', '%s' ),
+					array( '%d' )
+				);
+				if ( class_exists( 'CN_Webhook' ) && ! empty( $miembro->email ) ) {
+					CN_Webhook::enviar_mail_fin_trial( $miembro->nombre_apellido, $miembro->email );
+				}
+			}
 		}
 }
