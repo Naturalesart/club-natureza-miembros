@@ -23,6 +23,11 @@ class CN_Webhook {
 			'callback'            => array( __CLASS__, 'crear_preference_trial_endpoint' ),
 			'permission_callback' => '__return_true',
 		) );
+		register_rest_route( 'cn/v1', '/pixel-mark', array(
+			'methods'             => 'POST',
+			'callback'            => array( __CLASS__, 'pixel_mark' ),
+			'permission_callback' => '__return_true',
+		) );
 	}
 	public static function manejar( WP_REST_Request $request ) {
 		global $wpdb;
@@ -512,5 +517,20 @@ class CN_Webhook {
 	protected static function registrar_intento_pref_fallido( $key ) {
 		$intentos = (int) get_transient( $key );
 		set_transient( $key, $intentos + 1, self::RATE_LIMIT_VENTANA_MIN * MINUTE_IN_SECONDS );
+	}
+	public static function pixel_mark( WP_REST_Request $request ) {
+		global $wpdb;
+		$eid = sanitize_text_field( (string) $request->get_param( 'eid' ) );
+		if ( '' === $eid ) {
+			return new WP_REST_Response( array( 'gano' => false ), 200 );
+		}
+		$insertado = $wpdb->query(
+			$wpdb->prepare(
+				"INSERT IGNORE INTO " . CN_DB::tabla( 'pixel_dedup' ) . " (eid, fired_at) VALUES (%s, %s)",
+				$eid,
+				current_time( 'mysql', true )
+			)
+		);
+		return new WP_REST_Response( array( 'gano' => (bool) $insertado ), 200 );
 	}
 }
