@@ -5,7 +5,7 @@ class CN_DB {
 		global $wpdb;
 		return $wpdb->prefix . 'cn_' . $nombre;
 	}
-	const DB_VERSION = '2.5.0';
+	const DB_VERSION = '2.6.0';
 	public static function maybe_upgrade() {
 		if ( get_option( 'cn_db_version' ) !== self::DB_VERSION ) {
 			self::instalar();
@@ -26,6 +26,7 @@ class CN_DB {
 		$t_preapprovals     = self::tabla( 'preapprovals_pendientes' );
 		$t_trial_pendientes = self::tabla( 'trial_pendientes' );
 		$t_mp_log           = self::tabla( 'mp_log' );
+		$t_pixel_dedup      = self::tabla( 'pixel_dedup' );
 		$sql = "CREATE TABLE {$t_miembros} (
 			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
 			nombre_apellido varchar(191) NOT NULL,
@@ -137,6 +138,11 @@ class CN_DB {
 			tipo varchar(50) DEFAULT NULL,
 			fecha datetime NOT NULL,
 			PRIMARY KEY  (id)
+		) {$charset_collate};
+		CREATE TABLE {$t_pixel_dedup} (
+			eid varchar(191) NOT NULL,
+			fired_at datetime NOT NULL,
+			PRIMARY KEY  (eid)
 		) {$charset_collate};";
 		dbDelta( $sql );
 	}
