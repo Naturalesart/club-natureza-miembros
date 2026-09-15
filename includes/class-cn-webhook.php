@@ -203,12 +203,14 @@ class CN_Webhook {
 			array( '%s', '%s', '%s' )
 		);
 		// Solo nos importan notificaciones de "payment" — el trial es pago único, no preapproval.
+		// MP también manda notificaciones de tipo "merchant_order" (la orden, no el pago);
+		// esas hay que ignorarlas siempre, aunque traigan un "id" — ese id es de la orden,
+		// no de un pago, y consultarlo como pago vía /v1/payments/{id} siempre falla
+		// ("pago_no_encontrado"), aunque el pago real detrás de esa orden sí exista y
+		// esté aprobado. La notificación de tipo "payment" (con su propio id) es la
+		// que efectivamente da el alta — esta rama nunca debe intentar procesar nada.
 		if ( ! $id || ! in_array( $tipo, array( 'payment', '' ), true ) ) {
-			// MP a veces manda la notificación sin "type" explícito en query params viejos;
-			// si hay id igual intentamos, si no, no hay nada que hacer.
-			if ( ! $id ) {
-				return new WP_REST_Response( array( 'status' => 'ok' ), 200 );
-			}
+			return new WP_REST_Response( array( 'status' => 'ok' ), 200 );
 		}
 		try {
 			self::procesar_trial_payment( $id );
