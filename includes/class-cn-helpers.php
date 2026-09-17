@@ -1,50 +1,61 @@
 <?php
 if ( ! defined( 'ABSPATH' ) ) exit;
 class CN_Helpers {
-		/**
-	 * Normaliza un celular a un formato canónico (solo dígitos). Para números
-		 * argentinos, saca +54 / 54 / 9 / 0 / 15. Para el resto de los países, se
-		 * guarda tal cual aparece (solo dígitos, sin el "+") — sin aplicarle
-		 	 * heurísticas pensadas para Argentina, que romperían números de otros países
-			 	 * (importante de cara a la expansión a LATAM). Usar SIEMPRE esta función en
-				 	 * alta, login y suscripción.
-					 	 *
-						 	 * @return array { normalizado: string, valido: bool }
-							 	 */
+	/**
+	 * Normaliza un celular a un formato canónico (solo dígitos). Argentina es
+	 * el caso por defecto (asumimos Argentina salvo que el número venga con
+	 * un "+" explícito de OTRO país) — así se limpian correctamente los
+	 * números que la gente escribe sin anteponer "54" (la inmensa mayoría),
+	 * no solo los que ya vienen en formato internacional completo. Para el
+	 * resto de los países, se guarda tal cual aparece (solo dígitos, sin el
+	 * "+") — sin aplicarle heurísticas pensadas para Argentina, que romperían
+	 * números de otros países (importante de cara a la expansión a LATAM).
+	 * Usar SIEMPRE esta función en alta, login y suscripción.
+	 *
+	 * @return array { normalizado: string, valido: bool }
+	 */
 	public static function normalizar_celular( $raw ) {
-				$digits = preg_replace( '/\D+/', '', (string) $raw );
-				$es_argentina = ( substr( $digits, 0, 2 ) === '54' );
-				if ( $es_argentina ) {
-								// Sacar +54 / 54 inicial (el + ya se pierde en el preg_replace anterior).
-					$digits = substr( $digits, 2 );
-								// Sacar el "9" de móvil que suele acompañar al código de país en formato internacional.
-					if ( substr( $digits, 0, 1 ) === '9' ) {
-										$digits = substr( $digits, 1 );
-					}
-								// Sacar 0 inicial (prefijo de larga distancia).
-					if ( substr( $digits, 0, 1 ) === '0' ) {
-										$digits = substr( $digits, 1 );
-					}
-								// Sacar "15" después del código de área (formato local: AREA + 15 + NUMERO).
-					// Los códigos de área argentinos van de 2 a 4 dígitos, probamos en ese orden.
-					foreach ( array( 2, 3, 4 ) as $pos ) {
-										if ( substr( $digits, $pos, 2 ) === '15' ) {
-																$digits = substr( $digits, 0, $pos ) . substr( $digits, $pos + 2 );
-																break;
-										}
-					}
-								// Un celular argentino normalizado (código de área + número, sin 9/0/15/54) tiene 10 dígitos.
-					$valido = ( strlen( $digits ) === 10 && ctype_digit( $digits ) );
-				} else {
-								// Otros países: se guarda tal cual aparece (solo dígitos), sin tocar
-					// nada — las heurísticas de arriba son específicas de Argentina y
-					// aplicarlas acá recortaría mal números de otros países.
-					$valido = ( strlen( $digits ) >= 8 && strlen( $digits ) <= 15 && ctype_digit( $digits ) );
+		$raw_trim = trim( (string) $raw );
+		// Solo se trata como "de otro país" si viene con un "+" explícito y
+		// ese código de país NO es Argentina (+54). Sin ese "+", asumimos
+		// Argentina — es el 99% de los casos reales de este formulario.
+		$es_extranjero_explicito = ( 0 === strpos( $raw_trim, '+' ) && 0 !== strpos( $raw_trim, '+54' ) );
+		$digits = preg_replace( '/\D+/', '', $raw_trim );
+		if ( ! $es_extranjero_explicito ) {
+			// Sacar +54 / 54 inicial si está (el + ya se pierde en el preg_replace anterior).
+			if ( 0 === strpos( $digits, '54' ) ) {
+				$digits = substr( $digits, 2 );
+			}
+			// Sacar el "9" de móvil que suele acompañar al código de país en formato internacional.
+			if ( '9' === substr( $digits, 0, 1 ) ) {
+				$digits = substr( $digits, 1 );
+			}
+			// Sacar 0 inicial (prefijo de larga distancia), tantas veces como aparezca
+			// pegado al principio (por si alguien escribió "00" o dejó un cero de más).
+			while ( '0' === substr( $digits, 0, 1 ) ) {
+				$digits = substr( $digits, 1 );
+			}
+			// Sacar "15" después del código de área (formato local: AREA + 15 + NUMERO).
+			// Los códigos de área argentinos van de 2 a 4 dígitos, probamos en ese orden.
+			foreach ( array( 2, 3, 4 ) as $pos ) {
+				if ( '15' === substr( $digits, $pos, 2 ) ) {
+					$digits = substr( $digits, 0, $pos ) . substr( $digits, $pos + 2 );
+					break;
 				}
-				return array(
-								'normalizado' => $digits,
-								'valido'      => $valido,
-							);
+			}
+			// Un celular argentino normalizado (código de área + número, sin 9/0/15/54) tiene 10 dígitos.
+			$valido = ( 10 === strlen( $digits ) && ctype_digit( $digits ) );
+		} else {
+			// Número extranjero explícito (+ y código de país distinto de 54):
+			// se guarda tal cual aparece (solo dígitos), sin tocar nada — las
+			// heurísticas de arriba son específicas de Argentina y aplicarlas
+			// acá recortaría mal números de otros países.
+			$valido = ( strlen( $digits ) >= 8 && strlen( $digits ) <= 15 && ctype_digit( $digits ) );
+		}
+		return array(
+			'normalizado' => $digits,
+			'valido'      => $valido,
+		);
 	}
 		public static function hint_celular( $celular_normalizado ) {
 					return substr( $celular_normalizado, -4 );
@@ -55,13 +66,28 @@ class CN_Helpers {
 		public static function verificar_celular( $celular_normalizado, $hash ) {
 					return password_verify( $celular_normalizado, $hash );
 		}
-		public static function celular_whatsapp( $celular_normalizado ) {
-					$digits = preg_replace( '/\D+/', '', (string) $celular_normalizado );
-					if ( 10 === strlen( $digits ) ) {
-								return '549' . $digits;
-					}
-					return $digits;
+	/**
+	 * Arma el número en formato WhatsApp (549 + 10 dígitos) a partir de un
+	 * celular_texto_plano guardado. Si el valor guardado no tiene exactamente
+	 * 10 dígitos (dato viejo, guardado antes del fix de normalizar_celular()
+	 * que ahora limpia bien el "0" inicial y el "15"), reintenta la misma
+	 * limpieza acá antes de rendirse — así los links de WhatsApp para altas
+	 * viejas con el celular "sucio" también quedan bien armados, sin tener
+	 * que re-normalizar ni tocar la base de datos.
+	 */
+	public static function celular_whatsapp( $celular_normalizado ) {
+		$digits = preg_replace( '/\D+/', '', (string) $celular_normalizado );
+		if ( 10 === strlen( $digits ) ) {
+			return '549' . $digits;
 		}
+		// Fallback: reintentar la limpieza estándar (54/9/0/15) por si el valor
+		// guardado quedó con el "0" inicial u otro resabio sin sacar.
+		$reintento = self::normalizar_celular( $digits );
+		if ( $reintento['valido'] ) {
+			return '549' . $reintento['normalizado'];
+		}
+		return $digits;
+	}
 		public static function generar_token() {
 					return bin2hex( random_bytes( 32 ) ); // 64 caracteres hex.
 		}
