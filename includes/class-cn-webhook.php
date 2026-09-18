@@ -81,7 +81,8 @@ class CN_Webhook {
 		}
 		$status              = $data['status'];
 		$external_reference  = isset( $data['external_reference'] ) ? $data['external_reference'] : '';
-		self::aplicar_estado( $status, $external_reference, $id );
+		$payer_email         = isset( $data['payer_email'] ) ? sanitize_email( trim( $data['payer_email'] ) ) : '';
+		self::aplicar_estado( $status, $external_reference, $id, $payer_email );
 	}
 	protected static function procesar_payment( $id ) {
 		$data = CN_MP::obtener_pago( $id );
@@ -92,19 +93,38 @@ class CN_Webhook {
 		$external_reference  = isset( $data['external_reference'] ) ? $data['external_reference'] : '';
 		$preapproval_id      = '';
 		if ( ! empty( $data['point_of_interaction']['transaction_data']['preapproval_id'] ) ) {
-			$preapproval_id = $data['point_of_interaction']['transaction_data']['preapproval_id'];
+			$preapproval_id = sanitize_text_field( (string) $data['point_of_interaction']['transaction_data']['preapproval_id'] );
 		} elseif ( ! empty( $data['metadata']['preapproval_id'] ) ) {
-			$preapproval_id = $data['metadata']['preapproval_id'];
+			$preapproval_id = sanitize_text_field( (string) $data['metadata']['preapproval_id'] );
 		}
-		self::aplicar_estado( $status, $external_reference, $preapproval_id );
+		$payer_email = isset( $data['payer']['email'] ) ? sanitize_email( trim( $data['payer']['email'] ) ) : '';
+		self::aplicar_estado( $status, $external_reference, $preapproval_id, $payer_email );
 	}
-	protected static function aplicar_estado( $status, $external_reference, $preapproval_id ) {
+	/**
+	 * Vincula un aviso de pago/suscripción con la fila de la socia. Tres niveles
+	 * de matching, del más preciso al más genérico:
+	 *  1. external_reference en preapprovals_pendientes — flujo dinámico (hoy sin
+	 *     uso real, se deja por si se retoma).
+	 *  2. preapproval_id ya guardado — cubre los cobros siguientes de una
+	 *     suscripción ya vinculada (mes 2, 3...).
+	 *  3. email del pagador — cubre el PRIMER pago con un link fijo de MP (los
+	 *     $15.500/$32.000 de hoy), único dato que MP entrega ahí y que ya está
+	 *     guardado en la socia desde que hizo el trial de $7.000.
+	 * Si los tres niveles fallan (o el email da 2+ resultados, ambiguo), no se
+	 * adivina: se avisa por n8n para resolver a mano — mejor una alerta visible
+	 * que una socia pagando sin que el sistema se entere (bug real, Susana
+	 * Cristófaro, 17-sep-2026).
+	 */
+	protected static function aplicar_estado( $status, $external_reference, $preapproval_id, $payer_email = '' ) {
 		global $wpdb;
 		$estados_activo  = array( 'authorized', 'approved' );
 		$estados_pausado = array( 'cancelled', 'rejected', 'paused' );
 		if ( ! in_array( $status, array_merge( $estados_activo, $estados_pausado ), true ) ) {
 			return; // pending u otro estado transitorio: no hacemos nada todavía.
 		}
+		$nuevo_estado = in_array( $status, $estados_activo, true ) ? 'activo' : 'pausado';
+		$t_miembros   = CN_DB::tabla( 'miembros' );
+		// 1. external_reference (flujo dinámico).
 		$pendiente = null;
 		if ( $external_reference ) {
 			$pendiente = $wpdb->get_row(
@@ -114,21 +134,44 @@ class CN_Webhook {
 				)
 			);
 		}
-		$nuevo_estado = in_array( $status, $estados_activo, true ) ? 'activo' : 'pausado';
 		if ( $pendiente ) {
 			self::upsert_miembro_por_celular( $pendiente->nombre_apellido, $pendiente->celular, $nuevo_estado, $preapproval_id );
 			return;
 		}
+		// 2. preapproval_id ya vinculado antes (cobros siguientes).
+		// SELECT primero para distinguir "existe y no cambió estado" (return, sin
+		// alerta) de "no existe" (bajar a nivel 3). Sin este check, un cobro del
+		// mes 2 donde ya está 'activo' y llega otro 'authorized' hace UPDATE de 0
+		// filas y dispararía alerta falsa.
 		if ( $preapproval_id ) {
-			$t_miembros = CN_DB::tabla( 'miembros' );
-			$wpdb->update(
-				$t_miembros,
-				array( 'estado' => $nuevo_estado ),
-				array( 'preapproval_id' => $preapproval_id ),
-				array( '%s' ),
-				array( '%s' )
+			$existe = $wpdb->get_var(
+				$wpdb->prepare(
+					"SELECT id FROM {$t_miembros} WHERE preapproval_id = %s LIMIT 1",
+					$preapproval_id
+				)
 			);
+			if ( $existe ) {
+				$wpdb->update(
+					$t_miembros,
+					array( 'estado' => $nuevo_estado ),
+					array( 'preapproval_id' => $preapproval_id ),
+					array( '%s' ),
+					array( '%s' )
+				);
+				return;
+			}
 		}
+		// 3. email del pagador — primer pago con link fijo.
+		if ( $payer_email && self::upsert_miembro_por_email( $payer_email, $nuevo_estado, $preapproval_id ) ) {
+			return;
+		}
+		// Nada matcheó: avisar en vez de perderlo en silencio.
+		self::avisar_error_n8n( 'preapproval_sin_match', array(
+			'status'             => $status,
+			'external_reference' => $external_reference,
+			'preapproval_id'     => $preapproval_id,
+			'payer_email'        => $payer_email,
+		) );
 	}
 	protected static function upsert_miembro_por_celular( $nombre, $celular_normalizado, $estado, $preapproval_id ) {
 		global $wpdb;
@@ -166,6 +209,32 @@ class CN_Webhook {
 			),
 			array( '%s', '%s', '%s', '%s', '%s', '%s' )
 		);
+	}
+	/**
+	 * Busca por email exacto. Si hay 0 o 2+ candidatas, no adivina — devuelve
+	 * false para que aplicar_estado() dispare la alerta en vez de arriesgarse
+	 * a actualizar la fila equivocada.
+	 */
+	protected static function upsert_miembro_por_email( $email, $estado, $preapproval_id ) {
+		global $wpdb;
+		if ( '' === $email ) {
+			return false;
+		}
+		$t_miembros = CN_DB::tabla( 'miembros' );
+		$candidatos = $wpdb->get_results(
+			$wpdb->prepare( "SELECT id FROM {$t_miembros} WHERE email = %s", $email )
+		);
+		if ( 1 !== count( $candidatos ) ) {
+			return false; // 0 = no está en la base; 2+ = ambiguo, no adivinamos.
+		}
+		$data   = array( 'estado' => $estado );
+		$format = array( '%s' );
+		if ( $preapproval_id ) {
+			$data['preapproval_id'] = $preapproval_id;
+			$format[]               = '%s';
+		}
+		$wpdb->update( $t_miembros, $data, array( 'id' => (int) $candidatos[0]->id ), $format, array( '%d' ) );
+		return true;
 	}
 	// ==========================================================================
 	// TRIAL DE 7 DÍAS — endpoint nuevo, separado del flujo de suscripción mensual.
