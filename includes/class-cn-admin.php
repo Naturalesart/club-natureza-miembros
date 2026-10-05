@@ -134,7 +134,90 @@ class CN_Admin {
 				}
 			}
 			?>
-			<p style="font-size:15px;"><strong>Suscriptoras pagas activas: <?php echo (int) $cn_pagas; ?></strong> &middot; En trial: <?php echo (int) $cn_trial; ?> &middot; Activas cargadas a mano: <?php echo (int) $cn_manual; ?> &middot; Canceladas o pausadas: <?php echo (int) $cn_otras; ?></p>
+			<?php
+			$cn_total_activas = $cn_pagas + $cn_manual;
+			$cn_tipo_sel     = isset( $_GET['cn_tipo'] ) ? sanitize_key( wp_unslash( $_GET['cn_tipo'] ) ) : 'todas';
+			$cn_orden_sel    = isset( $_GET['cn_orden'] ) ? sanitize_key( wp_unslash( $_GET['cn_orden'] ) ) : 'alta_desc';
+			$cn_tipos_ok     = array( 'todas' => 'Todas', 'activas' => 'Activas (suscriptas y cargadas a mano)', 'suscripta' => 'Suscriptas', 'trial' => 'En trial', 'manual' => 'Cargadas a mano', 'inactivas' => 'Canceladas o pausadas' );
+			$cn_ordenes_ok   = array( 'alta_desc' => 'Alta: más recientes primero', 'alta_asc' => 'Alta: más antiguas primero', 'nombre_asc' => 'Nombre: A a Z', 'nombre_desc' => 'Nombre: Z a A', 'tipo' => 'Tipo' );
+			if ( ! isset( $cn_tipos_ok[ $cn_tipo_sel ] ) ) {
+				$cn_tipo_sel = 'todas';
+			}
+			if ( ! isset( $cn_ordenes_ok[ $cn_orden_sel ] ) ) {
+				$cn_orden_sel = 'alta_desc';
+			}
+			$cn_tipo_de = function ( $s ) {
+				if ( 'activo' !== $s->estado ) {
+					return 'inactiva';
+				}
+				if ( ! empty( $s->preapproval_id ) ) {
+					return 'suscripta';
+				}
+				return ! empty( $s->fecha_fin_trial ) ? 'trial' : 'manual';
+			};
+			$cn_total_listado = count( (array) $socias );
+			$cn_filtradas = array_values( array_filter( (array) $socias, function ( $s ) use ( $cn_tipo_sel, $cn_tipo_de ) {
+				$t = $cn_tipo_de( $s );
+				if ( 'activas' === $cn_tipo_sel ) {
+					return in_array( $t, array( 'suscripta', 'manual' ), true );
+				}
+				if ( 'inactivas' === $cn_tipo_sel ) {
+					return 'inactiva' === $t;
+				}
+				if ( 'todas' === $cn_tipo_sel ) {
+					return true;
+				}
+				return $t === $cn_tipo_sel;
+			} ) );
+			$cn_rango = array( 'suscripta' => 0, 'trial' => 1, 'manual' => 2, 'inactiva' => 3 );
+			usort( $cn_filtradas, function ( $a, $b ) use ( $cn_orden_sel, $cn_tipo_de, $cn_rango ) {
+				switch ( $cn_orden_sel ) {
+					case 'alta_asc':
+						return strcmp( $a->fecha_alta, $b->fecha_alta );
+					case 'nombre_asc':
+						return strcasecmp( $a->nombre_apellido, $b->nombre_apellido );
+					case 'nombre_desc':
+						return strcasecmp( $b->nombre_apellido, $a->nombre_apellido );
+					case 'tipo':
+						$d = $cn_rango[ $cn_tipo_de( $a ) ] - $cn_rango[ $cn_tipo_de( $b ) ];
+						return 0 !== $d ? $d : strcmp( $b->fecha_alta, $a->fecha_alta );
+					default:
+						return strcmp( $b->fecha_alta, $a->fecha_alta );
+				}
+			} );
+			$socias = $cn_filtradas;
+			?>
+			<div style="display:flex;align-items:center;gap:32px;flex-wrap:wrap;background:#fff;border:1px solid #c3c4c7;border-left:4px solid #2e7d32;padding:16px 24px;margin:0 0 16px;">
+				<div>
+					<div style="font-size:13px;color:#50575e;">Suscriptoras activas (cualquier plan)</div>
+					<div style="font-size:56px;font-weight:600;line-height:1.1;color:#2e7d32;"><?php echo (int) $cn_total_activas; ?></div>
+				</div>
+				<div style="font-size:14px;color:#50575e;line-height:1.8;">
+					Con Mercado Pago: <?php echo (int) $cn_pagas; ?><br>
+					Cargadas a mano: <?php echo (int) $cn_manual; ?><br>
+					En trial (no incluidas): <?php echo (int) $cn_trial; ?> &middot; Canceladas o pausadas: <?php echo (int) $cn_otras; ?>
+				</div>
+			</div>
+			<form method="get" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 12px;">
+				<input type="hidden" name="page" value="cn-socias">
+				<label>Mostrar
+					<select name="cn_tipo">
+						<?php foreach ( $cn_tipos_ok as $cn_k => $cn_v ) : ?>
+							<option value="<?php echo esc_attr( $cn_k ); ?>" <?php selected( $cn_tipo_sel, $cn_k ); ?>><?php echo esc_html( $cn_v ); ?></option>
+						<?php endforeach; ?>
+					</select>
+				</label>
+				<label>Ordenar por
+					<select name="cn_orden">
+						<?php foreach ( $cn_ordenes_ok as $cn_k => $cn_v ) : ?>
+							<option value="<?php echo esc_attr( $cn_k ); ?>" <?php selected( $cn_orden_sel, $cn_k ); ?>><?php echo esc_html( $cn_v ); ?></option>
+						<?php endforeach; ?>
+					</select>
+				</label>
+				<button type="submit" class="button button-primary">Aplicar</button>
+				<a href="<?php echo esc_url( admin_url( 'admin.php?page=cn-socias' ) ); ?>">Quitar filtros</a>
+				<span style="color:#50575e;">Mostrando <?php echo (int) count( $socias ); ?> de <?php echo (int) $cn_total_listado; ?></span>
+			</form>
 			<table class="widefat striped">
 				<thead>
 					<tr>
