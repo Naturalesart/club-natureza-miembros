@@ -7,6 +7,9 @@ class CN_Webhook {
 	// Alta de trial -> fila en la pestaña "Trial" de la sheet de seguimiento (workflow n8n
 	// "Club Natureza - Alta Trial -> Sheet", ID E8UowHCBq1ohgWSQ). Fire-and-forget.
 	const N8N_ALTA_SHEET_URL = 'https://n8n.naturalesart.com/webhook/club-trial-alta-sheet';
+	// Eventos de suscripción de Mercado Pago -> pestaña "Suscripciones" de la sheet de seguimiento
+	// (workflow n8n "Club Natureza - Suscripción -> Sheet", ID HJ4PHGSgqHmln8tP). Fire-and-forget.
+	const N8N_SUSCRIPCION_SHEET_URL = 'https://n8n.naturalesart.com/webhook/club-suscripcion-sheet';
 	const TRIAL_DIAS = 7;
 	const DIAS_AVISO_TRIAL = 5;
 	const NOMBRE_CLASE_ESPECIAL = 'Yo no pinto, pinta el pincel';
@@ -86,6 +89,7 @@ class CN_Webhook {
 		$external_reference  = isset( $data['external_reference'] ) ? $data['external_reference'] : '';
 		$payer_email         = isset( $data['payer_email'] ) ? sanitize_email( trim( $data['payer_email'] ) ) : '';
 		self::aplicar_estado( $status, $external_reference, $id, $payer_email );
+		self::registrar_suscripcion_en_sheet( 'preapproval', $id, $status, $id, $payer_email, isset( $data['auto_recurring']['transaction_amount'] ) ? $data['auto_recurring']['transaction_amount'] : '' );
 	}
 	protected static function procesar_payment( $id ) {
 		$data = CN_MP::obtener_pago( $id );
@@ -102,6 +106,7 @@ class CN_Webhook {
 		}
 		$payer_email = isset( $data['payer']['email'] ) ? sanitize_email( trim( $data['payer']['email'] ) ) : '';
 		self::aplicar_estado( $status, $external_reference, $preapproval_id, $payer_email );
+		self::registrar_suscripcion_en_sheet( 'payment', $id, $status, $preapproval_id, $payer_email, isset( $data['transaction_amount'] ) ? $data['transaction_amount'] : '' );
 	}
 	/**
 	 * Vincula un aviso de pago/suscripción con la fila de la socia. Tres niveles
@@ -490,6 +495,31 @@ class CN_Webhook {
 				'fecha'   => current_time( 'mysql', true ),
 			) ),
 		) );
+	}
+	/**
+	 * Aviso fire-and-forget a n8n con cada evento de suscripción de Mercado Pago, para verlo
+	 * en la sheet de seguimiento. Mismo criterio que registrar_alta_en_sheet(): no bloqueante,
+	 * try/catch, nunca debe afectar el procesamiento de la suscripción.
+	 */
+	protected static function registrar_suscripcion_en_sheet( $origen, $id, $status, $preapproval_id, $payer_email, $monto ) {
+		try {
+			wp_remote_post( self::N8N_SUSCRIPCION_SHEET_URL, array(
+				'timeout'  => 5,
+				'blocking' => false,
+				'headers'  => array( 'Content-Type' => 'application/json' ),
+				'body'     => wp_json_encode( array(
+					'origen'         => (string) $origen,
+					'evento_id'      => (string) $origen . ':' . (string) $id . ':' . (string) $status,
+					'status'         => (string) $status,
+					'preapproval_id' => (string) $preapproval_id,
+					'payer_email'    => (string) $payer_email,
+					'monto'          => (string) $monto,
+					'fecha'          => current_time( 'mysql', true ),
+				) ),
+			) );
+		} catch ( Throwable $e ) {
+			// Silencioso a propósito: este aviso es accesorio, nunca debe afectar la suscripción.
+		}
 	}
 	/**
 	 * Aviso fire-and-forget a n8n para registrar el alta del trial en la sheet.
