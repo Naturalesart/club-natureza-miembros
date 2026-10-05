@@ -4,6 +4,9 @@ class CN_Webhook {
 	// Path del workflow de alertas de n8n (Club Natureza - Alerta de errores (Trial),
 	// ID YmU7WWLAkWwj8xZT). Fire-and-forget: si n8n está caído, el trial igual sucede.
 	const N8N_ALERTA_URL = 'https://n8n.naturalesart.com/webhook/club-trial-alerta';
+	// Alta de trial -> fila en la pestaña "Trial" de la sheet de seguimiento (workflow n8n
+	// "Club Natureza - Alta Trial -> Sheet", ID E8UowHCBq1ohgWSQ). Fire-and-forget.
+	const N8N_ALTA_SHEET_URL = 'https://n8n.naturalesart.com/webhook/club-trial-alta-sheet';
 	const TRIAL_DIAS = 7;
 	const DIAS_AVISO_TRIAL = 5;
 	const NOMBRE_CLASE_ESPECIAL = 'Yo no pinto, pinta el pincel';
@@ -406,6 +409,8 @@ class CN_Webhook {
 			}
 		}
 		self::enviar_mail_bienvenida( $nombre, $celular, $email );
+		// Registro en la sheet de seguimiento (no bloqueante, nunca rompe el alta).
+		self::registrar_alta_en_sheet( $nombre, $celular, $email, $monto, $id, $fecha_fin_trial, $ahora );
 		// CAPI Purchase — mismo event_id (external_reference) que el Pixel dispara
 		// en /gracias-prueba/, para que Meta dedupe los dos envíos como un evento.
 		// Pasamos fbp/fbc/ip/user_agent de trial_pendientes para subir el EMQ del
@@ -486,6 +491,32 @@ class CN_Webhook {
 			) ),
 		) );
 	}
+	/**
+	 * Aviso fire-and-forget a n8n para registrar el alta del trial en la sheet.
+	 * timeout corto, blocking=false y try/catch: si n8n está caído o algo falla,
+	 * el alta, el mail y el CAPI siguen igual.
+	 */
+	protected static function registrar_alta_en_sheet( $nombre, $celular, $email, $monto, $trial_payment_id, $fecha_fin_trial, $fecha ) {
+		try {
+			wp_remote_post( self::N8N_ALTA_SHEET_URL, array(
+				'timeout'  => 5,
+				'blocking' => false,
+				'headers'  => array( 'Content-Type' => 'application/json' ),
+				'body'     => wp_json_encode( array(
+					'nombre'           => (string) $nombre,
+					'celular'          => (string) $celular,
+					'email'            => (string) $email,
+					'monto'            => (string) $monto,
+					'trial_payment_id' => (string) $trial_payment_id,
+					'fecha_fin_trial'  => (string) $fecha_fin_trial,
+					'fecha'            => (string) $fecha,
+				) ),
+			) );
+		} catch ( Throwable $e ) {
+			// Silencioso a propósito: este aviso es accesorio, nunca debe afectar el alta.
+		}
+	}
+
 	/**
 	 * Mail de bienvenida con los datos de acceso, apenas se confirma el alta.
 	 * El "usuario" es el nombre y la "contraseña" es el celular — mismos datos
