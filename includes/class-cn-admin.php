@@ -116,12 +116,32 @@ class CN_Admin {
 				<?php submit_button( 'Dar de alta', 'primary', 'cn_admin_alta_socia' ); ?>
 			</form>
 			<h2>Listado</h2>
+			<?php
+			// Resumen de socias por tipo (solo lectura, calculado sobre $socias ya cargada).
+			$cn_pagas  = 0;
+			$cn_trial  = 0;
+			$cn_manual = 0;
+			$cn_otras  = 0;
+			foreach ( (array) $socias as $cn_s ) {
+				if ( 'activo' !== $cn_s->estado ) {
+					$cn_otras++;
+				} elseif ( ! empty( $cn_s->preapproval_id ) ) {
+					$cn_pagas++;
+				} elseif ( ! empty( $cn_s->fecha_fin_trial ) ) {
+					$cn_trial++;
+				} else {
+					$cn_manual++;
+				}
+			}
+			?>
+			<p style="font-size:15px;"><strong>Suscriptoras pagas activas: <?php echo (int) $cn_pagas; ?></strong> &middot; En trial: <?php echo (int) $cn_trial; ?> &middot; Activas cargadas a mano: <?php echo (int) $cn_manual; ?> &middot; Canceladas o pausadas: <?php echo (int) $cn_otras; ?></p>
 			<table class="widefat striped">
 				<thead>
 					<tr>
 						<th>Nombre y Apellido</th>
 						<th>Celular</th>
 						<th>Estado</th>
+						<th>Tipo</th>
 						<th>Alta</th>
 						<th>Acciones</th>
 					</tr>
@@ -135,6 +155,13 @@ class CN_Admin {
 							<td><?php echo esc_html( $socia->nombre_apellido ); ?></td>
 							<td>****<?php echo esc_html( $socia->celular_hint ); ?></td>
 							<td><?php echo 'activo' === $socia->estado ? '<span style="color:#2e7d32;">Activo</span>' : ( 'cancelada' === $socia->estado ? '<span style="color:#c62828;">Cancelada</span>' : '<span style="color:#c62828;">Pausado</span>' ); ?></td>
+							<td><?php
+							if ( 'activo' === $socia->estado ) {
+								echo ! empty( $socia->preapproval_id ) ? '<strong>Suscripta</strong>' : ( ! empty( $socia->fecha_fin_trial ) ? 'Trial' : 'Manual' );
+							} else {
+								echo '&mdash;';
+							}
+							?></td>
 							<td><?php echo esc_html( mysql2date( 'd/m/Y', $socia->fecha_alta ) ); ?></td>
 							<td>
 								<a href="<?php echo esc_url( add_query_arg( array( 'page' => 'cn-socias', 'editar' => $socia->id ) ) ); ?>">Editar</a> |
