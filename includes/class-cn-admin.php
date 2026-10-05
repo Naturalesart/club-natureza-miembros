@@ -403,8 +403,91 @@ class CN_Admin {
 			<tr><td><?php echo esc_html( $b['socia']->nombre_apellido ); ?></td><td><?php echo esc_html( $em ); ?></td><td><?php echo esc_html( $b['estado_mp'] ); ?></td></tr>
 		<?php endforeach; ?>
 		</tbody></table>
-		</div>
 		<?php
+		$por_mes = array();
+		$desde_embudo = 0;
+		foreach ( $por_estado['authorized'] as $r ) {
+			$mes = isset( $r['date_created'] ) ? substr( (string) $r['date_created'], 0, 7 ) : '?';
+			$por_mes[ $mes ] = isset( $por_mes[ $mes ] ) ? $por_mes[ $mes ] + 1 : 1;
+			if ( isset( $r['date_created'] ) && substr( (string) $r['date_created'], 0, 10 ) >= '2026-09-07' ) {
+				$desde_embudo++;
+			}
+		}
+		ksort( $por_mes );
+		echo '<h2>Altas de suscripci&oacute;n por mes (las autorizadas hoy)</h2><p>';
+		foreach ( $por_mes as $mes => $n ) {
+			echo esc_html( $mes . ': ' . $n . '   ' );
+		}
+		echo '</p><p><strong>Desde el 07/09 (inicio del embudo del trial): ' . (int) $desde_embudo . '</strong></p>';
+		$cobros          = array();
+		$pagos_total     = 0;
+		$pagos_sin_email = 0;
+		$errores_pagos   = array();
+		$desde           = gmdate( 'Y-m-d\TH:i:s.000\Z', time() - 40 * DAY_IN_SECONDS );
+		$hasta           = gmdate( 'Y-m-d\TH:i:s.000\Z', time() );
+		$off             = 0;
+		for ( $pag = 0; $pag < 5; $pag++ ) {
+			$resp = wp_remote_get( CN_MP::API_BASE . '/v1/payments/search?status=approved&sort=date_created&criteria=desc&range=date_created&begin_date=' . rawurlencode( $desde ) . '&end_date=' . rawurlencode( $hasta ) . '&limit=100&offset=' . $off, array(
+				'timeout' => 15,
+				'headers' => array( 'Authorization' => 'Bearer ' . $token, 'Content-Type' => 'application/json' ),
+			) );
+			if ( is_wp_error( $resp ) ) {
+				$errores_pagos[] = $resp->get_error_message();
+				break;
+			}
+			$codigo_p = (int) wp_remote_retrieve_response_code( $resp );
+			$data_p   = json_decode( wp_remote_retrieve_body( $resp ), true );
+			if ( 200 !== $codigo_p || ! is_array( $data_p ) ) {
+				$errores_pagos[] = 'Mercado Pago respondió código ' . $codigo_p;
+				break;
+			}
+			$res_p = isset( $data_p['results'] ) && is_array( $data_p['results'] ) ? $data_p['results'] : array();
+			foreach ( $res_p as $p ) {
+				$monto_p = isset( $p['transaction_amount'] ) ? (int) $p['transaction_amount'] : 0;
+				if ( ! in_array( $monto_p, array( 15000, 15500, 32000 ), true ) ) {
+					continue;
+				}
+				$pagos_total++;
+				$em_p = strtolower( trim( (string) ( isset( $p['payer']['email'] ) ? $p['payer']['email'] : '' ) ) );
+				if ( '' === $em_p ) {
+					$pagos_sin_email++;
+					continue;
+				}
+				if ( ! isset( $cobros[ $em_p ] ) ) {
+					$cobros[ $em_p ] = array( 'monto' => $monto_p, 'fecha' => isset( $p['date_created'] ) ? substr( (string) $p['date_created'], 0, 10 ) : '' );
+				}
+			}
+			$total_p = isset( $data_p['paging']['total'] ) ? (int) $data_p['paging']['total'] : 0;
+			$off    += 100;
+			if ( count( $res_p ) < 100 || $off >= $total_p ) {
+				break;
+			}
+		}
+		echo '<h2>Cobros de planes en los &uacute;ltimos 40 d&iacute;as</h2>';
+		if ( $errores_pagos ) {
+			echo '<p style="color:#b32d2e;">No se pudieron consultar los cobros: ' . esc_html( implode( ' | ', $errores_pagos ) ) . '</p>';
+		} else {
+			$coinc_p = array();
+			$de_trial_p = 0;
+			foreach ( $cobros as $em_c => $c ) {
+				if ( isset( $por_email[ $em_c ] ) ) {
+					$coinc_p[ $em_c ] = $c;
+					if ( ! empty( $por_email[ $em_c ]->fecha_fin_trial ) ) {
+						$de_trial_p++;
+					}
+				}
+			}
+			echo '<p>Cobros de $15.000, $15.500 o $32.000 (puede incluir compras de la tienda por el mismo monto): <strong>' . (int) $pagos_total . '</strong> &middot; Personas distintas con email: ' . (int) count( $cobros ) . ' &middot; Cobros sin email: ' . (int) $pagos_sin_email . '</p>';
+			echo '<p><strong>Coinciden con una socia del plugin (por email): ' . (int) count( $coinc_p ) . '</strong> &middot; De esas, vienen de un trial: ' . (int) $de_trial_p . '</p>';
+			if ( $coinc_p ) {
+				echo '<table class="widefat striped" style="max-width:700px;"><thead><tr><th>Socia</th><th>Tipo</th><th>Monto</th><th>&Uacute;ltimo cobro</th></tr></thead><tbody>';
+				foreach ( $coinc_p as $em_c => $c ) {
+					echo '<tr><td>' . esc_html( $por_email[ $em_c ]->nombre_apellido ) . '</td><td>' . ( ! empty( $por_email[ $em_c ]->fecha_fin_trial ) ? 'Viene de trial' : 'Otra' ) . '</td><td>' . esc_html( '$' . $c['monto'] ) . '</td><td>' . esc_html( $c['fecha'] ) . '</td></tr>';
+				}
+				echo '</tbody></table>';
+			}
+		}
+		echo '</div>';
 	}
 	public static function pagina_cursos() {
 		if ( ! current_user_can( 'manage_options' ) ) return;
