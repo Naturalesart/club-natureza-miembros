@@ -4,6 +4,7 @@ class CN_Admin {
 	public static function registrar_menu() {
 		add_menu_page( 'Club Natureza', 'Club Natureza', 'manage_options', 'cn-socias', array( __CLASS__, 'pagina_socias' ), 'dashicons-groups', 58 );
 		add_submenu_page( 'cn-socias', 'Socias', 'Socias', 'manage_options', 'cn-socias', array( __CLASS__, 'pagina_socias' ) );
+		add_submenu_page( 'cn-socias', 'Cruce con Mercado Pago', 'Cruce con Mercado Pago', 'manage_options', 'cn-cruce-mp', array( __CLASS__, 'pagina_cruce_mp' ) );
 		add_submenu_page( 'cn-socias', 'Cursos', 'Cursos', 'manage_options', 'cn-cursos', array( __CLASS__, 'pagina_cursos' ) );
 		add_submenu_page( 'cn-socias', 'Contenido', 'Contenido', 'manage_options', 'cn-contenido', array( __CLASS__, 'pagina_contenido' ) );
 		add_submenu_page( 'cn-socias', 'Videos', 'Videos', 'manage_options', 'cn-videos', array( __CLASS__, 'pagina_videos' ) );
@@ -266,6 +267,127 @@ class CN_Admin {
 	/* ---------------------------------------------------------------------
 	 * CURSOS
 	 * ------------------------------------------------------------------- */
+	public static function pagina_cruce_mp() {
+		if ( ! current_user_can( 'manage_options' ) ) return;
+		global $wpdb;
+		?>
+		<div class="wrap">
+			<h1>Cruce con Mercado Pago</h1>
+			<p>Compara las suscripciones de Mercado Pago con las socias del plugin (por email). Solo lectura: no cambia ningún acceso ni ningún dato.</p>
+			<form method="post">
+				<?php wp_nonce_field( 'cn_cruce_mp', 'cn_cruce_mp_nonce' ); ?>
+				<button type="submit" name="cn_cruce_mp" value="1" class="button button-primary">Consultar Mercado Pago</button>
+			</form>
+		<?php
+		if ( ! isset( $_POST['cn_cruce_mp'] ) || ! check_admin_referer( 'cn_cruce_mp', 'cn_cruce_mp_nonce' ) ) {
+			echo '</div>';
+			return;
+		}
+		if ( function_exists( 'set_time_limit' ) ) {
+			@set_time_limit( 120 );
+		}
+		$token = CN_MP::get_access_token();
+		if ( '' === $token ) {
+			echo '<p style="color:#b32d2e;">No hay un acceso de Mercado Pago guardado en la configuración del plugin.</p></div>';
+			return;
+		}
+		$por_estado = array();
+		$errores    = array();
+		foreach ( array( 'authorized', 'paused', 'cancelled' ) as $estado ) {
+			$lista  = array();
+			$offset = 0;
+			for ( $pag = 0; $pag < 4; $pag++ ) {
+				$resp = wp_remote_get( CN_MP::API_BASE . '/preapproval/search?status=' . $estado . '&limit=100&offset=' . $offset, array(
+					'timeout' => 15,
+					'headers' => array( 'Authorization' => 'Bearer ' . $token, 'Content-Type' => 'application/json' ),
+				) );
+				if ( is_wp_error( $resp ) ) {
+					$errores[] = $estado . ': ' . $resp->get_error_message();
+					break;
+				}
+				$codigo = (int) wp_remote_retrieve_response_code( $resp );
+				$data   = json_decode( wp_remote_retrieve_body( $resp ), true );
+				if ( 200 !== $codigo || ! is_array( $data ) ) {
+					$errores[] = $estado . ': Mercado Pago respondió código ' . $codigo;
+					break;
+				}
+				$res = isset( $data['results'] ) && is_array( $data['results'] ) ? $data['results'] : array();
+				foreach ( $res as $r ) {
+					$lista[] = $r;
+				}
+				$total  = isset( $data['paging']['total'] ) ? (int) $data['paging']['total'] : count( $lista );
+				$offset += 100;
+				if ( count( $res ) < 100 || $offset >= $total ) {
+					break;
+				}
+			}
+			$por_estado[ $estado ] = $lista;
+		}
+		if ( $errores ) {
+			echo '<p style="color:#b32d2e;"><strong>No se pudo consultar todo:</strong> ' . esc_html( implode( ' | ', $errores ) ) . '. Si dice 401 o 403, el acceso guardado en el plugin no permite ver suscripciones.</p>';
+			echo '</div>';
+			return;
+		}
+		$miembros = $wpdb->get_results( 'SELECT id, nombre_apellido, estado, email, fecha_fin_trial FROM ' . CN_DB::tabla( 'miembros' ) . " WHERE email IS NOT NULL AND email <> ''" );
+		$por_email = array();
+		foreach ( (array) $miembros as $m ) {
+			$por_email[ strtolower( trim( (string) $m->email ) ) ] = $m;
+		}
+		$emails_aut = array();
+		$montos     = array();
+		$coinciden  = array();
+		$sin_match  = array();
+		foreach ( $por_estado['authorized'] as $r ) {
+			$email = strtolower( trim( (string) ( isset( $r['payer_email'] ) ? $r['payer_email'] : '' ) ) );
+			$monto = isset( $r['auto_recurring']['transaction_amount'] ) ? (string) $r['auto_recurring']['transaction_amount'] : '?';
+			$montos[ $monto ] = isset( $montos[ $monto ] ) ? $montos[ $monto ] + 1 : 1;
+			if ( '' !== $email ) {
+				$emails_aut[ $email ] = true;
+			}
+			$fecha = isset( $r['date_created'] ) ? substr( (string) $r['date_created'], 0, 10 ) : '';
+			if ( '' !== $email && isset( $por_email[ $email ] ) ) {
+				$coinciden[] = array( 'email' => $email, 'socia' => $por_email[ $email ], 'monto' => $monto, 'fecha' => $fecha );
+			} else {
+				$sin_match[] = array( 'email' => $email, 'monto' => $monto, 'fecha' => $fecha );
+			}
+		}
+		$de_trial = 0;
+		foreach ( $coinciden as $c ) {
+			if ( ! empty( $c['socia']->fecha_fin_trial ) ) {
+				$de_trial++;
+			}
+		}
+		$bajas_activas = array();
+		foreach ( array( 'paused', 'cancelled' ) as $estado ) {
+			foreach ( $por_estado[ $estado ] as $r ) {
+				$email = strtolower( trim( (string) ( isset( $r['payer_email'] ) ? $r['payer_email'] : '' ) ) );
+				if ( '' !== $email && ! isset( $emails_aut[ $email ] ) && isset( $por_email[ $email ] ) && 'activo' === $por_email[ $email ]->estado ) {
+					$bajas_activas[ $email ] = array( 'socia' => $por_email[ $email ], 'estado_mp' => $estado );
+				}
+			}
+		}
+		?>
+		<h2>Resultado</h2>
+		<p><strong>Autorizadas en Mercado Pago: <?php echo (int) count( $por_estado['authorized'] ); ?></strong> &middot; Pausadas: <?php echo (int) count( $por_estado['paused'] ); ?> &middot; Canceladas: <?php echo (int) count( $por_estado['cancelled'] ); ?></p>
+		<p>Por monto mensual: <?php foreach ( $montos as $mo => $n ) { echo esc_html( '$' . $mo . ': ' . $n . '   ' ); } ?></p>
+		<p><strong>Coinciden con una socia del plugin (por email): <?php echo (int) count( $coinciden ); ?></strong> &middot; De esas, vienen de un trial: <?php echo (int) $de_trial; ?> &middot; Sin coincidencia: <?php echo (int) count( $sin_match ); ?></p>
+		<h3>Pagan en Mercado Pago y no coinciden por email con ninguna socia</h3>
+		<p>Pueden ser socias cargadas a mano (sin email en el plugin) o con otro email.</p>
+		<table class="widefat striped" style="max-width:700px;"><thead><tr><th>Email</th><th>Monto</th><th>Alta en MP</th></tr></thead><tbody>
+		<?php foreach ( $sin_match as $s ) : ?>
+			<tr><td><?php echo esc_html( '' !== $s['email'] ? $s['email'] : '(sin email)' ); ?></td><td><?php echo esc_html( '$' . $s['monto'] ); ?></td><td><?php echo esc_html( $s['fecha'] ); ?></td></tr>
+		<?php endforeach; ?>
+		</tbody></table>
+		<h3>Canceladas o pausadas en Mercado Pago cuya socia sigue activa en el plugin</h3>
+		<p>Estas conservan el acceso. Revisalas a mano: este reporte no cambia nada.</p>
+		<table class="widefat striped" style="max-width:700px;"><thead><tr><th>Socia</th><th>Email</th><th>Estado en MP</th></tr></thead><tbody>
+		<?php foreach ( $bajas_activas as $em => $b ) : ?>
+			<tr><td><?php echo esc_html( $b['socia']->nombre_apellido ); ?></td><td><?php echo esc_html( $em ); ?></td><td><?php echo esc_html( $b['estado_mp'] ); ?></td></tr>
+		<?php endforeach; ?>
+		</tbody></table>
+		</div>
+		<?php
+	}
 	public static function pagina_cursos() {
 		if ( ! current_user_can( 'manage_options' ) ) return;
 		global $wpdb;
