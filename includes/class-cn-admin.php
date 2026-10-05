@@ -286,9 +286,27 @@ class CN_Admin {
 		if ( function_exists( 'set_time_limit' ) ) {
 			@set_time_limit( 120 );
 		}
-		$token = CN_MP::get_access_token();
+		$token   = '';
+		$codigos = array();
+		foreach ( array( 'suscripciones' => CN_MP::get_access_token(), 'trial' => CN_MP::get_access_token_trial() ) as $nombre_acceso => $acceso ) {
+			if ( '' === $acceso ) {
+				$codigos[] = $nombre_acceso . ': sin acceso guardado';
+				continue;
+			}
+			$prueba = wp_remote_get( CN_MP::API_BASE . '/preapproval/search?limit=1', array(
+				'timeout' => 15,
+				'headers' => array( 'Authorization' => 'Bearer ' . $acceso, 'Content-Type' => 'application/json' ),
+			) );
+			$cod_prueba = is_wp_error( $prueba ) ? 0 : (int) wp_remote_retrieve_response_code( $prueba );
+			$codigos[]  = $nombre_acceso . ': código ' . $cod_prueba;
+			if ( 200 === $cod_prueba ) {
+				$token = $acceso;
+				echo '<p style="color:#50575e;">Se consultó con el acceso de ' . esc_html( $nombre_acceso ) . '.</p>';
+				break;
+			}
+		}
 		if ( '' === $token ) {
-			echo '<p style="color:#b32d2e;">No hay un acceso de Mercado Pago guardado en la configuración del plugin.</p></div>';
+			echo '<p style="color:#b32d2e;"><strong>Ningún acceso guardado en el plugin permite ver suscripciones</strong> (' . esc_html( implode( ' | ', $codigos ) ) . ').</p></div>';
 			return;
 		}
 		$por_estado = array();
