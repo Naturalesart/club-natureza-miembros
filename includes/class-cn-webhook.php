@@ -132,6 +132,18 @@ class CN_Webhook {
 		}
 		$nuevo_estado = in_array( $status, $estados_activo, true ) ? 'activo' : 'pausado';
 		$t_miembros   = CN_DB::tabla( 'miembros' );
+		// Modo seguro: mientras esté en '1', un evento de MP nunca baja a nadie a 'pausado'.
+		if ( 'pausado' === $nuevo_estado && '1' === (string) get_option( 'cn_sub_modo_seguro', '1' ) ) {
+			$fila_id = $preapproval_id
+				? $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$t_miembros} WHERE preapproval_id = %s LIMIT 1", $preapproval_id ) )
+				: null;
+			self::registrar_log_mp( 'downgrade_omitido', array(
+				'preapproval_id' => $preapproval_id,
+				'status_mp'      => $status,
+				'fila_id'        => $fila_id ? (int) $fila_id : null,
+			) );
+			return;
+		}
 		// 1. external_reference (flujo dinámico).
 		$pendiente = null;
 		if ( $external_reference ) {
@@ -481,10 +493,26 @@ class CN_Webhook {
 		wp_mail( $destino, $asunto, $cuerpo );
 	}
 	/**
+	 * Inserta una fila en wp_cn_mp_log (misma tabla/columnas que usa manejar()).
+	 * Cualquier cadena APP_USR-... del payload se oculta antes de guardar.
+	 */
+	public static function registrar_log_mp( $tipo, $payload ) {
+		global $wpdb;
+		$wpdb->insert(
+			CN_DB::tabla( 'mp_log' ),
+			array(
+				'payload' => preg_replace( '/APP_USR-[A-Za-z0-9\-]+/', '[oculto]', (string) wp_json_encode( $payload ) ),
+				'tipo'    => $tipo,
+				'fecha'   => current_time( 'mysql', true ),
+			),
+			array( '%s', '%s', '%s' )
+		);
+	}
+	/**
 	 * Aviso fire-and-forget a n8n. Nunca bloquea ni hace fallar el alta —
 	 * timeout corto y sin esperar respuesta (regla #2 del proyecto).
 	 */
-	protected static function avisar_error_n8n( $motivo, $detalle ) {
+	public static function avisar_error_n8n( $motivo, $detalle ) {
 		wp_remote_post( self::N8N_ALERTA_URL, array(
 			'timeout'  => 5,
 			'blocking' => false,

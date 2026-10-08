@@ -171,12 +171,36 @@ class CN_MP {
 			),
 		) );
 		if ( is_wp_error( $respuesta ) ) {
+			self::registrar_error_api( $path, 'wp_error', $respuesta->get_error_message() );
 			return null;
 		}
 		$codigo = wp_remote_retrieve_response_code( $respuesta );
 		if ( $codigo < 200 || $codigo >= 300 ) {
+			self::registrar_error_api( $path, $codigo, wp_remote_retrieve_body( $respuesta ) );
 			return null;
 		}
 		return json_decode( wp_remote_retrieve_body( $respuesta ), true );
+	}
+	/**
+	 * Deja rastro de un error de la API de MP (mp_log + aviso a n8n, máx. 1/hora por
+	 * ruta+código). Nunca lanza ni cambia lo que devuelve get().
+	 */
+	protected static function registrar_error_api( $path, $http, $cuerpo ) {
+		try {
+			$ruta   = (string) strtok( (string) $path, '?' );
+			$cuerpo = mb_substr( preg_replace( '/APP_USR-[A-Za-z0-9\-]+/', '[oculto]', (string) $cuerpo ), 0, 300 );
+			CN_Webhook::registrar_log_mp( 'mp_api_error', array( 'ruta' => $ruta, 'http' => $http, 'cuerpo' => $cuerpo ) );
+			// Solo avisa a n8n por errores de acceso/servicio; 404 y otros 4xx quedan solo en el log.
+			$avisar = ( 'wp_error' === $http )
+				|| ( is_numeric( $http ) && ( in_array( (int) $http, array( 401, 403, 429 ), true ) || (int) $http >= 500 ) );
+			// El id va al final de la ruta: se normaliza para que 39 eventos con 401 no manden 39 avisos.
+			$clave = 'cn_mpapi_err_' . md5( preg_replace( '#/[^/]+$#', '/{id}', $ruta ) . '|' . $http );
+			if ( $avisar && ! get_transient( $clave ) ) {
+				set_transient( $clave, 1, HOUR_IN_SECONDS );
+				CN_Webhook::avisar_error_n8n( 'mp_api_error', array( 'ruta' => $ruta, 'http' => $http ) );
+			}
+		} catch ( \Throwable $e ) {
+			// Accesorio: si el log o el aviso fallan, se ignora.
+		}
 	}
 }
