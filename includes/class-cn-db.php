@@ -5,7 +5,7 @@ class CN_DB {
 		global $wpdb;
 		return $wpdb->prefix . 'cn_' . $nombre;
 	}
-	const DB_VERSION = '2.6.0';
+	const DB_VERSION = '2.7.0';
 	public static function maybe_upgrade() {
 		if ( get_option( 'cn_db_version' ) !== self::DB_VERSION ) {
 			self::instalar();
@@ -25,6 +25,7 @@ class CN_DB {
 		$t_vistos           = self::tabla( 'vistos' );
 		$t_preapprovals     = self::tabla( 'preapprovals_pendientes' );
 		$t_trial_pendientes = self::tabla( 'trial_pendientes' );
+		$t_susc_pendientes  = self::tabla( 'suscripciones_pendientes' );
 		$t_mp_log           = self::tabla( 'mp_log' );
 		$t_pixel_dedup      = self::tabla( 'pixel_dedup' );
 		$sql = "CREATE TABLE {$t_miembros} (
@@ -43,6 +44,8 @@ class CN_DB {
 			celular_texto_plano varchar(20) DEFAULT NULL,
 			dia5_avisado tinyint(1) NOT NULL DEFAULT 0,
 			notas text DEFAULT NULL,
+			plan varchar(20) DEFAULT NULL,
+			acceso_hasta datetime DEFAULT NULL,
 			PRIMARY KEY  (id),
 			KEY celular_hint (celular_hint),
 			KEY preapproval_id (preapproval_id),
@@ -130,6 +133,24 @@ class CN_DB {
 			user_agent text DEFAULT NULL,
 			PRIMARY KEY  (id),
 			KEY external_reference (external_reference),
+			KEY celular (celular)
+		) {$charset_collate};
+		CREATE TABLE {$t_susc_pendientes} (
+			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+			external_reference varchar(191) NOT NULL,
+			nombre_apellido varchar(191) NOT NULL,
+			celular varchar(20) NOT NULL,
+			email varchar(191) DEFAULT NULL,
+			plan varchar(20) NOT NULL,
+			origen varchar(20) NOT NULL,
+			fbp varchar(255) DEFAULT NULL,
+			fbc varchar(255) DEFAULT NULL,
+			ip varchar(45) DEFAULT NULL,
+			user_agent text DEFAULT NULL,
+			creado datetime NOT NULL,
+			usado tinyint(1) NOT NULL DEFAULT 0,
+			PRIMARY KEY  (id),
+			UNIQUE KEY external_reference (external_reference),
 			KEY celular (celular)
 		) {$charset_collate};
 		CREATE TABLE {$t_mp_log} (
