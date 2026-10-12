@@ -317,7 +317,7 @@ class CN_Webhook {
 			// Buscar a la socia por celular, igual que el alta del trial (hint + verificación del hash).
 			$hint       = CN_Helpers::hint_celular( $fila->celular );
 			$candidatos = $wpdb->get_results(
-				$wpdb->prepare( "SELECT id, celular_hash, preapproval_id FROM {$t_miembros} WHERE celular_hint = %s", $hint )
+				$wpdb->prepare( "SELECT id, celular_hash, preapproval_id, plan, acceso_hasta FROM {$t_miembros} WHERE celular_hint = %s", $hint )
 			);
 			if ( '' !== (string) $wpdb->last_error ) {
 				throw new RuntimeException( 'error buscando a la socia: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
@@ -387,8 +387,31 @@ class CN_Webhook {
 					'preapproval_nuevo'  => $preapproval_id,
 				) );
 				return true;
+			} else {
+				// Ya tiene ESE mismo preapproval_id: no se pisa nada. Solo se completan plan y
+				// acceso_hasta si hoy están en NULL (p. ej. el pago llegó antes y el camino de
+				// siempre vinculó el preapproval_id sin ellos). Si la propiedad no vino en el
+				// SELECT, no se asume NULL: no se escribe.
+				$completar = array();
+				if ( null !== $plan && property_exists( $socia, 'plan' ) && null === $socia->plan ) {
+					$completar['plan'] = $plan;
+				}
+				if ( null !== $acceso_hasta && property_exists( $socia, 'acceso_hasta' ) && null === $socia->acceso_hasta ) {
+					$completar['acceso_hasta'] = $acceso_hasta;
+				}
+				if ( $completar ) {
+					$ok = $wpdb->update(
+						$t_miembros,
+						$completar,
+						array( 'id' => (int) $socia->id ),
+						array_fill( 0, count( $completar ), '%s' ),
+						array( '%d' )
+					);
+					if ( false === $ok ) {
+						throw new RuntimeException( 'no se pudo completar plan/acceso_hasta: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
+					}
+				}
 			}
-			// (Si ya tenía ESE mismo preapproval_id no se cambia nada de la socia: solo se marca la pendiente.)
 			$ok = $wpdb->update( $t_pend, array( 'usado' => 1 ), array( 'id' => (int) $fila->id ), array( '%d' ), array( '%d' ) );
 			if ( false === $ok ) {
 				throw new RuntimeException( 'no se pudo marcar la pendiente: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
