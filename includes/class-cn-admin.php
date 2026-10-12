@@ -16,10 +16,103 @@ class CN_Admin {
 	/* ---------------------------------------------------------------------
 	 * SOCIAS
 	 * ------------------------------------------------------------------- */
+	/**
+	 * Procesa el formulario "Generar link de suscripción" (Fase 2C). Solo genera el link: no se envía a nadie.
+	 * Devuelve null si no se envió el formulario; si se envió, array( 'ok' => bool, 'mensaje' => string, 'link' => string ).
+	 * El celular se normaliza UNA sola vez acá; CN_MP::crear_suscripcion_link() no lo vuelve a normalizar.
+	 */
+	protected static function procesar_generar_link() {
+		if ( ! isset( $_POST['cn_admin_generar_link'] ) ) {
+			return null;
+		}
+		if ( ! current_user_can( 'manage_options' ) ) {
+			return array( 'ok' => false, 'mensaje' => 'No tenés permisos para esto.', 'link' => '' );
+		}
+		check_admin_referer( 'cn_generar_link', 'cn_generar_link_nonce' );
+		$planes  = CN_MP::get_planes();
+		$plan    = sanitize_text_field( wp_unslash( $_POST['cn_gl_plan'] ?? '' ) );
+		$nombre  = trim( sanitize_text_field( wp_unslash( $_POST['cn_gl_nombre'] ?? '' ) ) );
+		$celular = sanitize_text_field( wp_unslash( $_POST['cn_gl_celular'] ?? '' ) );
+		$email   = sanitize_text_field( wp_unslash( $_POST['cn_gl_email'] ?? '' ) );
+		if ( ! isset( $planes[ $plan ] ) ) {
+			return array( 'ok' => false, 'mensaje' => 'Elegí un plan válido.', 'link' => '' );
+		}
+		if ( '' === $nombre ) {
+			return array( 'ok' => false, 'mensaje' => 'Ingresá nombre y apellido.', 'link' => '' );
+		}
+		$norm = CN_Helpers::normalizar_celular( $celular );
+		if ( empty( $norm['valido'] ) || '' === (string) $norm['normalizado'] ) {
+			return array( 'ok' => false, 'mensaje' => 'El celular no es válido. Revisalo (código de área + número).', 'link' => '' );
+		}
+		$res = CN_MP::crear_suscripcion_link( $plan, $nombre, $norm['normalizado'], $email, 'panel', array() );
+		if ( is_wp_error( $res ) ) {
+			return array( 'ok' => false, 'mensaje' => $res->get_error_message(), 'link' => '' );
+		}
+		return array( 'ok' => true, 'mensaje' => '', 'link' => (string) $res );
+	}
+	/** Bloque visual "Generar link de suscripción" (Fase 2C). $res es lo que devolvió procesar_generar_link(). */
+	protected static function bloque_generar_link( $res ) {
+		$planes = CN_MP::get_planes();
+		$sel    = sanitize_text_field( wp_unslash( $_POST['cn_gl_plan'] ?? '' ) );
+		$err    = is_array( $res ) && empty( $res['ok'] );
+		$val    = function ( $campo ) use ( $err ) {
+			return $err ? sanitize_text_field( wp_unslash( $_POST[ $campo ] ?? '' ) ) : '';
+		};
+		?>
+		<h2>Generar link de suscripción</h2>
+		<?php
+		if ( is_array( $res ) && ! empty( $res['ok'] ) ) :
+			?>
+			<div class="notice notice-success inline" style="max-width:720px;">
+				<p><strong>Link generado:</strong></p>
+				<p>
+					<input type="text" id="cn-gl-link" class="large-text" readonly value="<?php echo esc_attr( $res['link'] ); ?>" onclick="this.select();">
+				</p>
+				<p>
+					<button type="button" class="button" onclick="var i=document.getElementById('cn-gl-link');i.select();i.setSelectionRange(0,99999);if(navigator.clipboard){navigator.clipboard.writeText(i.value);}else{document.execCommand('copy');}this.textContent='¡Copiado!';">Copiar</button>
+				</p>
+				<p>Pasale este link a la socia por WhatsApp. El alta será automática cuando pague (si el alta automática está activada en Config).</p>
+			</div>
+			<?php
+		elseif ( $err ) :
+			self::aviso( $res['mensaje'], 'error' );
+		endif;
+		?>
+		<form method="post" style="max-width:480px;">
+			<?php wp_nonce_field( 'cn_generar_link', 'cn_generar_link_nonce' ); ?>
+			<table class="form-table">
+				<tr>
+					<th><label>Plan</label></th>
+					<td>
+						<select name="cn_gl_plan" required>
+							<?php foreach ( $planes as $clave => $info ) : ?>
+								<option value="<?php echo esc_attr( $clave ); ?>" <?php selected( $err ? $sel : '', $clave ); ?>><?php echo esc_html( $info['nombre'] . ' — $' . number_format( (float) $info['precio'], 0, ',', '.' ) ); ?></option>
+							<?php endforeach; ?>
+						</select>
+					</td>
+				</tr>
+				<tr>
+					<th><label>Nombre y Apellido</label></th>
+					<td><input type="text" name="cn_gl_nombre" class="regular-text" required value="<?php echo esc_attr( $val( 'cn_gl_nombre' ) ); ?>"></td>
+				</tr>
+				<tr>
+					<th><label>Celular</label></th>
+					<td><input type="text" name="cn_gl_celular" class="regular-text" required value="<?php echo esc_attr( $val( 'cn_gl_celular' ) ); ?>"></td>
+				</tr>
+				<tr>
+					<th><label>Email (opcional)</label></th>
+					<td><input type="email" name="cn_gl_email" class="regular-text" value="<?php echo esc_attr( $val( 'cn_gl_email' ) ); ?>"></td>
+				</tr>
+			</table>
+			<?php submit_button( 'Generar link', 'secondary', 'cn_admin_generar_link' ); ?>
+		</form>
+		<?php
+	}
 	public static function pagina_socias() {
 		if ( ! current_user_can( 'manage_options' ) ) return;
 		global $wpdb;
 		$tabla = CN_DB::tabla( 'miembros' );
+		$cn_link_res = self::procesar_generar_link(); // Fase 2C: solo actúa si se envió su propio formulario.
 		// Alta rápida.
 		if ( isset( $_POST['cn_admin_alta_socia'] ) && check_admin_referer( 'cn_alta_socia', 'cn_alta_socia_nonce' ) ) {
 			$nombre  = sanitize_text_field( wp_unslash( $_POST['cn_nombre'] ?? '' ) );
@@ -116,6 +209,7 @@ class CN_Admin {
 				</table>
 				<?php submit_button( 'Dar de alta', 'primary', 'cn_admin_alta_socia' ); ?>
 			</form>
+			<?php self::bloque_generar_link( $cn_link_res ); ?>
 			<h2>Listado</h2>
 			<?php
 			// Resumen de socias por tipo (solo lectura, calculado sobre $socias ya cargada).
