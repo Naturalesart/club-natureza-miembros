@@ -801,6 +801,12 @@ class CN_Admin {
 			update_option( 'cn_mp_precio_mensual', (float) sanitize_text_field( wp_unslash( $_POST['cn_mp_precio_mensual'] ?? '0' ) ) );
 			update_option( 'cn_mp_precio_trial', (float) sanitize_text_field( wp_unslash( $_POST['cn_mp_precio_trial'] ?? '7000' ) ) );
 			update_option( 'cn_mp_razon_plan', sanitize_text_field( wp_unslash( $_POST['cn_mp_razon_plan'] ?? '' ) ) );
+			// IDs de plan de MP (alta automática): solo se guardan si el campo vino en el POST.
+			foreach ( array( 'basico', 'full' ) as $cn_plan_clave ) {
+				if ( isset( $_POST[ 'cn_plan_id_' . $cn_plan_clave ] ) ) {
+					update_option( 'cn_plan_id_' . $cn_plan_clave, sanitize_text_field( wp_unslash( $_POST[ 'cn_plan_id_' . $cn_plan_clave ] ) ) );
+				}
+			}
 			update_option( 'cn_meta_capi_token', sanitize_text_field( wp_unslash( $_POST['cn_meta_capi_token'] ?? '' ) ) );
 			update_option( 'cn_google_drive_api_key', sanitize_text_field( wp_unslash( $_POST['cn_google_drive_api_key'] ?? '' ) ) );
 			update_option( 'cn_clase_especial_link', esc_url_raw( wp_unslash( $_POST['cn_clase_especial_link'] ?? '' ) ) );
@@ -812,6 +818,8 @@ class CN_Admin {
 		$precio       = CN_MP::get_precio_mensual();
 		$precio_trial = CN_MP::get_precio_trial();
 		$razon        = CN_MP::get_razon_plan();
+		$plan_id_basico = CN_MP::get_plan_id( 'basico' );
+		$plan_id_full   = CN_MP::get_plan_id( 'full' );
 		$capi_token   = CN_Meta_Capi::get_token();
 		$drive_key    = CN_Drive::get_api_key();
 		$clase_link   = get_option( 'cn_clase_especial_link', '' );
@@ -848,6 +856,17 @@ class CN_Admin {
 					<tr>
 						<th><label>Razón / título del plan</label></th>
 						<td><input type="text" name="cn_mp_razon_plan" class="regular-text" value="<?php echo esc_attr( $razon ); ?>"></td>
+					</tr>
+					<tr>
+						<th><label>ID del plan de Mercado Pago — Club Natureza ($15.500)</label></th>
+						<td><input type="text" name="cn_plan_id_basico" class="regular-text" value="<?php echo esc_attr( $plan_id_basico ); ?>"></td>
+					</tr>
+					<tr>
+						<th><label>ID del plan de Mercado Pago — Club Natureza Full ($32.000)</label></th>
+						<td>
+							<input type="text" name="cn_plan_id_full" class="regular-text" value="<?php echo esc_attr( $plan_id_full ); ?>">
+							<p class="description">Todavía no se usan en ningún lado; se cargan para la futura alta automática por suscripción.</p>
+						</td>
 					</tr>
 					<tr>
 						<th><label>Meta Conversions API — Token</label></th>
