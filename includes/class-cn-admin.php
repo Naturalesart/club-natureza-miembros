@@ -807,6 +807,8 @@ class CN_Admin {
 					update_option( 'cn_plan_id_' . $cn_plan_clave, sanitize_text_field( wp_unslash( $_POST[ 'cn_plan_id_' . $cn_plan_clave ] ) ) );
 				}
 			}
+			// Alta automática por suscripción "sub_": checkbox, apagado por defecto (si no viene tildado, queda en '0').
+			update_option( 'cn_sub_auto_activar', isset( $_POST['cn_sub_auto_activar'] ) ? '1' : '0' );
 			update_option( 'cn_meta_capi_token', sanitize_text_field( wp_unslash( $_POST['cn_meta_capi_token'] ?? '' ) ) );
 			update_option( 'cn_google_drive_api_key', sanitize_text_field( wp_unslash( $_POST['cn_google_drive_api_key'] ?? '' ) ) );
 			update_option( 'cn_clase_especial_link', esc_url_raw( wp_unslash( $_POST['cn_clase_especial_link'] ?? '' ) ) );
@@ -820,6 +822,7 @@ class CN_Admin {
 		$razon        = CN_MP::get_razon_plan();
 		$plan_id_basico = CN_MP::get_plan_id( 'basico' );
 		$plan_id_full   = CN_MP::get_plan_id( 'full' );
+		$sub_auto_activar = '1' === (string) get_option( 'cn_sub_auto_activar', '0' );
 		$capi_token   = CN_Meta_Capi::get_token();
 		$drive_key    = CN_Drive::get_api_key();
 		$clase_link   = get_option( 'cn_clase_especial_link', '' );
@@ -866,6 +869,13 @@ class CN_Admin {
 						<td>
 							<input type="text" name="cn_plan_id_full" class="regular-text" value="<?php echo esc_attr( $plan_id_full ); ?>">
 							<p class="description">Todavía no se usan en ningún lado; se cargan para la futura alta automática por suscripción.</p>
+						</td>
+					</tr>
+					<tr>
+						<th><label>Alta automática por suscripción (sub_)</label></th>
+						<td>
+							<label><input type="checkbox" name="cn_sub_auto_activar" value="1" <?php checked( $sub_auto_activar ); ?>> Activar socias solas al autorizarse una suscripción con referencia <code>sub_</code></label>
+							<p class="description">Apagado por defecto. Con esto apagado (o sin links <code>sub_</code>) el sistema se comporta exactamente como hasta ahora.</p>
 						</td>
 					</tr>
 					<tr>

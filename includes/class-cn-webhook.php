@@ -125,6 +125,15 @@ class CN_Webhook {
 	 */
 	protected static function aplicar_estado( $status, $external_reference, $preapproval_id, $payer_email = '' ) {
 		global $wpdb;
+		// Alta automática por suscripción "sub_" (Fase 2B). Apagada por defecto: las dos primeras
+		// condiciones son comparaciones de texto, así que cualquier otro evento sigue de largo sin
+		// consultas extra. Si la función devuelve false, no le corresponde y se sigue como siempre.
+		if ( 'authorized' === $status && is_string( $external_reference ) && 0 === strpos( $external_reference, 'sub_' )
+			&& '1' === (string) get_option( 'cn_sub_auto_activar', '0' ) ) {
+			if ( self::activar_por_suscripcion_sub( $external_reference, $preapproval_id ) ) {
+				return;
+			}
+		}
 		$estados_activo  = array( 'authorized', 'approved' );
 		$estados_pausado = array( 'cancelled', 'rejected', 'paused' );
 		if ( ! in_array( $status, array_merge( $estados_activo, $estados_pausado ), true ) ) {
@@ -255,6 +264,178 @@ class CN_Webhook {
 		}
 		$wpdb->update( $t_miembros, $data, array( 'id' => (int) $candidatos[0]->id ), $format, array( '%d' ) );
 		return true;
+	}
+	/**
+	 * Alta/activación automática por una suscripción "sub_" autorizada (Fase 2B).
+	 * Solo la llama aplicar_estado() con cn_sub_auto_activar = '1', estado MP 'authorized' y
+	 * referencia "sub_...".
+	 *
+	 * Devuelve false si NO le corresponde (no hay pendiente, ya fue usada o falta el
+	 * preapproval_id): aplicar_estado() sigue por el camino de siempre. Devuelve true si se
+	 * hizo cargo del evento (alta hecha, conflicto o error): así los niveles 1-3 no pueden
+	 * pisar el preapproval_id de una socia existente.
+	 *
+	 * Todo ocurre en una transacción con la fila pendiente bloqueada: dos avisos repetidos
+	 * del mismo pago no duplican socias, y si algo falla no queda nada a medias.
+	 * Nunca re-normaliza el celular: usa el que ya guardó la pendiente.
+	 */
+	protected static function activar_por_suscripcion_sub( $external_reference, $preapproval_id ) {
+		global $wpdb;
+		$preapproval_id = (string) $preapproval_id;
+		if ( '' === $preapproval_id ) {
+			return false;
+		}
+		$t_pend     = CN_DB::tabla( 'suscripciones_pendientes' );
+		$t_miembros = CN_DB::tabla( 'miembros' );
+		// Lectura sin lock: descarta lo que no es nuestro o ya fue procesado (aviso repetido).
+		$pend = $wpdb->get_row(
+			$wpdb->prepare( "SELECT id, usado FROM {$t_pend} WHERE external_reference = %s", $external_reference )
+		);
+		if ( ! $pend || 1 === (int) $pend->usado ) {
+			return false;
+		}
+		// Próxima fecha de cobro (solo informativa), consultada ANTES de abrir la transacción
+		// para no tener la fila bloqueada mientras se espera a MP.
+		$acceso_hasta = self::sub_acceso_hasta( $preapproval_id );
+		$en_transaccion = false;
+		try {
+			if ( false === $wpdb->query( 'START TRANSACTION' ) ) {
+				throw new RuntimeException( 'no se pudo abrir la transaccion' );
+			}
+			$en_transaccion = true;
+			$fila = $wpdb->get_row(
+				$wpdb->prepare( "SELECT * FROM {$t_pend} WHERE external_reference = %s FOR UPDATE", $external_reference )
+			);
+			if ( ! $fila || 1 === (int) $fila->usado ) {
+				$wpdb->query( 'ROLLBACK' ); // otro aviso ya la procesó mientras esperábamos el lock.
+				$en_transaccion = false;
+				return false;
+			}
+			$planes = CN_MP::get_planes();
+			$plan   = ( is_string( $fila->plan ) && isset( $planes[ $fila->plan ] ) ) ? $fila->plan : null;
+			$ahora  = current_time( 'mysql', true );
+			// Buscar a la socia por celular, igual que el alta del trial (hint + verificación del hash).
+			$hint       = CN_Helpers::hint_celular( $fila->celular );
+			$candidatos = $wpdb->get_results(
+				$wpdb->prepare( "SELECT id, celular_hash, preapproval_id FROM {$t_miembros} WHERE celular_hint = %s", $hint )
+			);
+			if ( '' !== (string) $wpdb->last_error ) {
+				throw new RuntimeException( 'error buscando a la socia: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
+			}
+			$socia = null;
+			foreach ( (array) $candidatos as $candidato ) {
+				if ( CN_Helpers::verificar_celular( $fila->celular, $candidato->celular_hash ) ) {
+					$socia = $candidato;
+					break;
+				}
+			}
+			if ( ! $socia ) {
+				// Socia nueva.
+				$ok = $wpdb->insert(
+					$t_miembros,
+					array(
+						'nombre_apellido'     => $fila->nombre_apellido,
+						'celular_hash'        => CN_Helpers::hash_celular( $fila->celular ),
+						'celular_hint'        => $hint,
+						'estado'              => 'activo',
+						'fecha_alta'          => $ahora,
+						'fecha_modificacion'  => $ahora,
+						'email'               => ( '' !== (string) $fila->email ) ? $fila->email : null,
+						'celular_texto_plano' => $fila->celular,
+						'plan'                => $plan,
+						'preapproval_id'      => $preapproval_id,
+						'acceso_hasta'        => $acceso_hasta,
+					),
+					array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s' )
+				);
+				if ( false === $ok ) {
+					throw new RuntimeException( 'no se pudo crear la socia: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
+				}
+			} elseif ( '' === (string) $socia->preapproval_id ) {
+				// Socia existente sin suscripción (trial, manual, pausada o cancelada): se activa.
+				$ok = $wpdb->update(
+					$t_miembros,
+					array(
+						'estado'             => 'activo',
+						'preapproval_id'     => $preapproval_id,
+						'plan'               => $plan,
+						'acceso_hasta'       => $acceso_hasta,
+						'fecha_fin_trial'    => null,
+						'fecha_modificacion' => $ahora,
+					),
+					array( 'id' => (int) $socia->id ),
+					array( '%s', '%s', '%s', '%s', '%s', '%s' ),
+					array( '%d' )
+				);
+				if ( false === $ok ) {
+					throw new RuntimeException( 'no se pudo activar a la socia: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
+				}
+			} elseif ( (string) $socia->preapproval_id !== $preapproval_id ) {
+				// Ya tiene OTRA suscripción: no se pisa nada y la pendiente queda sin marcar.
+				$wpdb->query( 'ROLLBACK' );
+				$en_transaccion = false;
+				self::registrar_log_mp( 'sub_conflicto', array(
+					'external_reference'  => $external_reference,
+					'pendiente_id'        => (int) $fila->id,
+					'miembro_id'          => (int) $socia->id,
+					'preapproval_nuevo'   => $preapproval_id,
+					'preapproval_actual'  => (string) $socia->preapproval_id,
+				) );
+				self::sub_avisar_una_vez_por_hora( 'sub_conflicto', $external_reference, array(
+					'external_reference' => $external_reference,
+					'miembro_id'         => (int) $socia->id,
+					'preapproval_nuevo'  => $preapproval_id,
+				) );
+				return true;
+			}
+			// (Si ya tenía ESE mismo preapproval_id no se cambia nada de la socia: solo se marca la pendiente.)
+			$ok = $wpdb->update( $t_pend, array( 'usado' => 1 ), array( 'id' => (int) $fila->id ), array( '%d' ), array( '%d' ) );
+			if ( false === $ok ) {
+				throw new RuntimeException( 'no se pudo marcar la pendiente: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
+			}
+			if ( false === $wpdb->query( 'COMMIT' ) ) {
+				throw new RuntimeException( 'no se pudo confirmar la transaccion' );
+			}
+			$en_transaccion = false;
+			return true;
+		} catch ( Throwable $e ) {
+			if ( $en_transaccion ) {
+				$wpdb->query( 'ROLLBACK' );
+			}
+			self::registrar_log_mp( 'sub_error', array(
+				'external_reference' => $external_reference,
+				'mensaje'            => mb_substr( $e->getMessage(), 0, 300 ),
+			) );
+			self::sub_avisar_una_vez_por_hora( 'sub_error', $external_reference, array(
+				'external_reference' => $external_reference,
+				'mensaje'            => mb_substr( $e->getMessage(), 0, 300 ),
+			) );
+			return true;
+		}
+	}
+	/**
+	 * next_payment_date de la suscripción en MP, en UTC ('Y-m-d H:i:s'); null si no viene o
+	 * no se puede leer (CN_MP::get ya deja el rastro 'mp_api_error', sin tokens).
+	 */
+	protected static function sub_acceso_hasta( $preapproval_id ) {
+		$data = CN_MP::obtener_preapproval( $preapproval_id );
+		if ( ! is_array( $data ) || empty( $data['next_payment_date'] ) || ! is_string( $data['next_payment_date'] ) ) {
+			return null;
+		}
+		$ts = strtotime( $data['next_payment_date'] );
+		if ( false === $ts ) {
+			return null;
+		}
+		return gmdate( 'Y-m-d H:i:s', $ts );
+	}
+	/** Aviso a n8n con tope de 1 por hora por motivo + referencia. */
+	protected static function sub_avisar_una_vez_por_hora( $motivo, $external_reference, $detalle ) {
+		$clave = 'cn_sub_av_' . md5( $motivo . '|' . $external_reference );
+		if ( get_transient( $clave ) ) {
+			return;
+		}
+		set_transient( $clave, 1, HOUR_IN_SECONDS );
+		self::avisar_error_n8n( $motivo, $detalle );
 	}
 	// ==========================================================================
 	// TRIAL DE 7 DÍAS — endpoint nuevo, separado del flujo de suscripción mensual.
