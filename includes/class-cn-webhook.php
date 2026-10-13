@@ -298,6 +298,7 @@ class CN_Webhook {
 		// para no tener la fila bloqueada mientras se espera a MP.
 		$acceso_hasta = self::sub_acceso_hasta( $preapproval_id );
 		$en_transaccion = false;
+		$es_alta        = false; // true solo en alta nueva o activación (nunca en "mismo preapproval_id ya vinculado").
 		try {
 			if ( false === $wpdb->query( 'START TRANSACTION' ) ) {
 				throw new RuntimeException( 'no se pudo abrir la transaccion' );
@@ -351,6 +352,7 @@ class CN_Webhook {
 				if ( false === $ok ) {
 					throw new RuntimeException( 'no se pudo crear la socia: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
 				}
+				$es_alta = true;
 			} elseif ( '' === (string) $socia->preapproval_id ) {
 				// Socia existente sin suscripción (trial, manual, pausada o cancelada): se activa.
 				$ok = $wpdb->update(
@@ -370,6 +372,7 @@ class CN_Webhook {
 				if ( false === $ok ) {
 					throw new RuntimeException( 'no se pudo activar a la socia: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
 				}
+				$es_alta = true;
 			} elseif ( (string) $socia->preapproval_id !== $preapproval_id ) {
 				// Ya tiene OTRA suscripción: no se pisa nada y la pendiente queda sin marcar.
 				$wpdb->query( 'ROLLBACK' );
@@ -420,6 +423,10 @@ class CN_Webhook {
 				throw new RuntimeException( 'no se pudo confirmar la transaccion' );
 			}
 			$en_transaccion = false;
+			// Ya confirmado: mail de bienvenida y CAPI quedan FUERA de la transacción y nunca afectan el alta.
+			if ( $es_alta ) {
+				self::sub_post_alta( $fila, $plan, $planes );
+			}
 			return true;
 		} catch ( Throwable $e ) {
 			if ( $en_transaccion ) {
@@ -435,6 +442,73 @@ class CN_Webhook {
 			) );
 			return true;
 		}
+	}
+	/**
+	 * Después del COMMIT de un alta/activación "sub_": mail de bienvenida y evento CAPI "Subscribe".
+	 * Cada paso en su propio try/catch: si uno falla se deja el rastro y el alta ya hecha no se toca.
+	 */
+	protected static function sub_post_alta( $fila, $plan, $planes ) {
+		$email    = trim( (string) $fila->email );
+		$celular  = (string) $fila->celular;
+		$nombre_p = ( null !== $plan && isset( $planes[ $plan ] ) ) ? (string) $planes[ $plan ]['nombre'] : 'Club Natureza';
+		try {
+			if ( '' !== $email ) {
+				self::enviar_mail_bienvenida_suscripcion( (string) $fila->nombre_apellido, $celular, $email, $nombre_p );
+			}
+		} catch ( Throwable $e ) {
+			self::registrar_log_mp( 'sub_post_alta_error', array( 'paso' => 'mail', 'external_reference' => (string) $fila->external_reference, 'mensaje' => mb_substr( $e->getMessage(), 0, 200 ) ) );
+		}
+		try {
+			if ( null !== $plan && isset( $planes[ $plan ] ) ) {
+				CN_Meta_Capi::enviar_subscribe(
+					(string) $fila->external_reference,
+					(float) $planes[ $plan ]['precio'],
+					$email,
+					$celular,
+					$nombre_p,
+					(string) $fila->fbp,
+					(string) $fila->fbc,
+					(string) $fila->ip,
+					(string) $fila->user_agent
+				);
+			}
+		} catch ( Throwable $e ) {
+			self::registrar_log_mp( 'sub_post_alta_error', array( 'paso' => 'capi', 'external_reference' => (string) $fila->external_reference, 'mensaje' => mb_substr( $e->getMessage(), 0, 200 ) ) );
+		}
+	}
+	/**
+	 * Mail de bienvenida de una socia que se suscribió (no es el del trial: sin "7 días" ni "nunca se te cobra").
+	 * Mismo wrapper HTML que enviar_mail_bienvenida(). El usuario es el nombre y la contraseña el celular.
+	 */
+	protected static function enviar_mail_bienvenida_suscripcion( $nombre, $celular, $email, $plan_nombre ) {
+		if ( '' === $email ) {
+			return;
+		}
+		$login_url = home_url( '/club-natureza-miembros/' );
+		$asunto    = '¡Ya sos socia del Club Natureza! 🌿 — tus datos de acceso';
+		$cuerpo  = '<!DOCTYPE html><html><body style="margin:0;padding:0;background:#f5f3ef;font-family:Georgia,serif;">';
+		$cuerpo .= '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f5f3ef;padding:32px 16px;">';
+		$cuerpo .= '<tr><td align="center">';
+		$cuerpo .= '<table role="presentation" width="100%" style="max-width:480px;background:#ffffff;border-radius:12px;overflow:hidden;">';
+		$cuerpo .= '<tr><td style="background:#2f3b2c;padding:28px 32px;text-align:center;">';
+		$cuerpo .= '<span style="color:#f5f3ef;font-size:22px;letter-spacing:1px;">🌿 Club Natureza</span></td></tr>';
+		$cuerpo .= '<tr><td style="padding:32px;">';
+		$cuerpo .= '<h1 style="font-size:20px;color:#2f3b2c;margin:0 0 16px;">¡Bienvenida, ' . esc_html( $nombre ) . '! 🎉</h1>';
+		$cuerpo .= '<p style="font-size:15px;color:#333;line-height:1.6;margin:0 0 20px;">Tu suscripción al Club Natureza (' . esc_html( $plan_nombre ) . ') está activa.</p>';
+		$cuerpo .= '<table role="presentation" width="100%" style="background:#f5f3ef;border-radius:8px;margin:0 0 24px;">';
+		$cuerpo .= '<tr><td style="padding:18px 20px;">';
+		$cuerpo .= '<p style="font-size:13px;color:#777;margin:0 0 4px;">USUARIO (nombre y apellido)</p>';
+		$cuerpo .= '<p style="font-size:16px;color:#2f3b2c;margin:0 0 14px;font-weight:bold;">' . esc_html( $nombre ) . '</p>';
+		$cuerpo .= '<p style="font-size:13px;color:#777;margin:0 0 4px;">CONTRASEÑA (tu celular)</p>';
+		$cuerpo .= '<p style="font-size:16px;color:#2f3b2c;margin:0;font-weight:bold;">' . esc_html( $celular ) . '</p>';
+		$cuerpo .= '</td></tr></table>';
+		$cuerpo .= '<table role="presentation" width="100%"><tr><td align="center">';
+		$cuerpo .= '<a href="' . esc_url( $login_url ) . '" style="display:inline-block;background:#2f3b2c;color:#f5f3ef;text-decoration:none;padding:14px 32px;border-radius:8px;font-size:15px;margin-bottom:24px;">Entrar al Club →</a>';
+		$cuerpo .= '</td></tr></table>';
+		$cuerpo .= '<p style="font-size:14px;color:#555;line-height:1.6;margin:24px 0 0;">Tu suscripción se renueva cada mes y podés cancelarla cuando quieras desde Mercado Pago. Cualquier duda, escribinos por WhatsApp.</p>';
+		$cuerpo .= '<p style="font-size:15px;color:#2f3b2c;margin:20px 0 0;">¡Bienvenida! 🌿</p>';
+		$cuerpo .= '</td></tr></table></td></tr></table></body></html>';
+		wp_mail( $email, $asunto, $cuerpo, array( 'Content-Type: text/html; charset=UTF-8' ) );
 	}
 	/**
 	 * next_payment_date de la suscripción en MP, en UTC ('Y-m-d H:i:s'); null si no viene o

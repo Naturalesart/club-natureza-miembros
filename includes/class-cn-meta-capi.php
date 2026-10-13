@@ -120,4 +120,88 @@ class CN_Meta_Capi {
 			) );
 		}
 	}
+	/**
+	 * Evento "Subscribe" (alta por suscripción "sub_"), SOLO por servidor. event_id = external_reference
+	 * de la suscripción (único por alta). Misma forma que enviar_purchase(), que no se toca.
+	 */
+	public static function enviar_subscribe( $event_id, $valor, $email, $celular, $plan_nombre = '', $fbp = '', $fbc = '', $ip = '', $user_agent = '' ) {
+		global $wpdb;
+		$token = self::get_token();
+		if ( ! $token || ! $event_id ) {
+			return;
+		}
+		$user_data = array();
+		if ( $email ) {
+			$user_data['em'] = array( hash( 'sha256', strtolower( trim( $email ) ) ) );
+		}
+		$tel = self::formato_e164( $celular );
+		if ( $tel ) {
+			$user_data['ph'] = array( hash( 'sha256', $tel ) );
+		}
+		if ( $fbp ) {
+			$user_data['fbp'] = $fbp;
+		}
+		if ( $fbc ) {
+			$user_data['fbc'] = $fbc;
+		}
+		if ( $ip ) {
+			$user_data['client_ip_address'] = $ip;
+		}
+		if ( $user_agent ) {
+			$user_data['client_user_agent'] = $user_agent;
+		}
+		$evento = array(
+			'event_name'       => 'Subscribe',
+			'event_time'       => time(),
+			'event_id'         => $event_id,
+			'action_source'    => 'website',
+			'event_source_url' => home_url( '/club-natureza-miembros/' ),
+			'user_data'        => $user_data,
+			'custom_data'      => array(
+				'currency'     => 'ARS',
+				'value'        => $valor,
+				'content_name' => 'Club Natureza - Suscripcion ' . $plan_nombre,
+				'content_type' => 'product',
+			),
+		);
+		$respuesta = wp_remote_post(
+			'https://graph.facebook.com/' . self::API_VERSION . '/' . self::PIXEL_ID . '/events?access_token=' . rawurlencode( $token ),
+			array(
+				'timeout' => 15,
+				'headers' => array( 'Content-Type' => 'application/json' ),
+				'body'    => wp_json_encode( array( 'data' => array( $evento ) ) ),
+			)
+		);
+		$codigo   = is_wp_error( $respuesta ) ? 0 : wp_remote_retrieve_response_code( $respuesta );
+		$body_raw = is_wp_error( $respuesta ) ? $respuesta->get_error_message() : wp_remote_retrieve_body( $respuesta );
+		// Log diagnóstico (sin PII ni token): qué claves de user_data se mandaron y el código de Meta.
+		$wpdb->insert(
+			CN_DB::tabla( 'mp_log' ),
+			array(
+				'payload' => wp_json_encode( array(
+					'evento'         => 'capi_subscribe',
+					'event_id'       => $event_id,
+					'valor'          => $valor,
+					'user_data_keys' => array_keys( $user_data ),
+					'http_code'      => $codigo,
+					'meta_response'  => substr( (string) $body_raw, 0, 500 ),
+				) ),
+				'tipo'    => 'capi_subscribe',
+				'fecha'   => current_time( 'mysql', true ),
+			),
+			array( '%s', '%s', '%s' )
+		);
+		if ( is_wp_error( $respuesta ) || $codigo >= 300 ) {
+			wp_remote_post( CN_Webhook::N8N_ALERTA_URL, array(
+				'timeout'  => 5,
+				'blocking' => false,
+				'headers'  => array( 'Content-Type' => 'application/json' ),
+				'body'     => wp_json_encode( array(
+					'motivo'  => 'capi_subscribe_fallo',
+					'detalle' => array( 'event_id' => $event_id, 'http_code' => $codigo, 'error' => substr( (string) $body_raw, 0, 500 ) ),
+					'fecha'   => current_time( 'mysql', true ),
+				) ),
+			) );
+		}
+	}
 }
