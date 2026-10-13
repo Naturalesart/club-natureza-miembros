@@ -14,7 +14,7 @@ jobs:
         # El deploy sube './*' (todo el repo): se borran del workspace de la corrida (no del repo) antes de subir.
         run: |
           rm -rf tests
-          find . -path ./.git -prune -o -type f \( -name 'test_*.php' -o -name '*Test.php' -o -name 'phpunit*.xml*' -o -name 'composer.json' -o -name 'composer.lock' \) -print -delete
+          find . -type f \( -name 'test_*.php' -o -name '*Test.php' -o -name 'phpunit*.xml*' -o -name 'composer.json' -o -name 'composer.lock' \) -not -path './.git/*' -print -delete
       - name: Deploy por SFTP a Hostinger
         uses: wlixcc/SFTP-Deploy-Action@v1.2.4
         with:
