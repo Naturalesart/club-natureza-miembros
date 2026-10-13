@@ -589,6 +589,88 @@ class CN_Admin {
 				echo '</tbody></table>';
 			}
 		}
+		// Detalle de suscripciones (SOLO LECTURA): usa los mismos resultados ya consultados arriba ($por_estado),
+		// sin llamadas nuevas a Mercado Pago. No se muestra ni se registra ningún token.
+		$dash = static function ( $valor ) {
+			$valor = is_scalar( $valor ) ? trim( (string) $valor ) : '';
+			return '' === $valor ? '—' : $valor;
+		};
+		$dia = static function ( $valor ) {
+			$valor = is_scalar( $valor ) ? trim( (string) $valor ) : '';
+			return '' === $valor ? '—' : substr( $valor, 0, 10 );
+		};
+		$total_det = 0;
+		foreach ( $por_estado as $lista_det ) {
+			$total_det += count( $lista_det );
+		}
+		echo '<h2>Detalle de suscripciones en Mercado Pago (IDs)</h2>';
+		echo '<p>Solo lectura, con los mismos datos de la consulta de arriba (' . (int) $total_det . ' suscripciones: autorizadas, pausadas y canceladas). Un guion (&mdash;) significa que Mercado Pago no envi&oacute; ese dato.</p>';
+		?>
+		<style>
+			.cn-cruce-ids td, .cn-cruce-ids th { -webkit-user-select: text; user-select: text; vertical-align: middle; }
+			.cn-cruce-ids code.cn-id { -webkit-user-select: all; user-select: all; word-break: break-all; }
+		</style>
+		<table class="widefat striped cn-cruce-ids"><thead><tr><th>ID de preapproval</th><th>external_reference</th><th>Estado</th><th>Plan / reason</th><th>Email del pagador</th><th>Alta</th><th>next_payment_date</th></tr></thead><tbody>
+		<?php
+		foreach ( array( 'authorized', 'paused', 'cancelled' ) as $estado_det ) {
+			foreach ( $por_estado[ $estado_det ] as $r ) {
+				if ( ! is_array( $r ) ) {
+					continue;
+				}
+				$id_det  = $dash( isset( $r['id'] ) ? $r['id'] : '' );
+				$ref_det = $dash( isset( $r['external_reference'] ) ? $r['external_reference'] : '' );
+				echo '<tr>';
+				echo '<td><code class="cn-id">' . esc_html( $id_det ) . '</code>';
+				if ( '—' !== $id_det ) {
+					echo ' <button type="button" class="button button-small cn-copiar" data-cn-copiar="' . esc_attr( $id_det ) . '">Copiar</button>';
+				}
+				echo '</td>';
+				echo '<td><code class="cn-id">' . esc_html( $ref_det ) . '</code>';
+				if ( '—' !== $ref_det ) {
+					echo ' <button type="button" class="button button-small cn-copiar" data-cn-copiar="' . esc_attr( $ref_det ) . '">Copiar</button>';
+				}
+				echo '</td>';
+				echo '<td>' . esc_html( $dash( isset( $r['status'] ) ? $r['status'] : '' ) ) . '</td>';
+				echo '<td>' . esc_html( $dash( isset( $r['reason'] ) ? $r['reason'] : '' ) ) . '</td>';
+				echo '<td>' . esc_html( $dash( isset( $r['payer_email'] ) ? $r['payer_email'] : '' ) ) . '</td>';
+				echo '<td>' . esc_html( $dia( isset( $r['date_created'] ) ? $r['date_created'] : '' ) ) . '</td>';
+				echo '<td>' . esc_html( $dia( isset( $r['next_payment_date'] ) ? $r['next_payment_date'] : '' ) ) . '</td>';
+				echo '</tr>';
+			}
+		}
+		if ( 0 === $total_det ) {
+			echo '<tr><td colspan="7">Mercado Pago no devolvi&oacute; suscripciones.</td></tr>';
+		}
+		?>
+		</tbody></table>
+		<script>
+		document.addEventListener('click', function (e) {
+			var btn = e.target && e.target.closest ? e.target.closest('.cn-copiar') : null;
+			if (!btn) { return; }
+			var txt = btn.getAttribute('data-cn-copiar') || '';
+			function listo() {
+				btn.textContent = 'Copiado';
+				setTimeout(function () { btn.textContent = 'Copiar'; }, 1200);
+			}
+			function alternativa() {
+				var t = document.createElement('textarea');
+				t.value = txt;
+				t.setAttribute('readonly', '');
+				t.style.position = 'fixed';
+				t.style.opacity = '0';
+				document.body.appendChild(t);
+				t.select();
+				try { if (document.execCommand('copy')) { listo(); } } catch (err) {}
+				document.body.removeChild(t);
+			}
+			if (navigator.clipboard && window.isSecureContext) {
+				navigator.clipboard.writeText(txt).then(listo, alternativa);
+			} else {
+				alternativa();
+			}
+		});
+		</script>
+		<?php
 		echo '</div>';
 	}
 	public static function pagina_cursos() {
