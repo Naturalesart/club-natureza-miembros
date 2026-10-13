@@ -21,6 +21,8 @@ require_once CN_PATH . 'includes/class-cn-drive.php';
 require_once CN_PATH . 'includes/class-cn-mp.php';
 require_once CN_PATH . 'includes/class-cn-meta-capi.php';
 require_once CN_PATH . 'includes/class-cn-webhook.php';
+require_once CN_PATH . 'includes/class-cn-vinculo.php';
+require_once CN_PATH . 'includes/class-cn-sync.php';
 require_once CN_PATH . 'includes/class-cn-shortcodes.php';
 require_once CN_PATH . 'includes/class-cn-admin.php';
 require_once CN_PATH . 'includes/class-cn-clarity.php';
@@ -81,6 +83,14 @@ add_action( 'cn_cron_revocar_bajas_sub', array( 'CN_Webhook', 'revocar_bajas_sub
 add_action( 'init', function () {
 	if ( ! wp_next_scheduled( 'cn_cron_revocar_bajas_sub' ) ) {
 		wp_schedule_event( time(), 'daily', 'cn_cron_revocar_bajas_sub' );
+	}
+} );
+// Fase 5: sync con Mercado Pago cada 30 min (sin webhooks) + aviso de suscripciones sin vincular. Se apaga con la opción cn_sync_mp_activo.
+add_filter( 'cron_schedules', array( 'CN_Sync', 'registrar_intervalo' ) );
+add_action( 'cn_cron_sync_mp', array( 'CN_Sync', 'correr' ) );
+add_action( 'init', function () {
+	if ( ! wp_next_scheduled( 'cn_cron_sync_mp' ) ) {
+		wp_schedule_event( time() + 300, 'cn_30min', 'cn_cron_sync_mp' );
 	}
 } );
 add_action( 'cn_cron_aviso_dia5_trial', array( 'CN_Webhook', 'avisar_dia5_trial' ) );
