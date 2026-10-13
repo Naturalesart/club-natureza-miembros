@@ -150,10 +150,12 @@ class CN_Meta_Capi {
 		if ( $user_agent ) {
 			$user_data['client_user_agent'] = $user_agent;
 		}
+		// El external_reference lleva el celular en claro: a Meta va solo un hash (32 hex) del mismo, estable por alta.
+		$event_id_meta = substr( hash( 'sha256', (string) $event_id ), 0, 32 );
 		$evento = array(
 			'event_name'       => 'Subscribe',
 			'event_time'       => time(),
-			'event_id'         => $event_id,
+			'event_id'         => $event_id_meta,
 			'action_source'    => 'website',
 			'event_source_url' => home_url( '/club-natureza-miembros/' ),
 			'user_data'        => $user_data,
@@ -180,7 +182,7 @@ class CN_Meta_Capi {
 			array(
 				'payload' => wp_json_encode( array(
 					'evento'         => 'capi_subscribe',
-					'event_id'       => $event_id,
+					'event_id'       => $event_id_meta,
 					'valor'          => $valor,
 					'user_data_keys' => array_keys( $user_data ),
 					'http_code'      => $codigo,
@@ -198,7 +200,7 @@ class CN_Meta_Capi {
 				'headers'  => array( 'Content-Type' => 'application/json' ),
 				'body'     => wp_json_encode( array(
 					'motivo'  => 'capi_subscribe_fallo',
-					'detalle' => array( 'event_id' => $event_id, 'http_code' => $codigo, 'error' => substr( (string) $body_raw, 0, 500 ) ),
+					'detalle' => array( 'event_id' => $event_id_meta, 'http_code' => $codigo, 'error' => substr( (string) $body_raw, 0, 500 ) ),
 					'fecha'   => current_time( 'mysql', true ),
 				) ),
 			) );
