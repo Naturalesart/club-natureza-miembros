@@ -214,4 +214,113 @@ class CN_Sync {
 		update_option( 'cn_sync_alertados', $previos );
 		return array( 'avisadas' => count( $prop['filas'] ), 'pendientes' => count( $candidatas ) );
 	}
+	// ======================================================================
+	// PUNTO 3 — GUARDA DEL CRON DE TRIALS
+	// ======================================================================
+	/** ¿Está activada la guarda? (cn_guarda_trial_mp, activada por defecto). */
+	public static function guarda_trial_activa() {
+		return self::flag( 'cn_guarda_trial_mp', '1' );
+	}
+	/**
+	 * Antes de cancelar a alguien con trial vencido y sin preapproval_id: ¿pagó por fuera del trial?
+	 *  1. Cobro aprobado de ese email, POSTERIOR al de $7.000 del trial, de monto >= $15.500.
+	 *  2. Si no, suscripción authorized de ese email en MP.
+	 * Resultado:
+	 *  - 'pago':     encontró pago o suscripción (el cron NO cancela).
+	 *  - 'sin_pago': MP respondió bien y no hay nada (el cron cancela como siempre).
+	 *  - 'error':    MP falló en cualquiera de las consultas (el cron NO cancela y reintenta en la próxima corrida).
+	 *  - 'sin_email': la socia no tiene un email usable; no se puede verificar (el cron sigue como siempre).
+	 *
+	 * @param object $miembro fila con id, email, fecha_fin_trial, trial_payment_id
+	 * @return array{resultado:string,via:string,monto:?float,fecha:string,detalle:string}
+	 */
+	public static function guarda_trial( $miembro ) {
+		$out   = array( 'resultado' => 'error', 'via' => '', 'monto' => null, 'fecha' => '', 'detalle' => '' );
+		$email = CN_Vinculo::email_normalizado( isset( $miembro->email ) ? $miembro->email : '' );
+		if ( '' === $email ) {
+			$out['resultado'] = 'sin_email';
+			return $out;
+		}
+		$pagos = CN_MP::buscar_pagos_aprobados_por_email( $email );
+		if ( ! is_array( $pagos ) || ! isset( $pagos['results'] ) || ! is_array( $pagos['results'] ) ) {
+			$out['detalle'] = 'no se pudo consultar los cobros en Mercado Pago';
+			return $out;
+		}
+		$ref_ts = self::referencia_trial( $pagos['results'], $miembro );
+		$cobro  = self::cobro_posterior( $pagos['results'], $ref_ts, (string) ( isset( $miembro->trial_payment_id ) ? $miembro->trial_payment_id : '' ) );
+		if ( null !== $cobro ) {
+			return array( 'resultado' => 'pago', 'via' => 'cobro', 'monto' => $cobro['monto'], 'fecha' => $cobro['fecha'], 'detalle' => 'cobro aprobado ' . $cobro['id'] );
+		}
+		$subs = CN_MP::buscar_preapprovals_por_email( $email );
+		if ( ! is_array( $subs ) || ! isset( $subs['results'] ) || ! is_array( $subs['results'] ) ) {
+			$out['detalle'] = 'no se pudo consultar las suscripciones en Mercado Pago';
+			return $out;
+		}
+		$sub = self::suscripcion_authorized_de( $subs['results'], $email );
+		if ( null !== $sub ) {
+			return array( 'resultado' => 'pago', 'via' => 'suscripcion', 'monto' => $sub['monto'], 'fecha' => $sub['fecha'], 'detalle' => 'suscripcion ' . $sub['id'] );
+		}
+		$out['resultado'] = 'sin_pago';
+		return $out;
+	}
+	/**
+	 * Momento (timestamp) del cobro del trial: el pago con ese trial_payment_id si está en la lista; si no, el fin
+	 * del trial menos TRIAL_DIAS días. Los cobros "posteriores" se miden contra este momento.
+	 */
+	public static function referencia_trial( $pagos, $miembro ) {
+		$trial_id = (string) ( isset( $miembro->trial_payment_id ) ? $miembro->trial_payment_id : '' );
+		if ( '' !== $trial_id ) {
+			foreach ( $pagos as $p ) {
+				if ( is_array( $p ) && isset( $p['id'] ) && (string) $p['id'] === $trial_id && ! empty( $p['date_created'] ) ) {
+					$ts = strtotime( (string) $p['date_created'] );
+					if ( false !== $ts ) {
+						return $ts;
+					}
+				}
+			}
+		}
+		$fin = isset( $miembro->fecha_fin_trial ) ? strtotime( (string) $miembro->fecha_fin_trial . ' UTC' ) : false;
+		return false !== $fin ? $fin - CN_Webhook::TRIAL_DIAS * DAY_IN_SECONDS : 0;
+	}
+	/**
+	 * Primer cobro APROBADO, posterior a $ref_ts, de monto >= MONTO_MIN_PLAN y que no sea el del trial (puro).
+	 *
+	 * @return array{id:string,monto:float,fecha:string}|null
+	 */
+	public static function cobro_posterior( $pagos, $ref_ts, $trial_payment_id = '' ) {
+		foreach ( (array) $pagos as $p ) {
+			if ( ! is_array( $p ) || ( isset( $p['status'] ) && 'approved' !== $p['status'] ) ) {
+				continue;
+			}
+			$monto = isset( $p['transaction_amount'] ) && is_numeric( $p['transaction_amount'] ) ? (float) $p['transaction_amount'] : 0.0;
+			$ts    = isset( $p['date_created'] ) ? strtotime( (string) $p['date_created'] ) : false;
+			$id    = isset( $p['id'] ) ? (string) $p['id'] : '';
+			if ( $monto < self::MONTO_MIN_PLAN || false === $ts || $ts <= $ref_ts || ( '' !== $trial_payment_id && $id === $trial_payment_id ) ) {
+				continue;
+			}
+			return array( 'id' => $id, 'monto' => $monto, 'fecha' => gmdate( 'Y-m-d H:i:s', $ts ) );
+		}
+		return null;
+	}
+	/**
+	 * Suscripción authorized cuyo payer_email es EXACTAMENTE ese email (puro): no se confía en el filtro de MP.
+	 *
+	 * @return array{id:string,monto:?float,fecha:string}|null
+	 */
+	public static function suscripcion_authorized_de( $subs, $email ) {
+		foreach ( (array) $subs as $s ) {
+			if ( ! is_array( $s ) || ( $s['status'] ?? '' ) !== 'authorized' ) {
+				continue;
+			}
+			if ( CN_Vinculo::email_normalizado( $s['payer_email'] ?? '' ) !== $email ) {
+				continue;
+			}
+			return array(
+				'id'    => (string) ( $s['id'] ?? '' ),
+				'monto' => isset( $s['auto_recurring']['transaction_amount'] ) ? (float) $s['auto_recurring']['transaction_amount'] : null,
+				'fecha' => isset( $s['date_created'] ) ? substr( (string) $s['date_created'], 0, 10 ) : '',
+			);
+		}
+		return null;
+	}
 }

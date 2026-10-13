@@ -1316,6 +1316,8 @@ class CN_Admin {
 			update_option( 'cn_sub_modo_seguro', isset( $_POST['cn_sub_modo_seguro'] ) ? '1' : '0' );
 			// Fase 5: sync con Mercado Pago cada 30 min. Tildado por defecto.
 			update_option( 'cn_sync_mp_activo', isset( $_POST['cn_sync_mp_activo'] ) ? '1' : '0' );
+			// Fase 5: guarda del cron de trials (mira en MP si pagó por link directo antes de cancelar). Tildado por defecto.
+			update_option( 'cn_guarda_trial_mp', isset( $_POST['cn_guarda_trial_mp'] ) ? '1' : '0' );
 			update_option( 'cn_meta_capi_token', sanitize_text_field( wp_unslash( $_POST['cn_meta_capi_token'] ?? '' ) ) );
 			update_option( 'cn_google_drive_api_key', sanitize_text_field( wp_unslash( $_POST['cn_google_drive_api_key'] ?? '' ) ) );
 			update_option( 'cn_clase_especial_link', esc_url_raw( wp_unslash( $_POST['cn_clase_especial_link'] ?? '' ) ) );
@@ -1332,6 +1334,7 @@ class CN_Admin {
 		$sub_auto_activar = '1' === (string) get_option( 'cn_sub_auto_activar', '0' );
 		$sub_modo_seguro  = '1' === (string) get_option( 'cn_sub_modo_seguro', '1' );
 		$sync_mp_activo   = '1' === (string) get_option( 'cn_sync_mp_activo', '1' );
+		$guarda_trial_mp  = '1' === (string) get_option( 'cn_guarda_trial_mp', '1' );
 		$capi_token   = CN_Meta_Capi::get_token();
 		$drive_key    = CN_Drive::get_api_key();
 		$clase_link   = get_option( 'cn_clase_especial_link', '' );
@@ -1399,6 +1402,13 @@ class CN_Admin {
 						<td>
 							<label><input type="checkbox" name="cn_sync_mp_activo" value="1" <?php checked( $sync_mp_activo ); ?>> Revisar en Mercado Pago las suscripciones ya vinculadas, sin depender de los webhooks</label>
 							<p class="description">Tildado por defecto. Cada 30 minutos revisa hasta 20 suscripciones: renovaciones y reanudaciones se aplican; cancelaciones y pausas solo programan la baja (sin cortar el acceso) si el Modo seguro está destildado. También avisa por n8n de las suscripciones autorizadas sin vincular hace más de 1 hora (no vincula nada).</p>
+						</td>
+					</tr>
+					<tr>
+						<th><label>Guarda del cron de trials (Mercado Pago)</label></th>
+						<td>
+							<label><input type="checkbox" name="cn_guarda_trial_mp" value="1" <?php checked( $guarda_trial_mp ); ?>> Antes de cancelar un trial vencido, mirar en Mercado Pago si ya pagó por link directo</label>
+							<p class="description">Tildado por defecto. Si encuentra un cobro de $15.500 o más posterior al de $7.000 (o una suscripción autorizada con ese email), no cancela a la socia y avisa por n8n para vincularla. Si Mercado Pago no responde, tampoco cancela y reintenta en la próxima corrida diaria.</p>
 						</td>
 					</tr>
 					<tr>

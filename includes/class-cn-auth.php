@@ -174,18 +174,31 @@ class CN_Auth {
 									array( '%d' )
 								);
 		}
+		/**
+		 * Cron diario (cn_cron_revocar_trials): da de baja los trials vencidos que NO se convirtieron en suscripción.
+		 *  - Con preapproval_id: solo se limpia fecha_fin_trial. La comparación es ESTRICTA contra '' (NULL y '' son
+		 *    "sin suscripción"; el texto '0' cuenta como un valor, o sea que tampoco se cancela: decisión conservadora,
+		 *    nunca se baja a alguien por un valor raro en esa columna).
+		 *  - Sin preapproval_id y con la guarda activa (opción cn_guarda_trial_mp, activada por defecto): antes de
+		 *    cancelar se busca en Mercado Pago si pagó por fuera del trial (CN_Sync::guarda_trial). Si pagó, NO se
+		 *    cancela: se limpia fecha_fin_trial y se avisa por n8n ("pagó por link directo, vincular"). Si MP falla, NO
+		 *    se cancela y fecha_fin_trial queda como está, así la próxima corrida lo reintenta.
+		 *  - Si no pagó (o no hay email para verificar) se cancela y se manda el mail de fin de trial, como siempre. La
+		 *    cancelación vuelve a leer la fila con FOR UPDATE: si en el medio se vinculó una suscripción, no se toca.
+		 */
 		public static function revocar_trials_vencidos() {
 			global $wpdb;
 			$t_miembros = CN_DB::tabla( 'miembros' );
 			$ahora      = current_time( 'mysql', true );
 			$vencidos   = $wpdb->get_results(
-				"SELECT id, preapproval_id, nombre_apellido, email FROM {$t_miembros}
+				"SELECT id, preapproval_id, nombre_apellido, email, fecha_fin_trial, trial_payment_id FROM {$t_miembros}
 				 WHERE fecha_fin_trial IS NOT NULL
 				   AND fecha_fin_trial < UTC_TIMESTAMP()
 				   AND estado != 'cancelada'"
 			);
-			foreach ( $vencidos as $miembro ) {
-				if ( ! empty( $miembro->preapproval_id ) ) {
+			$guarda_activa = class_exists( 'CN_Sync' ) ? CN_Sync::guarda_trial_activa() : true;
+			foreach ( (array) $vencidos as $miembro ) {
+				if ( '' !== (string) $miembro->preapproval_id ) {
 					$wpdb->update(
 						$t_miembros,
 						array( 'fecha_fin_trial' => null, 'fecha_modificacion' => $ahora ),
@@ -195,16 +208,94 @@ class CN_Auth {
 					);
 					continue;
 				}
-				$wpdb->update(
+				if ( $guarda_activa ) {
+					$g = class_exists( 'CN_Sync' )
+						? CN_Sync::guarda_trial( $miembro )
+						: array( 'resultado' => 'error', 'detalle' => 'CN_Sync no está cargada' );
+					if ( 'error' === $g['resultado'] ) {
+						// MP falló: no se cancela a nadie; fecha_fin_trial sigue vencida y la próxima corrida lo reintenta.
+						CN_Webhook::registrar_log_mp( 'trial_guarda_error', array( 'miembro_id' => (int) $miembro->id, 'detalle' => $g['detalle'] ) );
+						continue;
+					}
+					if ( 'pago' === $g['resultado'] ) {
+						$ok = $wpdb->update(
+							$t_miembros,
+							array( 'fecha_fin_trial' => null, 'fecha_modificacion' => $ahora ),
+							array( 'id' => $miembro->id ),
+							array( '%s', '%s' ),
+							array( '%d' )
+						);
+						if ( false === $ok ) {
+							CN_Webhook::registrar_log_mp( 'trial_guarda_error', array( 'miembro_id' => (int) $miembro->id, 'detalle' => 'no se pudo limpiar fecha_fin_trial' ) );
+							continue; // sigue vencida: se reintenta (y se avisa) en la próxima corrida.
+						}
+						$detalle = array(
+							'miembro_id' => (int) $miembro->id,
+							'nombre'     => (string) $miembro->nombre_apellido,
+							'email'      => (string) $miembro->email,
+							'via'        => $g['via'],
+							'monto'      => $g['monto'],
+							'fecha'      => $g['fecha'],
+							'detalle'    => $g['detalle'],
+							'aviso'      => 'Pagó por link directo después del trial: no se canceló. Vincular su suscripción en Club Natureza → Socias → Vincular.',
+						);
+						CN_Webhook::registrar_log_mp( 'trial_pago_directo', $detalle );
+						CN_Webhook::avisar_error_n8n( 'trial_pago_directo', $detalle );
+						continue;
+					}
+					if ( 'sin_email' === $g['resultado'] ) {
+						CN_Webhook::registrar_log_mp( 'trial_guarda_sin_email', array( 'miembro_id' => (int) $miembro->id ) );
+					}
+				}
+				if ( self::cancelar_trial_vencido( (int) $miembro->id, $ahora )
+					&& class_exists( 'CN_Webhook' ) && ! empty( $miembro->email ) ) {
+					CN_Webhook::enviar_mail_fin_trial( $miembro->nombre_apellido, $miembro->email );
+				}
+			}
+		}
+		/**
+		 * Cancela UN trial vencido en una transacción: relee la fila con FOR UPDATE y solo cancela si sigue vencido,
+		 * sin suscripción (misma comparación estricta) y no cancelada. true = se canceló.
+		 */
+		protected static function cancelar_trial_vencido( $miembro_id, $ahora ) {
+			global $wpdb;
+			$t_miembros     = CN_DB::tabla( 'miembros' );
+			$en_transaccion = false;
+			try {
+				if ( false === $wpdb->query( 'START TRANSACTION' ) ) {
+					throw new RuntimeException( 'no se pudo abrir la transaccion' );
+				}
+				$en_transaccion = true;
+				$fila = $wpdb->get_row(
+					$wpdb->prepare( "SELECT id, estado, preapproval_id, fecha_fin_trial FROM {$t_miembros} WHERE id = %d FOR UPDATE", $miembro_id )
+				);
+				if ( ! $fila || 'cancelada' === (string) $fila->estado || '' !== (string) $fila->preapproval_id
+					|| empty( $fila->fecha_fin_trial ) || (string) $fila->fecha_fin_trial >= $ahora ) {
+					$wpdb->query( 'ROLLBACK' ); // cambió mientras tanto (p. ej. se vinculó una suscripción): no se toca.
+					return false;
+				}
+				$ok = $wpdb->update(
 					$t_miembros,
 					array( 'estado' => 'cancelada', 'fecha_modificacion' => $ahora ),
-					array( 'id' => $miembro->id ),
+					array( 'id' => $miembro_id ),
 					array( '%s', '%s' ),
 					array( '%d' )
 				);
-				if ( class_exists( 'CN_Webhook' ) && ! empty( $miembro->email ) ) {
-					CN_Webhook::enviar_mail_fin_trial( $miembro->nombre_apellido, $miembro->email );
+				if ( false === $ok ) {
+					throw new RuntimeException( 'no se pudo cancelar: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
 				}
+				if ( false === $wpdb->query( 'COMMIT' ) ) {
+					throw new RuntimeException( 'no se pudo confirmar la transaccion' );
+				}
+				return true;
+			} catch ( Throwable $e ) {
+				if ( $en_transaccion ) {
+					$wpdb->query( 'ROLLBACK' );
+				}
+				if ( class_exists( 'CN_Webhook' ) ) {
+					CN_Webhook::registrar_log_mp( 'trial_guarda_error', array( 'miembro_id' => $miembro_id, 'detalle' => mb_substr( $e->getMessage(), 0, 200 ) ) );
+				}
+				return false;
 			}
 		}
 }
