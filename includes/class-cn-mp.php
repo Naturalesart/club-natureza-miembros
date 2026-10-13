@@ -293,6 +293,43 @@ class CN_MP {
 	public static function obtener_pago_trial( $id ) {
 		return self::get( '/v1/payments/' . rawurlencode( $id ), self::get_access_token_trial() );
 	}
+	// ---- Fase 5: búsquedas de SOLO LECTURA. Devuelven el array decodificado, o null si MP falló o no hay token ----
+	// (null = "no sé", nunca "no hay resultados": quien llama no debe cambiar estado de nadie ante un null).
+	/** Una página de suscripciones por estado ('authorized', 'paused', 'cancelled'). */
+	public static function listar_preapprovals( $status, $offset = 0, $limit = 100 ) {
+		return self::get( '/preapproval/search?status=' . rawurlencode( (string) $status ) . '&limit=' . (int) $limit . '&offset=' . (int) $offset, self::get_access_token() );
+	}
+	/** Suscripciones autorizadas de un email (quien llama igual compara payer_email: no se confía en el filtro). */
+	public static function buscar_preapprovals_por_email( $email ) {
+		return self::get( '/preapproval/search?status=authorized&limit=100&payer_email=' . rawurlencode( (string) $email ), self::get_access_token() );
+	}
+	/** Cobros aprobados recientes de un email, del más nuevo al más viejo. Prueba el token de suscripciones y, si falla, el del trial. */
+	public static function buscar_pagos_aprobados_por_email( $email ) {
+		$path = '/v1/payments/search?status=approved&sort=date_created&criteria=desc&limit=100&payer.email=' . rawurlencode( (string) $email );
+		foreach ( array( self::get_access_token(), self::get_access_token_trial() ) as $token ) {
+			if ( '' === $token ) {
+				continue;
+			}
+			$data = self::get( $path, $token );
+			if ( is_array( $data ) ) {
+				return $data;
+			}
+		}
+		return null;
+	}
+	/** Una página de cobros aprobados entre dos timestamps UTC (para armar el índice de cobros del Cruce). */
+	public static function buscar_pagos_aprobados_rango( $desde_ts, $hasta_ts, $offset = 0, $limit = 100 ) {
+		$desde = gmdate( 'Y-m-d\TH:i:s.000\Z', (int) $desde_ts );
+		$hasta = gmdate( 'Y-m-d\TH:i:s.000\Z', (int) $hasta_ts );
+		return self::get(
+			'/v1/payments/search?status=approved&sort=date_created&criteria=desc&range=date_created&begin_date=' . rawurlencode( $desde ) . '&end_date=' . rawurlencode( $hasta ) . '&limit=' . (int) $limit . '&offset=' . (int) $offset,
+			self::get_access_token()
+		);
+	}
+	/** Cobros (authorized_payments) de una suscripción. */
+	public static function buscar_authorized_payments( $preapproval_id ) {
+		return self::get( '/authorized_payments/search?preapproval_id=' . rawurlencode( (string) $preapproval_id ), self::get_access_token() );
+	}
 	protected static function get( $path, $token ) {
 		if ( ! $token ) {
 			return null;

@@ -116,22 +116,33 @@ class CN_Admin {
 		</form>
 		<?php
 	}
+	/** Texto de una socia en el selector buscable: "#id · nombre · ****1234 · estado · email". */
+	protected static function vm_etiqueta_socia( $s ) {
+		$partes = array( '#' . (int) $s->id, (string) $s->nombre_apellido, CN_Vinculo::mascara_celular( $s->celular_hint ), (string) $s->estado );
+		if ( '' !== trim( (string) $s->email ) ) {
+			$partes[] = trim( (string) $s->email );
+		}
+		return implode( ' · ', $partes );
+	}
 	/**
-	 * Lee y limpia los campos del bloque "Vincular suscripción de Mercado Pago" (Fase 4-G). El celular y el email
-	 * se validan de verdad en CN_Webhook; acá solo se limpian para poder volver a mostrarlos.
+	 * Lee y limpia los campos del bloque "Vincular suscripción de Mercado Pago" (Fase 5). La socia se elige de la
+	 * lista (el texto empieza con "#id"); en el paso de confirmación el id viaja en un campo oculto.
 	 */
 	protected static function vm_datos_post() {
+		$socia_txt = trim( sanitize_text_field( wp_unslash( $_POST['cn_vm_socia'] ?? '' ) ) );
+		$socia_id  = absint( $_POST['cn_vm_socia_id'] ?? 0 );
+		if ( ! $socia_id && preg_match( '/^#\s*(\d{1,12})(?!\d)/', $socia_txt, $m ) ) {
+			$socia_id = (int) $m[1];
+		}
 		return array(
 			'id'        => trim( sanitize_text_field( wp_unslash( $_POST['cn_vm_id'] ?? '' ) ) ),
-			'nombre'    => trim( sanitize_text_field( wp_unslash( $_POST['cn_vm_nombre'] ?? '' ) ) ),
-			'celular'   => trim( sanitize_text_field( wp_unslash( $_POST['cn_vm_celular'] ?? '' ) ) ),
-			'email'     => trim( sanitize_text_field( wp_unslash( $_POST['cn_vm_email'] ?? '' ) ) ),
-			'plan'      => sanitize_key( wp_unslash( $_POST['cn_vm_plan'] ?? '' ) ),
+			'socia_txt' => $socia_txt,
+			'socia_id'  => $socia_id,
 			'notificar' => ! empty( $_POST['cn_vm_notificar'] ),
 		);
 	}
 	/**
-	 * Procesa el bloque "Vincular suscripción de Mercado Pago" (Fase 4-G). Dos pasos, mismo nonce y manage_options:
+	 * Procesa el bloque "Vincular suscripción de Mercado Pago" (Fase 5). Dos pasos, mismo nonce y manage_options:
 	 *  - 'verificar': SOLO LECTURA. Consulta MP y muestra qué pasaría; no escribe nada en la base.
 	 *  - 'vincular': solo si viene del formulario de confirmación (cn_vm_confirmo = 1). Llama a
 	 *    CN_Webhook::vincular_suscripcion(), que vuelve a validar todo (MP incluido) por su cuenta.
@@ -147,37 +158,54 @@ class CN_Admin {
 		check_admin_referer( 'cn_vincular_mp', 'cn_vincular_mp_nonce' );
 		$datos  = self::vm_datos_post();
 		$accion = sanitize_key( wp_unslash( $_POST['cn_vm_accion'] ) );
+		if ( '' === $datos['id'] ) {
+			return array( 'paso' => 'error', 'mensaje' => 'Ingresá el ID de preapproval.', 'datos' => $datos );
+		}
+		if ( $datos['socia_id'] <= 0 ) {
+			return array( 'paso' => 'error', 'mensaje' => 'Elegí una socia existente de la lista (tiene que empezar con #número).', 'datos' => $datos );
+		}
 		if ( 'vincular' === $accion ) {
 			if ( '1' !== (string) wp_unslash( $_POST['cn_vm_confirmo'] ?? '' ) ) {
 				return array( 'paso' => 'error', 'mensaje' => 'Primero verificá la suscripción y después confirmá.', 'datos' => $datos );
 			}
-			$resultado = CN_Webhook::vincular_suscripcion( $datos['id'], $datos['nombre'], $datos['celular'], $datos['email'], $datos['plan'], $datos['notificar'] );
+			$resultado = CN_Webhook::vincular_suscripcion( $datos['id'], $datos['socia_id'], $datos['notificar'] );
 			return array( 'paso' => 'vinculado', 'datos' => $datos, 'resultado' => $resultado );
 		}
-		if ( '' === $datos['id'] ) {
-			return array( 'paso' => 'error', 'mensaje' => 'Ingresá el ID de preapproval.', 'datos' => $datos );
-		}
-		$verificacion = CN_Webhook::vincular_suscripcion_verificar( $datos['id'], $datos['celular'], $datos['plan'] );
+		$verificacion = CN_Webhook::vincular_suscripcion_verificar( $datos['id'], $datos['socia_id'] );
 		return array( 'paso' => 'verificado', 'datos' => $datos, 'verificacion' => $verificacion );
 	}
-	/** Bloque visual "Vincular suscripción de Mercado Pago" (Fase 4-G). $res es lo que devolvió procesar_vincular_mp(). */
+	/** Bloque visual "Vincular suscripción de Mercado Pago" (Fase 5). $res es lo que devolvió procesar_vincular_mp(). */
 	protected static function bloque_vincular_mp( $res ) {
-		$planes  = CN_MP::get_planes();
+		global $wpdb;
 		$paso    = is_array( $res ) ? (string) $res['paso'] : '';
 		$vinculo = ( 'vinculado' === $paso && ! empty( $res['resultado']['ok'] ) );
-		$d       = array( 'id' => '', 'nombre' => '', 'celular' => '', 'email' => '', 'plan' => '', 'notificar' => false );
+		$d       = array( 'id' => '', 'socia_txt' => '', 'socia_id' => 0, 'notificar' => false );
+		$socias  = (array) $wpdb->get_results( 'SELECT id, nombre_apellido, estado, email, celular_hint FROM ' . CN_DB::tabla( 'miembros' ) . ' ORDER BY nombre_apellido ASC' );
 		if ( is_array( $res ) && ! $vinculo ) {
 			$d = $res['datos']; // se vuelve a mostrar lo escrito (salvo después de un vínculo exitoso).
-		} elseif ( ! is_array( $res ) && isset( $_GET['cn_vincular_id'] ) ) {
-			// Viene del enlace "Vincular" de Cruce con Mercado Pago: solo precarga el ID.
-			$id_get = trim( sanitize_text_field( wp_unslash( $_GET['cn_vincular_id'] ) ) );
-			if ( preg_match( '/^[A-Za-z0-9_-]{16,64}$/', $id_get ) ) {
-				$d['id'] = $id_get;
+		} elseif ( ! is_array( $res ) ) {
+			// Viene del enlace "Vincular" de Cruce con Mercado Pago: solo precarga el ID y, si hay propuesta, la socia.
+			if ( isset( $_GET['cn_vincular_id'] ) ) {
+				$id_get = trim( sanitize_text_field( wp_unslash( $_GET['cn_vincular_id'] ) ) );
+				if ( preg_match( '/^[A-Za-z0-9_-]{16,64}$/', $id_get ) ) {
+					$d['id'] = $id_get;
+				}
+			}
+			if ( isset( $_GET['cn_vincular_socia'] ) ) {
+				$d['socia_id'] = absint( $_GET['cn_vincular_socia'] );
+			}
+		}
+		if ( $d['socia_id'] > 0 && '' === $d['socia_txt'] ) {
+			foreach ( $socias as $s ) {
+				if ( (int) $s->id === (int) $d['socia_id'] ) {
+					$d['socia_txt'] = self::vm_etiqueta_socia( $s );
+					break;
+				}
 			}
 		}
 		?>
 		<h2 id="cn-vincular-mp">Vincular suscripción de Mercado Pago</h2>
-		<p style="max-width:720px;">Une a mano una suscripción <strong>ya autorizada</strong> en Mercado Pago con una socia (por ejemplo, una que el alta automática no vinculó). Primero <em>Verificar</em> (solo lectura: no cambia nada) y después <em>Vincular</em>.</p>
+		<p style="max-width:720px;">Une a mano una suscripción <strong>ya autorizada</strong> en Mercado Pago con una socia <strong>que ya existe</strong> (acá nunca se crean socias nuevas). El plan sale del monto de la suscripción. Primero <em>Verificar</em> (solo lectura: no cambia nada) y después <em>Confirmar y vincular</em>.</p>
 		<?php
 		if ( 'error' === $paso ) {
 			self::aviso( $res['mensaje'], 'error' );
@@ -186,7 +214,7 @@ class CN_Admin {
 			$tipo = ! empty( $r['ok'] ) ? 'success' : ( 'conflicto' === $r['accion'] ? 'warning' : 'error' );
 			$txt  = strtoupper( (string) $r['accion'] ) . ': ' . (string) $r['mensaje'];
 			if ( ! empty( $r['ok'] ) ) {
-				$txt .= ' Estado: ' . ( null === $r['estado_anterior'] ? '(sin socia previa)' : (string) $r['estado_anterior'] ) . ' → ' . (string) $r['estado_nuevo'] . '.';
+				$txt .= ' Estado: ' . ( null === $r['estado_anterior'] ? '—' : (string) $r['estado_anterior'] ) . ' → ' . (string) $r['estado_nuevo'] . '.';
 				$txt .= ( ! empty( $r['notificacion']['mail'] ) || ! empty( $r['notificacion']['capi'] ) )
 					? ' Se pidió enviar: ' . implode( ' y ', array_filter( array( ! empty( $r['notificacion']['mail'] ) ? 'mail de bienvenida' : '', ! empty( $r['notificacion']['capi'] ) ? 'evento Meta' : '' ) ) ) . '.'
 					: ' No se envió mail ni evento Meta.';
@@ -199,7 +227,7 @@ class CN_Admin {
 				self::aviso( $v['error'], 'error' );
 			}
 			if ( ! empty( $mp['status'] ) ) {
-				$plan_txt = ! empty( $mp['plan'] ) ? (string) $mp['plan_nombre'] . ' — $' . number_format( (float) $mp['precio'], 0, ',', '.' ) . ( 'forzado' === $mp['plan_fuente'] ? ' (plan elegido a mano)' : ' (según el plan de Mercado Pago)' ) : '—';
+				$plan_txt = ! empty( $mp['plan'] ) ? (string) $mp['plan_nombre'] . ' — $' . number_format( (float) $mp['precio'], 0, ',', '.' ) . ' (según el monto de la suscripción en Mercado Pago)' : '—';
 				$prox_txt = ! empty( $mp['next_payment_date'] ) ? substr( (string) $mp['next_payment_date'], 0, 10 ) : '—';
 				?>
 				<table class="widefat striped" style="max-width:720px;margin-bottom:12px;"><tbody>
@@ -210,7 +238,7 @@ class CN_Admin {
 					<tr><th>Próximo cobro (next_payment_date)</th><td><?php echo esc_html( $prox_txt ); ?></td></tr>
 					<tr><th>Email del pagador</th><td><?php echo esc_html( '' !== (string) $mp['payer_email'] ? $mp['payer_email'] : '—' ); ?></td></tr>
 					<?php if ( ! empty( $v['socia'] ) ) : ?>
-						<tr><th>Socia encontrada por celular</th><td><?php echo esc_html( $v['socia']['nombre_apellido'] . ' (id ' . $v['socia']['id'] . ', estado: ' . $v['socia']['estado'] . ( ! empty( $v['socia']['en_trial'] ) ? ', en trial' : '' ) . ')' ); ?></td></tr>
+						<tr><th>Socia elegida</th><td><?php echo esc_html( $v['socia']['nombre_apellido'] . ' (id ' . $v['socia']['id'] . ', estado: ' . $v['socia']['estado'] . ( ! empty( $v['socia']['en_trial'] ) ? ', en trial' : '' ) . ( '' !== $v['socia']['email'] ? ', email: ' . $v['socia']['email'] : '' ) . ')' ); ?></td></tr>
 					<?php endif; ?>
 					<?php if ( $v['ok'] ) : ?>
 						<tr><th>Qué pasaría al vincular</th><td><strong><?php echo esc_html( $v['mensaje'] ); ?></strong></td></tr>
@@ -218,13 +246,9 @@ class CN_Admin {
 				</tbody></table>
 				<?php
 			}
-			$puede_vincular = $v['ok'] && in_array( $v['accion_prevista'], array( 'insertada', 'activada', 'completada' ), true ) && '' !== $d['nombre'];
-			if ( $v['ok'] && ! in_array( $v['accion_prevista'], array( 'insertada', 'activada', 'completada' ), true ) && null !== $v['accion_prevista'] ) {
+			$puede_vincular = $v['ok'] && in_array( $v['accion_prevista'], array( 'activada', 'completada' ), true );
+			if ( $v['ok'] && ! $puede_vincular && null !== $v['accion_prevista'] ) {
 				self::aviso( 'No se puede vincular: ' . $v['mensaje'], 'warning' );
-			} elseif ( $v['ok'] && null === $v['accion_prevista'] ) {
-				self::aviso( $v['mensaje'], 'info' );
-			} elseif ( $v['ok'] && '' === $d['nombre'] ) {
-				self::aviso( 'Falta el nombre y apellido para poder vincular.', 'warning' );
 			}
 			if ( $puede_vincular ) :
 				?>
@@ -232,19 +256,18 @@ class CN_Admin {
 					<?php wp_nonce_field( 'cn_vincular_mp', 'cn_vincular_mp_nonce' ); ?>
 					<input type="hidden" name="cn_vm_confirmo" value="1">
 					<input type="hidden" name="cn_vm_id" value="<?php echo esc_attr( $d['id'] ); ?>">
-					<input type="hidden" name="cn_vm_nombre" value="<?php echo esc_attr( $d['nombre'] ); ?>">
-					<input type="hidden" name="cn_vm_celular" value="<?php echo esc_attr( $d['celular'] ); ?>">
-					<input type="hidden" name="cn_vm_email" value="<?php echo esc_attr( $d['email'] ); ?>">
-					<input type="hidden" name="cn_vm_plan" value="<?php echo esc_attr( $d['plan'] ); ?>">
-					<p><label><input type="checkbox" name="cn_vm_notificar" value="1" <?php checked( ! empty( $d['notificar'] ) ); ?>> Enviar mail de bienvenida y evento Meta</label>
-						<span class="description">(solo cuando se crea o activa una socia)</span></p>
+					<input type="hidden" name="cn_vm_socia_id" value="<?php echo esc_attr( (int) $d['socia_id'] ); ?>">
+					<?php if ( 'activada' === $v['accion_prevista'] ) : ?>
+						<p><label><input type="checkbox" name="cn_vm_notificar" value="1"> Enviar mail de bienvenida y evento Meta</label>
+							<span class="description">(desmarcado por defecto; solo cuando se activa a la socia)</span></p>
+					<?php endif; ?>
 					<p><button type="submit" name="cn_vm_accion" value="vincular" class="button button-primary">Confirmar y vincular</button></p>
 				</form>
 				<?php
 			endif;
 		}
 		?>
-		<form method="post" style="max-width:480px;" action="<?php echo esc_url( '#cn-vincular-mp' ); ?>">
+		<form method="post" style="max-width:640px;" action="<?php echo esc_url( '#cn-vincular-mp' ); ?>">
 			<?php wp_nonce_field( 'cn_vincular_mp', 'cn_vincular_mp_nonce' ); ?>
 			<table class="form-table">
 				<tr>
@@ -252,37 +275,146 @@ class CN_Admin {
 					<td><input type="text" name="cn_vm_id" class="regular-text" required value="<?php echo esc_attr( $d['id'] ); ?>"></td>
 				</tr>
 				<tr>
-					<th><label>Nombre y Apellido</label></th>
-					<td><input type="text" name="cn_vm_nombre" class="regular-text" required value="<?php echo esc_attr( $d['nombre'] ); ?>"></td>
-				</tr>
-				<tr>
-					<th><label>Celular</label></th>
-					<td><input type="text" name="cn_vm_celular" class="regular-text" required value="<?php echo esc_attr( $d['celular'] ); ?>"></td>
-				</tr>
-				<tr>
-					<th><label>Email (opcional)</label></th>
-					<td><input type="email" name="cn_vm_email" class="regular-text" value="<?php echo esc_attr( $d['email'] ); ?>"></td>
-				</tr>
-				<tr>
-					<th><label>Plan</label></th>
+					<th><label>Socia existente</label></th>
 					<td>
-						<select name="cn_vm_plan">
-							<option value="" <?php selected( $d['plan'], '' ); ?>>Automático (según el plan de Mercado Pago)</option>
-							<?php foreach ( $planes as $clave => $info ) : ?>
-								<option value="<?php echo esc_attr( $clave ); ?>" <?php selected( $d['plan'], $clave ); ?>><?php echo esc_html( $info['nombre'] . ' — $' . number_format( (float) $info['precio'], 0, ',', '.' ) ); ?></option>
+						<input type="text" name="cn_vm_socia" class="large-text" list="cn-vm-socias" autocomplete="off" required placeholder="Escribí nombre, email o últimos 4 del celular y elegí de la lista" value="<?php echo esc_attr( $d['socia_txt'] ); ?>">
+						<datalist id="cn-vm-socias">
+							<?php foreach ( $socias as $s ) : ?>
+								<option value="<?php echo esc_attr( self::vm_etiqueta_socia( $s ) ); ?>"></option>
 							<?php endforeach; ?>
-						</select>
-						<p class="description">Solo hace falta elegirlo si es el plan viejo de $15.000; en los demás se deduce solo.</p>
+						</datalist>
+						<p class="description">Hay que elegir una de la lista (queda con <code>#número</code> adelante). No se crean socias nuevas.</p>
 					</td>
-				</tr>
-				<tr>
-					<th>Avisos</th>
-					<td><label><input type="checkbox" name="cn_vm_notificar" value="1" <?php checked( ! empty( $d['notificar'] ) ); ?>> Enviar mail de bienvenida y evento Meta</label></td>
 				</tr>
 			</table>
 			<p><button type="submit" name="cn_vm_accion" value="verificar" class="button button-secondary">Verificar</button></p>
 		</form>
 		<?php
+	}
+	/**
+	 * Tipo de una socia para mostrar (Suscripta / Trial / Manual / Inactiva): misma regla que el listado.
+	 */
+	protected static function tipo_socia_txt( $s ) {
+		if ( 'activo' !== $s->estado ) {
+			return 'Inactiva (' . $s->estado . ')';
+		}
+		if ( '' !== (string) $s->preapproval_id ) {
+			return 'Suscripta';
+		}
+		return ! empty( $s->fecha_fin_trial ) ? 'Trial' : 'Manual';
+	}
+	/**
+	 * Bloque desplegable de socias duplicadas (mismo email o mismo nombre normalizado). SOLO LECTURA.
+	 * $socias = filas completas de wp_cn_miembros (antes de filtrar el listado).
+	 */
+	protected static function bloque_duplicados( $socias ) {
+		$d       = CN_Vinculo::duplicados( $socias );
+		$n_email = count( $d['por_email'] );
+		$n_nom   = count( $d['por_nombre'] );
+		$tope    = 200;
+		?>
+		<details style="max-width:900px;margin:16px 0;">
+			<summary style="cursor:pointer;font-weight:600;">Posibles duplicados (solo lectura): <?php echo (int) $n_email; ?> por email · <?php echo (int) $n_nom; ?> por nombre</summary>
+			<p class="description">Grupos con el mismo email, o con el mismo nombre una vez normalizado (sin acentos ni mayúsculas). No se cambia nada desde acá: revisalos a mano.</p>
+			<?php foreach ( array( 'por_email' => 'Mismo email', 'por_nombre' => 'Mismo nombre normalizado' ) as $clave => $titulo ) : ?>
+				<h4><?php echo esc_html( $titulo ); ?></h4>
+				<?php if ( ! $d[ $clave ] ) : ?>
+					<p>Sin duplicados.</p>
+				<?php else : ?>
+					<table class="widefat striped"><thead><tr><th>Clave</th><th>id</th><th>Nombre</th><th>Celular</th><th>Estado / tipo</th><th>Alta</th></tr></thead><tbody>
+					<?php
+					$mostrados = 0;
+					foreach ( $d[ $clave ] as $k => $grupo ) {
+						if ( ++$mostrados > $tope ) {
+							echo '<tr><td colspan="6">Se muestran los primeros ' . (int) $tope . ' grupos.</td></tr>';
+							break;
+						}
+						foreach ( $grupo as $i => $s ) {
+							echo '<tr>';
+							echo '<td>' . ( 0 === $i ? esc_html( (string) $k ) : '' ) . '</td>';
+							echo '<td><a href="' . esc_url( add_query_arg( array( 'page' => 'cn-socias', 'editar' => (int) $s->id ), admin_url( 'admin.php' ) ) ) . '">' . (int) $s->id . '</a></td>';
+							echo '<td>' . esc_html( $s->nombre_apellido ) . '</td>';
+							echo '<td>' . esc_html( CN_Vinculo::mascara_celular( $s->celular_hint ) ) . '</td>';
+							echo '<td>' . esc_html( self::tipo_socia_txt( $s ) ) . '</td>';
+							echo '<td>' . esc_html( mysql2date( 'd/m/Y', $s->fecha_alta ) ) . '</td>';
+							echo '</tr>';
+						}
+					}
+					?>
+					</tbody></table>
+				<?php endif; ?>
+			<?php endforeach; ?>
+		</details>
+		<?php
+	}
+	/**
+	 * Sección "Propuesta de vínculo por email" del Cruce. SOLO LECTURA: muestra a qué socia correspondería cada
+	 * suscripción autorizada, con qué confianza, y un enlace que precarga la pantalla Vincular (no vincula).
+	 * $prop = resultado de CN_Vinculo::proponer().
+	 */
+	protected static function bloque_propuesta_vinculo( $prop ) {
+		$etiquetas = array(
+			CN_Vinculo::EMAIL_EXACTO  => 'email exacto',
+			CN_Vinculo::VARIAS_SOCIAS => 'varias socias',
+			CN_Vinculo::SIN_MATCH     => 'sin match',
+			CN_Vinculo::SIN_EMAIL     => 'sin email',
+			CN_Vinculo::YA_VINCULADA  => 'ya vinculada',
+		);
+		$fuentes = array( 'suscripcion' => 'de la suscripción', 'cobro' => 'del cobro aprobado', 'authorized_payments' => 'de authorized_payments' );
+		$cuenta  = array_fill_keys( array_keys( $etiquetas ), 0 );
+		foreach ( $prop['filas'] as $f ) {
+			$cuenta[ $f['confianza'] ]++;
+		}
+		echo '<h2>Propuesta de vínculo por email</h2>';
+		echo '<p>Solo lectura: no vincula nada. Para cada suscripción <strong>autorizada</strong> propone la socia por email; para vincular usá el botón, que lleva a la pantalla Vincular en Socias (ahí se verifica y se confirma).</p>';
+		echo '<p>';
+		foreach ( $etiquetas as $k => $txt ) {
+			echo esc_html( ucfirst( $txt ) . ': ' . $cuenta[ $k ] . '   ' );
+		}
+		echo '</p>';
+		if ( ! empty( $prop['tope_alcanzado'] ) ) {
+			echo '<div class="notice notice-warning inline"><p>Se alcanzó el tope de ' . (int) $prop['tope'] . ' consultas extra a Mercado Pago para buscar emails (se usaron ' . (int) $prop['extra_usadas'] . '). Las suscripciones que quedaron sin email figuran como "sin email": no significa que no se pueda identificar a la pagadora.</p></div>';
+		}
+		echo '<table class="widefat striped cn-cruce-ids"><thead><tr><th>ID de preapproval</th><th>Plan</th><th>Próximo cobro</th><th>Email del pagador</th><th>Socia propuesta</th><th>Confianza</th><th>Vincular</th></tr></thead><tbody>';
+		if ( ! $prop['filas'] ) {
+			echo '<tr><td colspan="7">No hay suscripciones autorizadas.</td></tr>';
+		}
+		foreach ( $prop['filas'] as $f ) {
+			$plan_txt = null !== $f['plan'] ? $f['plan'] . ' ($' . number_format( (float) $f['monto'], 0, ',', '.' ) . ')' : '? ($' . ( is_scalar( $f['monto'] ) ? (string) $f['monto'] : '?' ) . ')';
+			echo '<tr>';
+			echo '<td><code class="cn-id">' . esc_html( $f['id'] ) . '</code> <button type="button" class="button button-small cn-copiar" data-cn-copiar="' . esc_attr( $f['id'] ) . '">Copiar</button></td>';
+			echo '<td>' . esc_html( $plan_txt ) . '</td>';
+			echo '<td>' . esc_html( '' !== $f['proximo_cobro'] ? $f['proximo_cobro'] : '—' ) . '</td>';
+			echo '<td>' . esc_html( '' !== $f['email'] ? $f['email'] : '—' ) . ( '' !== $f['email_fuente'] ? '<br><small>' . esc_html( $fuentes[ $f['email_fuente'] ] ?? $f['email_fuente'] ) . '</small>' : '' ) . '</td>';
+			echo '<td>';
+			if ( $f['socia'] ) {
+				echo esc_html( '#' . (int) $f['socia']->id . ' ' . $f['socia']->nombre_apellido . ' · ' . CN_Vinculo::mascara_celular( $f['socia']->celular_hint ) . ' · ' . $f['socia']->estado );
+			} elseif ( $f['candidatas'] ) {
+				foreach ( $f['candidatas'] as $c ) {
+					echo esc_html( '#' . (int) $c->id . ' ' . $c->nombre_apellido . ' · ' . CN_Vinculo::mascara_celular( $c->celular_hint ) . ' · ' . $c->estado ) . '<br>';
+				}
+			} else {
+				echo '—';
+			}
+			if ( '' !== $f['aviso'] ) {
+				echo '<br><small style="color:#b32d2e;">' . esc_html( $f['aviso'] ) . '</small>';
+			}
+			echo '</td>';
+			echo '<td>' . esc_html( $etiquetas[ $f['confianza'] ] ) . '</td>';
+			echo '<td>';
+			if ( CN_Vinculo::YA_VINCULADA === $f['confianza'] || ! preg_match( '/^[A-Za-z0-9_-]{16,64}$/', $f['id'] ) ) {
+				echo '&mdash;';
+			} else {
+				$args = array( 'page' => 'cn-socias', 'cn_vincular_id' => $f['id'] );
+				if ( CN_Vinculo::EMAIL_EXACTO === $f['confianza'] && $f['socia'] ) {
+					$args['cn_vincular_socia'] = (int) $f['socia']->id;
+				}
+				echo '<a class="button button-small" href="' . esc_url( add_query_arg( $args, admin_url( 'admin.php' ) ) . '#cn-vincular-mp' ) . '">Vincular</a>';
+			}
+			echo '</td>';
+			echo '</tr>';
+		}
+		echo '</tbody></table>';
 	}
 	public static function pagina_socias() {
 		if ( ! current_user_can( 'manage_options' ) ) return;
@@ -388,6 +520,7 @@ class CN_Admin {
 			</form>
 			<?php self::bloque_generar_link( $cn_link_res ); ?>
 			<?php self::bloque_vincular_mp( $cn_vm_res ); ?>
+			<?php self::bloque_duplicados( $socias ); // Fase 5: solo lectura, sobre el listado completo (antes de filtrar). ?>
 			<h2>Listado</h2>
 			<?php
 			// Resumen de socias por tipo (solo lectura, calculado sobre $socias ya cargada).
@@ -695,6 +828,7 @@ class CN_Admin {
 		$pagos_total     = 0;
 		$pagos_sin_email = 0;
 		$errores_pagos   = array();
+		$pagos_lista     = array(); // todos los cobros leídos (sin filtrar por monto): alimentan la propuesta de vínculo.
 		$desde           = gmdate( 'Y-m-d\TH:i:s.000\Z', time() - 40 * DAY_IN_SECONDS );
 		$hasta           = gmdate( 'Y-m-d\TH:i:s.000\Z', time() );
 		$off             = 0;
@@ -715,6 +849,7 @@ class CN_Admin {
 			}
 			$res_p = isset( $data_p['results'] ) && is_array( $data_p['results'] ) ? $data_p['results'] : array();
 			foreach ( $res_p as $p ) {
+				$pagos_lista[] = $p;
 				$monto_p = isset( $p['transaction_amount'] ) ? (int) $p['transaction_amount'] : 0;
 				if ( ! in_array( $monto_p, array( 15000, 15500, 32000 ), true ) ) {
 					continue;
@@ -759,6 +894,11 @@ class CN_Admin {
 				echo '</tbody></table>';
 			}
 		}
+		// Fase 5 (SOLO LECTURA): propuesta de vínculo por email. Usa lo ya consultado ($por_estado, $pagos_lista);
+		// solo puede hacer consultas extra a MP (tope CN_Vinculo::TOPE_CONSULTAS_EXTRA) para suscripciones sin email.
+		echo '<style>.cn-cruce-ids td, .cn-cruce-ids th { -webkit-user-select: text; user-select: text; vertical-align: middle; } .cn-cruce-ids code.cn-id { -webkit-user-select: all; user-select: all; word-break: break-all; }</style>';
+		$todas_socias = $wpdb->get_results( 'SELECT id, nombre_apellido, estado, email, celular_hint, preapproval_id, fecha_fin_trial FROM ' . CN_DB::tabla( 'miembros' ) );
+		self::bloque_propuesta_vinculo( CN_Vinculo::proponer( $por_estado['authorized'], $todas_socias, $pagos_lista ) );
 		// Detalle de suscripciones (SOLO LECTURA): usa los mismos resultados ya consultados arriba ($por_estado),
 		// sin llamadas nuevas a Mercado Pago. No se muestra ni se registra ningún token.
 		$dash = static function ( $valor ) {

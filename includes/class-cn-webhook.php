@@ -522,7 +522,10 @@ class CN_Webhook {
 	 * no se puede leer (CN_MP::get ya deja el rastro 'mp_api_error', sin tokens).
 	 */
 	protected static function sub_acceso_hasta( $preapproval_id ) {
-		$data = CN_MP::obtener_preapproval( $preapproval_id );
+		return self::acceso_desde_data( CN_MP::obtener_preapproval( $preapproval_id ) );
+	}
+	/** next_payment_date de un preapproval YA consultado a MP, en UTC ('Y-m-d H:i:s'); null si no viene o no se puede leer. */
+	public static function acceso_desde_data( $data ) {
 		if ( ! is_array( $data ) || empty( $data['next_payment_date'] ) || ! is_string( $data['next_payment_date'] ) ) {
 			return null;
 		}
@@ -533,7 +536,7 @@ class CN_Webhook {
 		return gmdate( 'Y-m-d H:i:s', $ts );
 	}
 	/** Aviso a n8n con tope de 1 por hora por motivo + referencia. */
-	protected static function sub_avisar_una_vez_por_hora( $motivo, $external_reference, $detalle ) {
+	public static function sub_avisar_una_vez_por_hora( $motivo, $external_reference, $detalle ) {
 		$clave = 'cn_sub_av_' . md5( $motivo . '|' . $external_reference );
 		if ( get_transient( $clave ) ) {
 			return;
@@ -553,7 +556,7 @@ class CN_Webhook {
 	 * Cualquier error se registra y alerta; para cancelled/paused devuelve true (nunca dejar que el camino de
 	 * siempre baje a una socia por un fallo nuestro).
 	 */
-	protected static function gestionar_ciclo_sub( $status, $preapproval_id ) {
+	public static function gestionar_ciclo_sub( $status, $preapproval_id, $data_mp = null ) {
 		global $wpdb;
 		$preapproval_id = (string) $preapproval_id;
 		if ( '' === $preapproval_id || ! in_array( $status, array( 'authorized', 'approved', 'cancelled', 'paused' ), true ) ) {
@@ -624,7 +627,8 @@ class CN_Webhook {
 				return false;
 			}
 			// Renovación: acceso_hasta solo avanza.
-			$nuevo = self::sub_acceso_hasta( $preapproval_id );
+			// $data_mp: el sync por cron ya consultó el preapproval; así no se repite la llamada a MP.
+			$nuevo = is_array( $data_mp ) ? self::acceso_desde_data( $data_mp ) : self::sub_acceso_hasta( $preapproval_id );
 			if ( null !== $nuevo && ( '' === $acceso || $nuevo > $acceso ) ) {
 				$ok = $wpdb->update(
 					$t_miembros,
@@ -685,51 +689,64 @@ class CN_Webhook {
 		}
 	}
 	// ==========================================================================
-	// VINCULACIÓN MANUAL DE SUSCRIPCIONES (Fase 4-F). La usa SOLO el admin ("Vincular suscripción de Mercado
-	// Pago", en Socias) para unir a mano un preapproval YA autorizado en MP con una socia, cuando el alta
-	// automática "sub_" no lo hizo. Misma lógica transaccional (FOR UPDATE) que activar_por_suscripcion_sub(),
-	// pero SIN fila en suscripciones_pendientes. No la llama el webhook ni ningún cron.
+	// VINCULACIÓN MANUAL DE SUSCRIPCIONES (Fase 5, punto 1). Une un preapproval YA autorizado en MP con una socia
+	// que YA existe (se elige por id). NUNCA crea socias. Misma lógica transaccional (FOR UPDATE) que
+	// activar_por_suscripcion_sub(), pero sin fila en suscripciones_pendientes. La usa SOLO la pantalla "Vincular"
+	// del admin: ni el webhook ni los crons la llaman, y nada se vincula solo.
 	// ==========================================================================
 	/**
-	 * preapproval_plan_id de Mercado Pago -> clave del mapa CN_MP::PLANES.
-	 * null = plan viejo ($15.000): su plan no se deduce, lo elige quien vincula ($plan_forzado).
+	 * Monto mensual de la suscripción en MP -> clave del mapa CN_MP::PLANES. $15.000 es el plan viejo (= basico).
 	 */
-	const PLANES_MP_IDS = array(
-		'c2d53771f9c949689600557b36eb1c66' => 'basico',
-		'39f391c46f16478b8b7e5a752eb6cd0a' => 'full',
-		'c70a2eecd53d4052896116280b814e85' => null,
+	const PLAN_POR_MONTO = array(
+		15000 => 'basico',
+		15500 => 'basico',
+		32000 => 'full',
 	);
-	const VINC_COLUMNAS = 'id, nombre_apellido, estado, celular_hash, preapproval_id, plan, acceso_hasta, email, fecha_fin_trial';
+	const VINC_COLUMNAS = 'id, nombre_apellido, estado, preapproval_id, plan, acceso_hasta, email, fecha_fin_trial, celular_texto_plano';
+	/** Clave de plan para un monto de MP (acepta 15500, "15500.00", 15500.0). null si no es uno de los montos conocidos. */
+	public static function plan_por_monto( $monto ) {
+		if ( ! is_numeric( $monto ) ) {
+			return null;
+		}
+		$f = (float) $monto;
+		if ( abs( $f - round( $f ) ) > 0.001 ) {
+			return null;
+		}
+		$k = (int) round( $f );
+		if ( ! isset( self::PLAN_POR_MONTO[ $k ] ) ) {
+			return null;
+		}
+		$plan = self::PLAN_POR_MONTO[ $k ];
+		return isset( CN_MP::get_planes()[ $plan ] ) ? $plan : null;
+	}
 	/**
-	 * Vincula un preapproval de MP con una socia.
+	 * Vincula un preapproval de MP con una socia EXISTENTE (por id).
 	 *
-	 * Exige en MP: status 'authorized' y preapproval_plan_id conocido (PLANES_MP_IDS). El plan sale de ese
-	 * id (o de $plan_forzado si es el plan viejo) y acceso_hasta de next_payment_date.
-	 * Según lo que haya en la base (socia buscada por celular: hint + hash):
-	 *  - insertada:  no hay socia -> se crea (activa).
-	 *  - activada:   hay socia sin preapproval_id -> se activa (también si estaba cancelada/pausada), se le
+	 * Exige en MP: status 'authorized' y un monto mensual conocido (plan_por_monto). El plan sale del monto y
+	 * acceso_hasta de next_payment_date. Según lo que haya en la base (socia por id, con FOR UPDATE):
+	 *  - activada:   la socia no tiene preapproval_id -> se activa (también si estaba cancelada/pausada), se le
 	 *                guardan plan/preapproval_id/acceso_hasta y se limpia fecha_fin_trial.
-	 *  - completada: ya tenía ESTE preapproval_id -> solo completa plan/acceso_hasta si estaban en NULL.
+	 *  - completada: ya tenía ESTE preapproval_id -> solo completa plan/acceso_hasta si estaban en NULL (idempotente).
 	 *  - conflicto:  la socia tiene OTRO preapproval_id -> no se toca nada; log sub_conflicto + alerta n8n.
-	 *  - rechazada:  validación o MP no cumple, o el preapproval ya está vinculado a OTRA socia (idempotencia).
-	 * Mail de bienvenida y evento CAPI Subscribe solo si $notificar es true y la acción fue insertada/activada,
-	 * siempre DESPUÉS del COMMIT (mismas funciones de 2B/3B: sub_post_alta). Si es false no se envía nada.
+	 *  - rechazada:  validación o MP no cumple, la socia no existe (nunca se crea una), o el preapproval ya está
+	 *                vinculado a OTRA socia.
+	 * Mail de bienvenida y evento CAPI Subscribe solo si $notificar es true y la acción fue "activada", siempre
+	 * DESPUÉS del COMMIT (sub_post_alta). Si MP falla no se escribe nada.
 	 *
 	 * @return array{ok:bool,accion:string,mensaje:string,miembro_id:?int,estado_anterior:?string,estado_nuevo:?string,plan:?string,acceso_hasta:?string,notificacion:array{mail:bool,capi:bool}}
-	 *         notificacion = lo que se PIDIÓ enviar (sub_post_alta no informa si SMTP/Meta respondieron).
 	 */
-	public static function vincular_suscripcion( $preapproval_id, $nombre, $celular, $email, $plan_forzado, $notificar ) {
+	public static function vincular_suscripcion( $preapproval_id, $miembro_id, $notificar = false ) {
 		global $wpdb;
 		$res            = self::vinc_resultado_base();
 		$preapproval_id = is_string( $preapproval_id ) ? trim( $preapproval_id ) : '';
+		$miembro_id     = (int) $miembro_id;
 		$notificar      = (bool) $notificar;
-		$entrada = self::vinc_validar_entrada( $nombre, $celular, $email );
-		if ( '' !== $entrada['error'] ) {
-			$res['mensaje'] = $entrada['error'];
+		if ( $miembro_id <= 0 ) {
+			$res['mensaje'] = 'Elegí una socia existente.';
 			return $res;
 		}
 		// MP se consulta ANTES de abrir la transacción (no se bloquean filas mientras se espera a MP).
-		$mp = self::vinc_consultar_mp( $preapproval_id, $plan_forzado );
+		$mp = self::vinc_consultar_mp( $preapproval_id );
 		if ( ! $mp['ok'] ) {
 			$res['mensaje'] = $mp['error'];
 			self::registrar_log_mp( 'sub_vinculacion_rechazada', array(
@@ -742,16 +759,27 @@ class CN_Webhook {
 		$res['acceso_hasta'] = $mp['acceso_hasta'];
 		$t_miembros     = CN_DB::tabla( 'miembros' );
 		$en_transaccion = false;
-		$es_alta        = false; // true solo si se insertó o se activó (nunca en completada).
-		$email_aviso    = $entrada['email'];
+		$es_alta        = false; // true solo si se activó (nunca en completada).
+		$aviso          = null;  // datos para sub_post_alta, armados con la fila bloqueada.
 		try {
 			if ( false === $wpdb->query( 'START TRANSACTION' ) ) {
 				throw new RuntimeException( 'no se pudo abrir la transaccion' );
 			}
 			$en_transaccion = true;
-			list( $vinculada, $socia ) = self::vinc_buscar( $preapproval_id, $entrada['celular'], true );
+			list( $vinculada, $socia ) = self::vinc_buscar( $preapproval_id, $miembro_id, true );
 			list( $accion, $fila )     = self::vinc_decidir( $vinculada, $socia, $preapproval_id );
 			$ahora = current_time( 'mysql', true );
+			if ( 'inexistente' === $accion ) {
+				$wpdb->query( 'ROLLBACK' );
+				$en_transaccion = false;
+				$res['mensaje'] = 'No existe la socia con id ' . $miembro_id . '. No se crea ninguna socia nueva y no se cambió nada.';
+				self::registrar_log_mp( 'sub_vinculacion_rechazada', array(
+					'preapproval_id' => $preapproval_id,
+					'motivo'         => 'socia_inexistente',
+					'miembro_id'     => $miembro_id,
+				) );
+				return $res;
+			}
 			if ( 'rechazada' === $accion ) {
 				$wpdb->query( 'ROLLBACK' );
 				$en_transaccion = false;
@@ -772,47 +800,17 @@ class CN_Webhook {
 				$res['estado_nuevo']    = (string) $fila->estado;
 				$res['mensaje']         = 'La socia (id ' . (int) $fila->id . ') ya tiene OTRA suscripción vinculada. No se cambió nada: resolvelo a mano.';
 				$clave                  = 'vinc_' . $preapproval_id;
-				self::registrar_log_mp( 'sub_conflicto', array(
+				$detalle                = array(
 					'origen'             => 'vinculacion_manual',
 					'external_reference' => $clave,
 					'miembro_id'         => (int) $fila->id,
 					'preapproval_nuevo'  => $preapproval_id,
-					'preapproval_actual' => (string) $fila->preapproval_id,
-				) );
-				self::sub_avisar_una_vez_por_hora( 'sub_conflicto', $clave, array(
-					'origen'             => 'vinculacion_manual',
-					'external_reference' => $clave,
-					'miembro_id'         => (int) $fila->id,
-					'preapproval_nuevo'  => $preapproval_id,
-				) );
+				);
+				self::registrar_log_mp( 'sub_conflicto', $detalle + array( 'preapproval_actual' => (string) $fila->preapproval_id ) );
+				self::sub_avisar_una_vez_por_hora( 'sub_conflicto', $clave, $detalle );
 				return $res;
 			}
-			if ( 'insertada' === $accion ) {
-				$ok = $wpdb->insert(
-					$t_miembros,
-					array(
-						'nombre_apellido'     => $entrada['nombre'],
-						'celular_hash'        => CN_Helpers::hash_celular( $entrada['celular'] ),
-						'celular_hint'        => CN_Helpers::hint_celular( $entrada['celular'] ),
-						'estado'              => 'activo',
-						'fecha_alta'          => $ahora,
-						'fecha_modificacion'  => $ahora,
-						'email'               => ( '' !== $entrada['email'] ) ? $entrada['email'] : null,
-						'celular_texto_plano' => $entrada['celular'],
-						'plan'                => $mp['plan'],
-						'preapproval_id'      => $preapproval_id,
-						'acceso_hasta'        => $mp['acceso_hasta'],
-					),
-					array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s' )
-				);
-				if ( false === $ok ) {
-					throw new RuntimeException( 'no se pudo crear la socia: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
-				}
-				$res['miembro_id']   = (int) $wpdb->insert_id;
-				$res['estado_nuevo'] = 'activo';
-				$res['mensaje']      = 'Socia nueva creada y activa.';
-				$es_alta             = true;
-			} elseif ( 'activada' === $accion ) {
+			if ( 'activada' === $accion ) {
 				$ok = $wpdb->update(
 					$t_miembros,
 					array(
@@ -830,14 +828,16 @@ class CN_Webhook {
 				if ( false === $ok ) {
 					throw new RuntimeException( 'no se pudo activar a la socia: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
 				}
-				$res['miembro_id']      = (int) $fila->id;
 				$res['estado_anterior'] = (string) $fila->estado;
 				$res['estado_nuevo']    = 'activo';
 				$res['mensaje']         = 'Socia existente activada con la suscripción.';
 				$es_alta                = true;
-				if ( '' === $email_aviso && '' !== trim( (string) $fila->email ) ) {
-					$email_aviso = trim( (string) $fila->email );
-				}
+				$email_aviso            = '' !== trim( (string) $fila->email ) ? trim( (string) $fila->email ) : (string) $mp['payer_email'];
+				$aviso                  = array(
+					'nombre'  => (string) $fila->nombre_apellido,
+					'celular' => trim( (string) $fila->celular_texto_plano ),
+					'email'   => $email_aviso,
+				);
 			} else { // completada: ya tenía ESTE preapproval_id.
 				$completar = array();
 				if ( null !== $mp['plan'] && null === $fila->plan ) {
@@ -858,15 +858,15 @@ class CN_Webhook {
 						throw new RuntimeException( 'no se pudo completar plan/acceso_hasta: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
 					}
 				}
-				$res['miembro_id']      = (int) $fila->id;
 				$res['estado_anterior'] = (string) $fila->estado;
 				$res['estado_nuevo']    = (string) $fila->estado;
 				$res['mensaje']         = $completar
 					? 'Ya estaba vinculada: se completaron ' . implode( ' y ', array_keys( $completar ) ) . '. No se cambió el estado (' . (string) $fila->estado . ').'
 					: 'Ya estaba vinculada con esta suscripción: no había nada para completar. No se cambió el estado (' . (string) $fila->estado . ').';
 			}
-			$res['accion'] = $accion;
-			$res['ok']     = true;
+			$res['miembro_id'] = (int) $fila->id;
+			$res['accion']     = $accion;
+			$res['ok']         = true;
 			if ( false === $wpdb->query( 'COMMIT' ) ) {
 				throw new RuntimeException( 'no se pudo confirmar la transaccion' );
 			}
@@ -875,18 +875,15 @@ class CN_Webhook {
 			if ( $en_transaccion ) {
 				$wpdb->query( 'ROLLBACK' );
 			}
-			$clave = 'vinc_' . $preapproval_id;
-			self::registrar_log_mp( 'sub_error', array(
+			$clave   = 'vinc_' . $preapproval_id;
+			$detalle = array(
 				'paso'               => 'vinculacion_manual',
 				'external_reference' => $clave,
 				'mensaje'            => mb_substr( $e->getMessage(), 0, 300 ),
-			) );
-			self::sub_avisar_una_vez_por_hora( 'sub_error', $clave, array(
-				'paso'               => 'vinculacion_manual',
-				'external_reference' => $clave,
-				'mensaje'            => mb_substr( $e->getMessage(), 0, 300 ),
-			) );
-			$res         = self::vinc_resultado_base();
+			);
+			self::registrar_log_mp( 'sub_error', $detalle );
+			self::sub_avisar_una_vez_por_hora( 'sub_error', $clave, $detalle );
+			$res            = self::vinc_resultado_base();
 			$res['mensaje'] = 'Error interno al vincular: no se guardó nada. Quedó registrado en el log de Mercado Pago.';
 			return $res;
 		}
@@ -900,40 +897,45 @@ class CN_Webhook {
 			'plan'            => $res['plan'],
 			'notificar'       => $notificar,
 		) );
-		if ( $es_alta && $notificar ) {
-			$fila_post = (object) array(
-				'nombre_apellido'    => $entrada['nombre'],
-				'celular'            => $entrada['celular'],
-				'email'              => $email_aviso,
-				'external_reference' => 'vinc_' . $preapproval_id, // event_id estable por preapproval (sin celular).
-				'fbp'                => '',
-				'fbc'                => '',
-				'ip'                 => '',
-				'user_agent'         => '',
-			);
-			self::sub_post_alta( $fila_post, $mp['plan'], CN_MP::get_planes() ); // try/catch propio: nunca afecta lo ya guardado.
-			$res['notificacion'] = array( 'mail' => ( '' !== $email_aviso ), 'capi' => true );
+		if ( $es_alta && $notificar && is_array( $aviso ) ) {
+			if ( '' === $aviso['celular'] ) {
+				// Sin el celular guardado el mail saldría sin contraseña: no se manda nada (ni Meta).
+				$res['mensaje'] .= ' No se envió mail ni evento Meta: la socia no tiene el celular guardado.';
+			} else {
+				$fila_post = (object) array(
+					'nombre_apellido'    => $aviso['nombre'],
+					'celular'            => $aviso['celular'],
+					'email'              => $aviso['email'],
+					'external_reference' => 'vinc_' . $preapproval_id, // event_id estable por preapproval (sin celular).
+					'fbp'                => '',
+					'fbc'                => '',
+					'ip'                 => '',
+					'user_agent'         => '',
+				);
+				self::sub_post_alta( $fila_post, $mp['plan'], CN_MP::get_planes() ); // try/catch propio: nunca afecta lo ya guardado.
+				$res['notificacion'] = array( 'mail' => ( '' !== $aviso['email'] ), 'capi' => true );
+			}
 		}
 		return $res;
 	}
 	/**
 	 * SOLO LECTURA: lo que haría vincular_suscripcion() con estos datos, sin escribir nada en la base (consulta
 	 * a MP y SELECT sin lock). Lo usa el botón "Verificar" del admin.
-	 * 'caso' (cuando accion_prevista no es null): nueva | trial | cancelada | sin_suscripcion | ya_vinculada | conflicto | otra_socia.
+	 * 'caso' (cuando accion_prevista no es null): trial | cancelada | sin_suscripcion | ya_vinculada | conflicto | otra_socia.
 	 *
 	 * @return array{ok:bool,error:string,mp:array,accion_prevista:?string,caso:?string,socia:?array,mensaje:string}
 	 */
-	public static function vincular_suscripcion_verificar( $preapproval_id, $celular, $plan_forzado ) {
+	public static function vincular_suscripcion_verificar( $preapproval_id, $miembro_id ) {
 		$salida = array( 'ok' => false, 'error' => '', 'mp' => array(), 'accion_prevista' => null, 'caso' => null, 'socia' => null, 'mensaje' => '' );
 		$preapproval_id = is_string( $preapproval_id ) ? trim( $preapproval_id ) : '';
-		$mp = self::vinc_consultar_mp( $preapproval_id, $plan_forzado );
+		$miembro_id     = (int) $miembro_id;
+		$mp = self::vinc_consultar_mp( $preapproval_id );
 		$salida['mp'] = array(
 			'status'            => $mp['status'],
 			'plan'              => $mp['plan'],
 			'plan_nombre'       => $mp['plan_nombre'],
 			'precio'            => $mp['precio'],
-			'plan_fuente'       => $mp['plan_fuente'],
-			'plan_id_mp'        => $mp['plan_id_mp'],
+			'monto'             => $mp['monto'],
 			'acceso_hasta'      => $mp['acceso_hasta'],
 			'next_payment_date' => $mp['next_payment_date'],
 			'payer_email'       => $mp['payer_email'],
@@ -943,20 +945,13 @@ class CN_Webhook {
 			$salida['error'] = $mp['error'];
 			return $salida;
 		}
+		if ( $miembro_id <= 0 ) {
+			$salida['error'] = 'Elegí una socia existente de la lista.';
+			return $salida;
+		}
 		$salida['ok'] = true;
-		$celular_raw  = is_string( $celular ) ? trim( $celular ) : '';
-		if ( '' === $celular_raw ) {
-			$salida['mensaje'] = 'Mercado Pago está bien. Cargá el celular para ver qué pasaría con la socia.';
-			return $salida;
-		}
-		$norm = CN_Helpers::normalizar_celular( $celular_raw );
-		if ( empty( $norm['valido'] ) ) {
-			$salida['ok']    = false;
-			$salida['error'] = 'El celular no es válido (un celular argentino tiene 10 dígitos con código de área, sin 0 ni 15).';
-			return $salida;
-		}
 		try {
-			list( $vinculada, $socia ) = self::vinc_buscar( $preapproval_id, $norm['normalizado'], false );
+			list( $vinculada, $socia ) = self::vinc_buscar( $preapproval_id, $miembro_id, false );
 		} catch ( Throwable $e ) {
 			$salida['ok']    = false;
 			$salida['error'] = 'No se pudo consultar la base de socias.';
@@ -970,11 +965,15 @@ class CN_Webhook {
 				'nombre_apellido' => (string) $fila->nombre_apellido,
 				'estado'          => (string) $fila->estado,
 				'en_trial'        => ! empty( $fila->fecha_fin_trial ),
+				'email'           => (string) $fila->email,
+				'preapproval_id'  => (string) $fila->preapproval_id,
+				'plan'            => (string) $fila->plan,
 			);
 		}
-		if ( 'insertada' === $accion ) {
-			$salida['caso']    = 'nueva';
-			$salida['mensaje'] = 'Se crearía una socia nueva, activa, con este plan.';
+		if ( 'inexistente' === $accion ) {
+			$salida['ok']      = false;
+			$salida['error']   = 'No existe la socia con id ' . $miembro_id . '. Esta pantalla nunca crea socias nuevas.';
+			$salida['mensaje'] = $salida['error'];
 		} elseif ( 'activada' === $accion ) {
 			if ( 'cancelada' === (string) $fila->estado ) {
 				$salida['caso']    = 'cancelada';
@@ -984,7 +983,7 @@ class CN_Webhook {
 				$salida['mensaje'] = 'Se activaría la socia que está en trial (se limpia el fin de trial) y se le vincularía la suscripción.';
 			} else {
 				$salida['caso']    = 'sin_suscripcion';
-				$salida['mensaje'] = 'Se activaría a la socia existente (hoy sin suscripción vinculada) y se le vincularía la suscripción.';
+				$salida['mensaje'] = 'Se activaría a la socia (hoy sin suscripción vinculada) y se le vincularía la suscripción.';
 			}
 		} elseif ( 'completada' === $accion ) {
 			$salida['caso']    = 'ya_vinculada';
@@ -1011,40 +1010,15 @@ class CN_Webhook {
 			'notificacion'    => array( 'mail' => false, 'capi' => false ),
 		);
 	}
-	/** Normaliza y valida lo que escribe quien vincula. Devuelve error '' si está todo bien. */
-	protected static function vinc_validar_entrada( $nombre, $celular, $email ) {
-		$r      = array( 'error' => '', 'nombre' => '', 'celular' => '', 'email' => '' );
-		$nombre = trim( sanitize_text_field( is_string( $nombre ) ? $nombre : '' ) );
-		if ( '' === $nombre || mb_strlen( $nombre ) > 191 ) {
-			$r['error'] = 'Falta el nombre y apellido (hasta 191 caracteres).';
-			return $r;
-		}
-		$norm = CN_Helpers::normalizar_celular( is_string( $celular ) ? $celular : '' );
-		if ( empty( $norm['valido'] ) ) {
-			$r['error'] = 'El celular no es válido (un celular argentino tiene 10 dígitos con código de área, sin 0 ni 15).';
-			return $r;
-		}
-		$email_raw = is_string( $email ) ? trim( $email ) : '';
-		$email_ok  = '' === $email_raw ? '' : sanitize_email( $email_raw );
-		if ( '' !== $email_raw && '' === $email_ok ) {
-			$r['error'] = 'El email no es válido.';
-			return $r;
-		}
-		$r['nombre']  = $nombre;
-		$r['celular'] = $norm['normalizado'];
-		$r['email']   = $email_ok;
-		return $r;
-	}
 	/**
-	 * Consulta el preapproval a MP y valida lo que exige la vinculación: status 'authorized' y plan conocido.
-	 * Solo lectura. El plan sale del id de plan de MP; el plan viejo exige $plan_forzado (clave de CN_MP::PLANES).
-	 * acceso_hasta = next_payment_date en UTC, con la misma conversión que sub_acceso_hasta() (sin segunda consulta).
+	 * Consulta el preapproval a MP y valida lo que exige la vinculación: status 'authorized' y monto mensual conocido
+	 * ($15.000 / $15.500 -> basico, $32.000 -> full). Solo lectura. acceso_hasta = next_payment_date en UTC, con la
+	 * misma conversión que sub_acceso_hasta() (sin segunda consulta).
 	 */
-	protected static function vinc_consultar_mp( $preapproval_id, $plan_forzado ) {
+	protected static function vinc_consultar_mp( $preapproval_id ) {
 		$r = array(
-			'ok' => false, 'error' => '', 'status' => '', 'plan' => null, 'plan_nombre' => '', 'precio' => 0,
-			'plan_fuente' => '', 'plan_id_mp' => '', 'acceso_hasta' => null, 'next_payment_date' => '',
-			'payer_email' => '', 'reason' => '',
+			'ok' => false, 'error' => '', 'status' => '', 'plan' => null, 'plan_nombre' => '', 'precio' => 0, 'monto' => null,
+			'acceso_hasta' => null, 'next_payment_date' => '', 'payer_email' => '', 'reason' => '',
 		);
 		if ( ! is_string( $preapproval_id ) || ! preg_match( '/^[A-Za-z0-9_-]{16,64}$/', $preapproval_id ) ) {
 			$r['error'] = 'El ID de preapproval no tiene un formato válido.';
@@ -1052,7 +1026,7 @@ class CN_Webhook {
 		}
 		$data = CN_MP::obtener_preapproval( $preapproval_id );
 		if ( ! is_array( $data ) || empty( $data['status'] ) || ! is_string( $data['status'] ) ) {
-			$r['error'] = 'No se pudo consultar Mercado Pago o ese ID no existe. Revisá el ID.';
+			$r['error'] = 'No se pudo consultar Mercado Pago o ese ID no existe. No se cambió nada.';
 			return $r;
 		}
 		if ( isset( $data['id'] ) && (string) $data['id'] !== $preapproval_id ) {
@@ -1063,92 +1037,60 @@ class CN_Webhook {
 		$r['reason']            = ( isset( $data['reason'] ) && is_string( $data['reason'] ) ) ? sanitize_text_field( $data['reason'] ) : '';
 		$r['payer_email']       = ( isset( $data['payer_email'] ) && is_string( $data['payer_email'] ) ) ? sanitize_email( trim( $data['payer_email'] ) ) : '';
 		$r['next_payment_date'] = ( isset( $data['next_payment_date'] ) && is_string( $data['next_payment_date'] ) ) ? sanitize_text_field( $data['next_payment_date'] ) : '';
-		$r['plan_id_mp']        = ( isset( $data['preapproval_plan_id'] ) && is_string( $data['preapproval_plan_id'] ) ) ? trim( $data['preapproval_plan_id'] ) : '';
-		if ( '' !== $r['next_payment_date'] ) {
-			$ts = strtotime( $r['next_payment_date'] );
-			if ( false !== $ts ) {
-				$r['acceso_hasta'] = gmdate( 'Y-m-d H:i:s', $ts );
-			}
-		}
+		$r['acceso_hasta']      = self::acceso_desde_data( $data );
+		$r['monto']             = isset( $data['auto_recurring']['transaction_amount'] ) ? $data['auto_recurring']['transaction_amount'] : null;
 		if ( 'authorized' !== $r['status'] ) {
 			$r['error'] = 'La suscripción no está autorizada en Mercado Pago (estado: ' . $r['status'] . '). Solo se vinculan las autorizadas.';
 			return $r;
 		}
-		if ( '' === $r['plan_id_mp'] || ! array_key_exists( $r['plan_id_mp'], self::PLANES_MP_IDS ) ) {
-			$r['error'] = 'El plan de esa suscripción no es uno de los conocidos (id de plan en MP: ' . ( '' === $r['plan_id_mp'] ? 'ninguno' : sanitize_text_field( $r['plan_id_mp'] ) ) . '). No se vincula.';
+		$plan = self::plan_por_monto( $r['monto'] );
+		if ( null === $plan ) {
+			$r['error'] = 'El monto mensual de esa suscripción no es uno de los conocidos ($15.000, $15.500 o $32.000; en MP: ' . ( is_scalar( $r['monto'] ) ? sanitize_text_field( (string) $r['monto'] ) : 'ninguno' ) . '). No se vincula.';
 			return $r;
 		}
-		$planes       = CN_MP::get_planes();
-		$plan_forzado = is_string( $plan_forzado ) ? trim( $plan_forzado ) : '';
-		if ( '' !== $plan_forzado && ! isset( $planes[ $plan_forzado ] ) ) {
-			$r['error'] = 'El plan elegido no existe.';
-			return $r;
-		}
-		$clave = self::PLANES_MP_IDS[ $r['plan_id_mp'] ];
-		if ( null === $clave ) { // plan viejo ($15.000): el plan no se deduce.
-			if ( '' === $plan_forzado ) {
-				$r['error'] = 'Es el plan viejo de $15.000: elegí a qué plan corresponde (básico o full) para vincularla.';
-				return $r;
-			}
-			$r['plan']        = $plan_forzado;
-			$r['plan_fuente'] = 'forzado';
-		} else {
-			if ( '' !== $plan_forzado && $plan_forzado !== $clave ) {
-				$r['error'] = 'El plan elegido no coincide con el plan de esa suscripción en Mercado Pago (' . $clave . '). Dejá el plan en automático.';
-				return $r;
-			}
-			$r['plan']        = $clave;
-			$r['plan_fuente'] = 'mp';
-		}
-		$r['plan_nombre'] = (string) $planes[ $r['plan'] ]['nombre'];
-		$r['precio']      = $planes[ $r['plan'] ]['precio'];
+		$planes           = CN_MP::get_planes();
+		$r['plan']        = $plan;
+		$r['plan_nombre'] = (string) $planes[ $plan ]['nombre'];
+		$r['precio']      = $planes[ $plan ]['precio'];
 		$r['ok']          = true;
 		return $r;
 	}
 	/**
-	 * Busca (1) la fila ya vinculada a ese preapproval_id y (2) a la socia por celular (hint + hash, como el alta
-	 * del trial). Con $bloquear = true usa FOR UPDATE (dentro de la transacción). Lanza si la base da error.
+	 * Busca (1) a la socia por id y (2) la fila ya vinculada a ese preapproval_id. Con $bloquear = true usa
+	 * FOR UPDATE (dentro de la transacción; siempre en ese orden para no cruzar locks). Lanza si la base da error.
 	 *
-	 * @return array{0:?object,1:?object}
+	 * @return array{0:?object,1:?object} array( $vinculada, $socia )
 	 */
-	protected static function vinc_buscar( $preapproval_id, $celular_normalizado, $bloquear ) {
+	protected static function vinc_buscar( $preapproval_id, $miembro_id, $bloquear ) {
 		global $wpdb;
 		$t_miembros = CN_DB::tabla( 'miembros' );
 		$lock       = $bloquear ? ' FOR UPDATE' : '';
-		$vinculada  = $wpdb->get_row(
+		$socia      = $wpdb->get_row(
+			$wpdb->prepare( 'SELECT ' . self::VINC_COLUMNAS . " FROM {$t_miembros} WHERE id = %d{$lock}", (int) $miembro_id )
+		);
+		if ( '' !== (string) $wpdb->last_error ) {
+			throw new RuntimeException( 'error buscando a la socia: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
+		}
+		$vinculada = $wpdb->get_row(
 			$wpdb->prepare( 'SELECT ' . self::VINC_COLUMNAS . " FROM {$t_miembros} WHERE preapproval_id = %s LIMIT 1{$lock}", $preapproval_id )
 		);
 		if ( '' !== (string) $wpdb->last_error ) {
 			throw new RuntimeException( 'error buscando el preapproval: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
 		}
-		$socia = null;
-		if ( '' !== (string) $celular_normalizado ) {
-			$candidatos = $wpdb->get_results(
-				$wpdb->prepare( 'SELECT ' . self::VINC_COLUMNAS . " FROM {$t_miembros} WHERE celular_hint = %s{$lock}", CN_Helpers::hint_celular( $celular_normalizado ) )
-			);
-			if ( '' !== (string) $wpdb->last_error ) {
-				throw new RuntimeException( 'error buscando a la socia: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
-			}
-			foreach ( (array) $candidatos as $candidato ) {
-				if ( CN_Helpers::verificar_celular( $celular_normalizado, $candidato->celular_hash ) ) {
-					$socia = $candidato;
-					break;
-				}
-			}
-		}
-		return array( $vinculada ? $vinculada : null, $socia );
+		return array( $vinculada ? $vinculada : null, $socia ? $socia : null );
 	}
 	/**
-	 * Decisión pura (sin escribir): insertada | activada | completada | conflicto | rechazada, y la fila implicada.
+	 * Decisión pura (sin escribir): inexistente | rechazada | conflicto | activada | completada, y la fila implicada.
+	 * "Sin preapproval" es la comparación estricta de texto vacío: NULL y '' cuentan como vacío; '0' NO (es un valor).
 	 *
 	 * @return array{0:string,1:?object}
 	 */
 	protected static function vinc_decidir( $vinculada, $socia, $preapproval_id ) {
-		if ( $vinculada && ( ! $socia || (int) $vinculada->id !== (int) $socia->id ) ) {
-			return array( 'rechazada', $vinculada ); // ya vinculado a OTRA socia.
-		}
 		if ( ! $socia ) {
-			return array( 'insertada', null );
+			return array( 'inexistente', null );
+		}
+		if ( $vinculada && (int) $vinculada->id !== (int) $socia->id ) {
+			return array( 'rechazada', $vinculada ); // ya vinculado a OTRA socia.
 		}
 		$actual = (string) $socia->preapproval_id;
 		if ( '' === $actual ) {
