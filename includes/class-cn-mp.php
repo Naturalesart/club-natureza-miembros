@@ -244,7 +244,7 @@ class CN_MP {
 			// Sin preapproval_plan_id: MP exige tarjeta en el momento (card_token_id) para las
 			// suscripciones con plan asociado. Sin plan, el link para pagar después sí existe.
 			// Mismo formato que crear_preapproval(); el monto sale del mapa PLANES.
-			'reason'             => 'Club Natureza — ' . $planes[ $plan ]['nombre'],
+			'reason'             => $planes[ $plan ]['nombre'],
 			'external_reference' => $external_reference,
 			'auto_recurring'     => array(
 				'frequency'          => 1,
