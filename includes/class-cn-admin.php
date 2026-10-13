@@ -911,6 +911,8 @@ class CN_Admin {
 			}
 			// Alta automática por suscripción "sub_": checkbox, apagado por defecto (si no viene tildado, queda en '0').
 			update_option( 'cn_sub_auto_activar', isset( $_POST['cn_sub_auto_activar'] ) ? '1' : '0' );
+			// Modo seguro: tildado por defecto. Tildado = ningún aviso de MP baja a una socia a "pausado".
+			update_option( 'cn_sub_modo_seguro', isset( $_POST['cn_sub_modo_seguro'] ) ? '1' : '0' );
 			update_option( 'cn_meta_capi_token', sanitize_text_field( wp_unslash( $_POST['cn_meta_capi_token'] ?? '' ) ) );
 			update_option( 'cn_google_drive_api_key', sanitize_text_field( wp_unslash( $_POST['cn_google_drive_api_key'] ?? '' ) ) );
 			update_option( 'cn_clase_especial_link', esc_url_raw( wp_unslash( $_POST['cn_clase_especial_link'] ?? '' ) ) );
@@ -925,6 +927,7 @@ class CN_Admin {
 		$plan_id_basico = CN_MP::get_plan_id( 'basico' );
 		$plan_id_full   = CN_MP::get_plan_id( 'full' );
 		$sub_auto_activar = '1' === (string) get_option( 'cn_sub_auto_activar', '0' );
+		$sub_modo_seguro  = '1' === (string) get_option( 'cn_sub_modo_seguro', '1' );
 		$capi_token   = CN_Meta_Capi::get_token();
 		$drive_key    = CN_Drive::get_api_key();
 		$clase_link   = get_option( 'cn_clase_especial_link', '' );
@@ -978,6 +981,13 @@ class CN_Admin {
 						<td>
 							<label><input type="checkbox" name="cn_sub_auto_activar" value="1" <?php checked( $sub_auto_activar ); ?>> Activar socias solas al autorizarse una suscripción con referencia <code>sub_</code></label>
 							<p class="description">Apagado por defecto. Con esto apagado (o sin links <code>sub_</code>) el sistema se comporta exactamente como hasta ahora.</p>
+						</td>
+					</tr>
+					<tr>
+						<th><label>Modo seguro (suscripciones)</label></th>
+						<td>
+							<label><input type="checkbox" name="cn_sub_modo_seguro" value="1" <?php checked( $sub_modo_seguro ); ?>> Que un aviso de Mercado Pago nunca baje a una socia a "pausado"</label>
+							<p class="description">Tildado por defecto. Destildarlo hace que cancelaciones y pausas de Mercado Pago pasen a "pausado" al instante en las socias que no son de alta automática. Dejalo tildado.</p>
 						</td>
 					</tr>
 					<tr>

@@ -77,6 +77,12 @@ add_action( 'init', function () {
 		wp_schedule_event( time(), 'daily', 'cn_cron_revocar_trials' );
 	}
 } );
+add_action( 'cn_cron_revocar_bajas_sub', array( 'CN_Webhook', 'revocar_bajas_sub_vencidas' ) );
+add_action( 'init', function () {
+	if ( ! wp_next_scheduled( 'cn_cron_revocar_bajas_sub' ) ) {
+		wp_schedule_event( time(), 'daily', 'cn_cron_revocar_bajas_sub' );
+	}
+} );
 add_action( 'cn_cron_aviso_dia5_trial', array( 'CN_Webhook', 'avisar_dia5_trial' ) );
 add_action( 'init', function () {
 	if ( ! wp_next_scheduled( 'cn_cron_aviso_dia5_trial' ) ) {

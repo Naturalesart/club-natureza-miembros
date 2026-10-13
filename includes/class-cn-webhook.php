@@ -134,6 +134,13 @@ class CN_Webhook {
 				return;
 			}
 		}
+		// Ciclo de vida de una suscripción "sub_" ya vinculada (Fase 3-C): renovaciones y bajas SIN cortar el
+		// acceso. Solo actúa con el flag activo y sobre filas con preapproval_id Y plan no nulo (las que dio de
+		// alta esta función): trial, manuales y socias de siempre tienen plan NULL y siguen el camino de hoy.
+		if ( '' !== (string) $preapproval_id && '1' === (string) get_option( 'cn_sub_auto_activar', '0' )
+			&& self::gestionar_ciclo_sub( $status, $preapproval_id ) ) {
+			return;
+		}
 		$estados_activo  = array( 'authorized', 'approved' );
 		$estados_pausado = array( 'cancelled', 'rejected', 'paused' );
 		if ( ! in_array( $status, array_merge( $estados_activo, $estados_pausado ), true ) ) {
@@ -533,6 +540,149 @@ class CN_Webhook {
 		}
 		set_transient( $clave, 1, HOUR_IN_SECONDS );
 		self::avisar_error_n8n( $motivo, $detalle );
+	}
+	/**
+	 * Ciclo de vida de una suscripción "sub_" ya vinculada (Fase 3-C). Solo la llama aplicar_estado() con el
+	 * flag activo. Actúa ÚNICAMENTE sobre una fila con ese preapproval_id y plan no nulo.
+	 *  - cancelled/paused: programa la baja (baja_en = ahora), deja estado 'activo' y acceso_hasta tal cual
+	 *    (el acceso corre hasta el fin del período pago). Sin acceso_hasta vigente: solo loguea y alerta.
+	 *    Devuelve true (el evento queda atendido: el camino de siempre no vuelve a tocarlo).
+	 *  - authorized: si había baja programada, la limpia (reanudación); si no, extiende acceso_hasta con el
+	 *    next_payment_date de MP solo si es mayor. approved (pago): solo la extensión. Ambos devuelven false:
+	 *    el camino de siempre sigue exactamente igual.
+	 * Cualquier error se registra y alerta; para cancelled/paused devuelve true (nunca dejar que el camino de
+	 * siempre baje a una socia por un fallo nuestro).
+	 */
+	protected static function gestionar_ciclo_sub( $status, $preapproval_id ) {
+		global $wpdb;
+		$preapproval_id = (string) $preapproval_id;
+		if ( '' === $preapproval_id || ! in_array( $status, array( 'authorized', 'approved', 'cancelled', 'paused' ), true ) ) {
+			return false;
+		}
+		$es_baja = in_array( $status, array( 'cancelled', 'paused' ), true );
+		try {
+			$t_miembros = CN_DB::tabla( 'miembros' );
+			$socia = $wpdb->get_row(
+				$wpdb->prepare( "SELECT id, estado, plan, acceso_hasta, baja_en FROM {$t_miembros} WHERE preapproval_id = %s LIMIT 1", $preapproval_id )
+			);
+			if ( '' !== (string) $wpdb->last_error ) {
+				throw new RuntimeException( 'error buscando la suscripcion: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
+			}
+			if ( ! $socia || ! isset( $socia->plan ) || '' === (string) $socia->plan ) {
+				return false; // no es una alta de esta función: camino de siempre.
+			}
+			$ahora  = current_time( 'mysql', true );
+			$acceso = isset( $socia->acceso_hasta ) ? (string) $socia->acceso_hasta : '';
+			$baja   = isset( $socia->baja_en ) ? (string) $socia->baja_en : '';
+			if ( $es_baja ) {
+				if ( '' !== $baja ) {
+					return true; // baja ya programada: no se pisa la fecha original.
+				}
+				if ( '' === $acceso || $acceso <= $ahora ) {
+					$detalle = array(
+						'miembro_id'     => (int) $socia->id,
+						'preapproval_id' => $preapproval_id,
+						'status_mp'      => $status,
+						'acceso_hasta'   => '' === $acceso ? null : $acceso,
+					);
+					self::registrar_log_mp( 'sub_baja_sin_periodo', $detalle );
+					self::sub_avisar_una_vez_por_hora( 'sub_baja_sin_periodo', $preapproval_id, $detalle );
+					return true; // sin período pago vigente: no se cambia el estado, lo resuelve una persona.
+				}
+				$ok = $wpdb->update(
+					$t_miembros,
+					array( 'baja_en' => $ahora, 'fecha_modificacion' => $ahora ),
+					array( 'id' => (int) $socia->id ),
+					array( '%s', '%s' ),
+					array( '%d' )
+				);
+				if ( false === $ok ) {
+					throw new RuntimeException( 'no se pudo programar la baja: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
+				}
+				self::registrar_log_mp( 'sub_baja_programada', array(
+					'miembro_id'     => (int) $socia->id,
+					'preapproval_id' => $preapproval_id,
+					'status_mp'      => $status,
+					'acceso_hasta'   => $acceso,
+				) );
+				return true;
+			}
+			if ( '' !== $baja ) {
+				if ( 'authorized' === $status ) {
+					$ok = $wpdb->update(
+						$t_miembros,
+						array( 'baja_en' => null, 'fecha_modificacion' => $ahora ),
+						array( 'id' => (int) $socia->id ),
+						array( '%s', '%s' ),
+						array( '%d' )
+					);
+					if ( false === $ok ) {
+						throw new RuntimeException( 'no se pudo limpiar la baja: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
+					}
+					self::registrar_log_mp( 'sub_baja_revertida', array( 'miembro_id' => (int) $socia->id, 'preapproval_id' => $preapproval_id ) );
+				}
+				return false;
+			}
+			// Renovación: acceso_hasta solo avanza.
+			$nuevo = self::sub_acceso_hasta( $preapproval_id );
+			if ( null !== $nuevo && ( '' === $acceso || $nuevo > $acceso ) ) {
+				$ok = $wpdb->update(
+					$t_miembros,
+					array( 'acceso_hasta' => $nuevo ),
+					array( 'id' => (int) $socia->id ),
+					array( '%s' ),
+					array( '%d' )
+				);
+				if ( false === $ok ) {
+					throw new RuntimeException( 'no se pudo extender acceso_hasta: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
+				}
+			}
+			return false;
+		} catch ( Throwable $e ) {
+			self::registrar_log_mp( 'sub_error', array(
+				'paso'           => 'ciclo',
+				'preapproval_id' => $preapproval_id,
+				'mensaje'        => mb_substr( $e->getMessage(), 0, 300 ),
+			) );
+			self::sub_avisar_una_vez_por_hora( 'sub_error', $preapproval_id, array(
+				'paso'           => 'ciclo',
+				'preapproval_id' => $preapproval_id,
+				'mensaje'        => mb_substr( $e->getMessage(), 0, 300 ),
+			) );
+			return $es_baja;
+		}
+	}
+	/**
+	 * Cron diario: pasa a 'cancelada' SOLO las suscripciones con baja programada cuyo período pago ya terminó.
+	 * Condiciones (todas): baja_en NOT NULL, acceso_hasta vencido, preapproval_id no vacío y plan no nulo.
+	 * Nunca toca filas sin baja_en: trial, cargadas a mano, y socias de siempre quedan fuera.
+	 */
+	public static function revocar_bajas_sub_vencidas() {
+		global $wpdb;
+		try {
+			$t_miembros = CN_DB::tabla( 'miembros' );
+			$donde = "baja_en IS NOT NULL AND acceso_hasta IS NOT NULL AND acceso_hasta < UTC_TIMESTAMP() AND preapproval_id IS NOT NULL AND preapproval_id <> '' AND plan IS NOT NULL AND estado <> 'cancelada'";
+			$filas = $wpdb->get_results( "SELECT id FROM {$t_miembros} WHERE {$donde}" );
+			if ( '' !== (string) $wpdb->last_error ) {
+				throw new RuntimeException( 'error buscando bajas vencidas: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
+			}
+			if ( ! $filas ) {
+				return;
+			}
+			$n = $wpdb->query( $wpdb->prepare( "UPDATE {$t_miembros} SET estado = 'cancelada', fecha_modificacion = %s WHERE {$donde}", current_time( 'mysql', true ) ) );
+			if ( false === $n ) {
+				throw new RuntimeException( 'no se pudieron cancelar las bajas vencidas: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
+			}
+			self::registrar_log_mp( 'sub_baja_ejecutada', array(
+				'miembro_ids' => array_map( function ( $f ) {
+					return (int) $f->id;
+				}, $filas ),
+				'filas'       => (int) $n,
+			) );
+		} catch ( Throwable $e ) {
+			self::registrar_log_mp( 'sub_error', array( 'paso' => 'cron_bajas', 'mensaje' => mb_substr( $e->getMessage(), 0, 300 ) ) );
+			self::sub_avisar_una_vez_por_hora( 'sub_error', 'cron_bajas', array( 'paso' => 'cron_bajas', 'mensaje' => mb_substr( $e->getMessage(), 0, 300 ) ) );
+		}
 	}
 	// ==========================================================================
 	// TRIAL DE 7 DÍAS — endpoint nuevo, separado del flujo de suscripción mensual.
