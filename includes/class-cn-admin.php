@@ -1314,6 +1314,8 @@ class CN_Admin {
 			update_option( 'cn_sub_auto_activar', isset( $_POST['cn_sub_auto_activar'] ) ? '1' : '0' );
 			// Modo seguro: tildado por defecto. Tildado = ningún aviso de MP baja a una socia a "pausado".
 			update_option( 'cn_sub_modo_seguro', isset( $_POST['cn_sub_modo_seguro'] ) ? '1' : '0' );
+			// Fase 5: sync con Mercado Pago cada 30 min. Tildado por defecto.
+			update_option( 'cn_sync_mp_activo', isset( $_POST['cn_sync_mp_activo'] ) ? '1' : '0' );
 			update_option( 'cn_meta_capi_token', sanitize_text_field( wp_unslash( $_POST['cn_meta_capi_token'] ?? '' ) ) );
 			update_option( 'cn_google_drive_api_key', sanitize_text_field( wp_unslash( $_POST['cn_google_drive_api_key'] ?? '' ) ) );
 			update_option( 'cn_clase_especial_link', esc_url_raw( wp_unslash( $_POST['cn_clase_especial_link'] ?? '' ) ) );
@@ -1329,6 +1331,7 @@ class CN_Admin {
 		$plan_id_full   = CN_MP::get_plan_id( 'full' );
 		$sub_auto_activar = '1' === (string) get_option( 'cn_sub_auto_activar', '0' );
 		$sub_modo_seguro  = '1' === (string) get_option( 'cn_sub_modo_seguro', '1' );
+		$sync_mp_activo   = '1' === (string) get_option( 'cn_sync_mp_activo', '1' );
 		$capi_token   = CN_Meta_Capi::get_token();
 		$drive_key    = CN_Drive::get_api_key();
 		$clase_link   = get_option( 'cn_clase_especial_link', '' );
@@ -1389,6 +1392,13 @@ class CN_Admin {
 						<td>
 							<label><input type="checkbox" name="cn_sub_modo_seguro" value="1" <?php checked( $sub_modo_seguro ); ?>> Que un aviso de Mercado Pago nunca baje a una socia a "pausado"</label>
 							<p class="description">Tildado por defecto. Destildarlo hace que cancelaciones y pausas de Mercado Pago pasen a "pausado" al instante en las socias que no son de alta automática. Dejalo tildado.</p>
+						</td>
+					</tr>
+					<tr>
+						<th><label>Sincronizar con Mercado Pago (cada 30 min)</label></th>
+						<td>
+							<label><input type="checkbox" name="cn_sync_mp_activo" value="1" <?php checked( $sync_mp_activo ); ?>> Revisar en Mercado Pago las suscripciones ya vinculadas, sin depender de los webhooks</label>
+							<p class="description">Tildado por defecto. Cada 30 minutos revisa hasta 20 suscripciones: renovaciones y reanudaciones se aplican; cancelaciones y pausas solo programan la baja (sin cortar el acceso) si el Modo seguro está destildado. También avisa por n8n de las suscripciones autorizadas sin vincular hace más de 1 hora (no vincula nada).</p>
 						</td>
 					</tr>
 					<tr>
