@@ -254,6 +254,8 @@ class CN_MP {
 			),
 			'back_url' => home_url( '/club-natureza-miembros/' ),
 			'status'   => 'pending',
+			// Sin esto MP no avisa al webhook de las suscripciones sub_ (el trial sí lo manda).
+			'notification_url' => self::webhook_url(),
 		);
 		if ( '' !== $email ) {
 			$body['payer_email'] = $email;
