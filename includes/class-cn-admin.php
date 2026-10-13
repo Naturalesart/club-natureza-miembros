@@ -116,11 +116,180 @@ class CN_Admin {
 		</form>
 		<?php
 	}
+	/**
+	 * Lee y limpia los campos del bloque "Vincular suscripción de Mercado Pago" (Fase 4-G). El celular y el email
+	 * se validan de verdad en CN_Webhook; acá solo se limpian para poder volver a mostrarlos.
+	 */
+	protected static function vm_datos_post() {
+		return array(
+			'id'        => trim( sanitize_text_field( wp_unslash( $_POST['cn_vm_id'] ?? '' ) ) ),
+			'nombre'    => trim( sanitize_text_field( wp_unslash( $_POST['cn_vm_nombre'] ?? '' ) ) ),
+			'celular'   => trim( sanitize_text_field( wp_unslash( $_POST['cn_vm_celular'] ?? '' ) ) ),
+			'email'     => trim( sanitize_text_field( wp_unslash( $_POST['cn_vm_email'] ?? '' ) ) ),
+			'plan'      => sanitize_key( wp_unslash( $_POST['cn_vm_plan'] ?? '' ) ),
+			'notificar' => ! empty( $_POST['cn_vm_notificar'] ),
+		);
+	}
+	/**
+	 * Procesa el bloque "Vincular suscripción de Mercado Pago" (Fase 4-G). Dos pasos, mismo nonce y manage_options:
+	 *  - 'verificar': SOLO LECTURA. Consulta MP y muestra qué pasaría; no escribe nada en la base.
+	 *  - 'vincular': solo si viene del formulario de confirmación (cn_vm_confirmo = 1). Llama a
+	 *    CN_Webhook::vincular_suscripcion(), que vuelve a validar todo (MP incluido) por su cuenta.
+	 * Devuelve null si no se envió el formulario; si se envió, array( 'paso' => verificado|vinculado|error, 'datos' => array, ... ).
+	 */
+	protected static function procesar_vincular_mp() {
+		if ( ! isset( $_POST['cn_vm_accion'] ) ) {
+			return null;
+		}
+		if ( ! current_user_can( 'manage_options' ) ) {
+			return array( 'paso' => 'error', 'mensaje' => 'No tenés permisos para esto.', 'datos' => self::vm_datos_post() );
+		}
+		check_admin_referer( 'cn_vincular_mp', 'cn_vincular_mp_nonce' );
+		$datos  = self::vm_datos_post();
+		$accion = sanitize_key( wp_unslash( $_POST['cn_vm_accion'] ) );
+		if ( 'vincular' === $accion ) {
+			if ( '1' !== (string) wp_unslash( $_POST['cn_vm_confirmo'] ?? '' ) ) {
+				return array( 'paso' => 'error', 'mensaje' => 'Primero verificá la suscripción y después confirmá.', 'datos' => $datos );
+			}
+			$resultado = CN_Webhook::vincular_suscripcion( $datos['id'], $datos['nombre'], $datos['celular'], $datos['email'], $datos['plan'], $datos['notificar'] );
+			return array( 'paso' => 'vinculado', 'datos' => $datos, 'resultado' => $resultado );
+		}
+		if ( '' === $datos['id'] ) {
+			return array( 'paso' => 'error', 'mensaje' => 'Ingresá el ID de preapproval.', 'datos' => $datos );
+		}
+		$verificacion = CN_Webhook::vincular_suscripcion_verificar( $datos['id'], $datos['celular'], $datos['plan'] );
+		return array( 'paso' => 'verificado', 'datos' => $datos, 'verificacion' => $verificacion );
+	}
+	/** Bloque visual "Vincular suscripción de Mercado Pago" (Fase 4-G). $res es lo que devolvió procesar_vincular_mp(). */
+	protected static function bloque_vincular_mp( $res ) {
+		$planes  = CN_MP::get_planes();
+		$paso    = is_array( $res ) ? (string) $res['paso'] : '';
+		$vinculo = ( 'vinculado' === $paso && ! empty( $res['resultado']['ok'] ) );
+		$d       = array( 'id' => '', 'nombre' => '', 'celular' => '', 'email' => '', 'plan' => '', 'notificar' => false );
+		if ( is_array( $res ) && ! $vinculo ) {
+			$d = $res['datos']; // se vuelve a mostrar lo escrito (salvo después de un vínculo exitoso).
+		} elseif ( ! is_array( $res ) && isset( $_GET['cn_vincular_id'] ) ) {
+			// Viene del enlace "Vincular" de Cruce con Mercado Pago: solo precarga el ID.
+			$id_get = trim( sanitize_text_field( wp_unslash( $_GET['cn_vincular_id'] ) ) );
+			if ( preg_match( '/^[A-Za-z0-9_-]{16,64}$/', $id_get ) ) {
+				$d['id'] = $id_get;
+			}
+		}
+		?>
+		<h2 id="cn-vincular-mp">Vincular suscripción de Mercado Pago</h2>
+		<p style="max-width:720px;">Une a mano una suscripción <strong>ya autorizada</strong> en Mercado Pago con una socia (por ejemplo, una que el alta automática no vinculó). Primero <em>Verificar</em> (solo lectura: no cambia nada) y después <em>Vincular</em>.</p>
+		<?php
+		if ( 'error' === $paso ) {
+			self::aviso( $res['mensaje'], 'error' );
+		} elseif ( 'vinculado' === $paso ) {
+			$r    = $res['resultado'];
+			$tipo = ! empty( $r['ok'] ) ? 'success' : ( 'conflicto' === $r['accion'] ? 'warning' : 'error' );
+			$txt  = strtoupper( (string) $r['accion'] ) . ': ' . (string) $r['mensaje'];
+			if ( ! empty( $r['ok'] ) ) {
+				$txt .= ' Estado: ' . ( null === $r['estado_anterior'] ? '(sin socia previa)' : (string) $r['estado_anterior'] ) . ' → ' . (string) $r['estado_nuevo'] . '.';
+				$txt .= ( ! empty( $r['notificacion']['mail'] ) || ! empty( $r['notificacion']['capi'] ) )
+					? ' Se pidió enviar: ' . implode( ' y ', array_filter( array( ! empty( $r['notificacion']['mail'] ) ? 'mail de bienvenida' : '', ! empty( $r['notificacion']['capi'] ) ? 'evento Meta' : '' ) ) ) . '.'
+					: ' No se envió mail ni evento Meta.';
+			}
+			self::aviso( $txt, $tipo );
+		} elseif ( 'verificado' === $paso ) {
+			$v  = $res['verificacion'];
+			$mp = $v['mp'];
+			if ( ! $v['ok'] ) {
+				self::aviso( $v['error'], 'error' );
+			}
+			if ( ! empty( $mp['status'] ) ) {
+				$plan_txt = ! empty( $mp['plan'] ) ? (string) $mp['plan_nombre'] . ' — $' . number_format( (float) $mp['precio'], 0, ',', '.' ) . ( 'forzado' === $mp['plan_fuente'] ? ' (plan elegido a mano)' : ' (según el plan de Mercado Pago)' ) : '—';
+				$prox_txt = ! empty( $mp['next_payment_date'] ) ? substr( (string) $mp['next_payment_date'], 0, 10 ) : '—';
+				?>
+				<table class="widefat striped" style="max-width:720px;margin-bottom:12px;"><tbody>
+					<tr><th style="width:220px;">ID de preapproval</th><td><code><?php echo esc_html( $d['id'] ); ?></code></td></tr>
+					<tr><th>Estado en Mercado Pago</th><td><?php echo esc_html( $mp['status'] ); ?></td></tr>
+					<tr><th>Plan</th><td><?php echo esc_html( $plan_txt ); ?></td></tr>
+					<tr><th>Descripción (reason)</th><td><?php echo esc_html( '' !== (string) $mp['reason'] ? $mp['reason'] : '—' ); ?></td></tr>
+					<tr><th>Próximo cobro (next_payment_date)</th><td><?php echo esc_html( $prox_txt ); ?></td></tr>
+					<tr><th>Email del pagador</th><td><?php echo esc_html( '' !== (string) $mp['payer_email'] ? $mp['payer_email'] : '—' ); ?></td></tr>
+					<?php if ( ! empty( $v['socia'] ) ) : ?>
+						<tr><th>Socia encontrada por celular</th><td><?php echo esc_html( $v['socia']['nombre_apellido'] . ' (id ' . $v['socia']['id'] . ', estado: ' . $v['socia']['estado'] . ( ! empty( $v['socia']['en_trial'] ) ? ', en trial' : '' ) . ')' ); ?></td></tr>
+					<?php endif; ?>
+					<?php if ( $v['ok'] ) : ?>
+						<tr><th>Qué pasaría al vincular</th><td><strong><?php echo esc_html( $v['mensaje'] ); ?></strong></td></tr>
+					<?php endif; ?>
+				</tbody></table>
+				<?php
+			}
+			$puede_vincular = $v['ok'] && in_array( $v['accion_prevista'], array( 'insertada', 'activada', 'completada' ), true ) && '' !== $d['nombre'];
+			if ( $v['ok'] && ! in_array( $v['accion_prevista'], array( 'insertada', 'activada', 'completada' ), true ) && null !== $v['accion_prevista'] ) {
+				self::aviso( 'No se puede vincular: ' . $v['mensaje'], 'warning' );
+			} elseif ( $v['ok'] && null === $v['accion_prevista'] ) {
+				self::aviso( $v['mensaje'], 'info' );
+			} elseif ( $v['ok'] && '' === $d['nombre'] ) {
+				self::aviso( 'Falta el nombre y apellido para poder vincular.', 'warning' );
+			}
+			if ( $puede_vincular ) :
+				?>
+				<form method="post" style="max-width:720px;margin-bottom:16px;" action="<?php echo esc_url( '#cn-vincular-mp' ); ?>">
+					<?php wp_nonce_field( 'cn_vincular_mp', 'cn_vincular_mp_nonce' ); ?>
+					<input type="hidden" name="cn_vm_confirmo" value="1">
+					<input type="hidden" name="cn_vm_id" value="<?php echo esc_attr( $d['id'] ); ?>">
+					<input type="hidden" name="cn_vm_nombre" value="<?php echo esc_attr( $d['nombre'] ); ?>">
+					<input type="hidden" name="cn_vm_celular" value="<?php echo esc_attr( $d['celular'] ); ?>">
+					<input type="hidden" name="cn_vm_email" value="<?php echo esc_attr( $d['email'] ); ?>">
+					<input type="hidden" name="cn_vm_plan" value="<?php echo esc_attr( $d['plan'] ); ?>">
+					<p><label><input type="checkbox" name="cn_vm_notificar" value="1" <?php checked( ! empty( $d['notificar'] ) ); ?>> Enviar mail de bienvenida y evento Meta</label>
+						<span class="description">(solo cuando se crea o activa una socia)</span></p>
+					<p><button type="submit" name="cn_vm_accion" value="vincular" class="button button-primary">Confirmar y vincular</button></p>
+				</form>
+				<?php
+			endif;
+		}
+		?>
+		<form method="post" style="max-width:480px;" action="<?php echo esc_url( '#cn-vincular-mp' ); ?>">
+			<?php wp_nonce_field( 'cn_vincular_mp', 'cn_vincular_mp_nonce' ); ?>
+			<table class="form-table">
+				<tr>
+					<th><label>ID de preapproval</label></th>
+					<td><input type="text" name="cn_vm_id" class="regular-text" required value="<?php echo esc_attr( $d['id'] ); ?>"></td>
+				</tr>
+				<tr>
+					<th><label>Nombre y Apellido</label></th>
+					<td><input type="text" name="cn_vm_nombre" class="regular-text" required value="<?php echo esc_attr( $d['nombre'] ); ?>"></td>
+				</tr>
+				<tr>
+					<th><label>Celular</label></th>
+					<td><input type="text" name="cn_vm_celular" class="regular-text" required value="<?php echo esc_attr( $d['celular'] ); ?>"></td>
+				</tr>
+				<tr>
+					<th><label>Email (opcional)</label></th>
+					<td><input type="email" name="cn_vm_email" class="regular-text" value="<?php echo esc_attr( $d['email'] ); ?>"></td>
+				</tr>
+				<tr>
+					<th><label>Plan</label></th>
+					<td>
+						<select name="cn_vm_plan">
+							<option value="" <?php selected( $d['plan'], '' ); ?>>Automático (según el plan de Mercado Pago)</option>
+							<?php foreach ( $planes as $clave => $info ) : ?>
+								<option value="<?php echo esc_attr( $clave ); ?>" <?php selected( $d['plan'], $clave ); ?>><?php echo esc_html( $info['nombre'] . ' — $' . number_format( (float) $info['precio'], 0, ',', '.' ) ); ?></option>
+							<?php endforeach; ?>
+						</select>
+						<p class="description">Solo hace falta elegirlo si es el plan viejo de $15.000; en los demás se deduce solo.</p>
+					</td>
+				</tr>
+				<tr>
+					<th>Avisos</th>
+					<td><label><input type="checkbox" name="cn_vm_notificar" value="1" <?php checked( ! empty( $d['notificar'] ) ); ?>> Enviar mail de bienvenida y evento Meta</label></td>
+				</tr>
+			</table>
+			<p><button type="submit" name="cn_vm_accion" value="verificar" class="button button-secondary">Verificar</button></p>
+		</form>
+		<?php
+	}
 	public static function pagina_socias() {
 		if ( ! current_user_can( 'manage_options' ) ) return;
 		global $wpdb;
 		$tabla = CN_DB::tabla( 'miembros' );
 		$cn_link_res = self::procesar_generar_link(); // Fase 2C: solo actúa si se envió su propio formulario.
+		$cn_vm_res   = self::procesar_vincular_mp(); // Fase 4-G: solo actúa si se envió su propio formulario.
 		// Alta rápida.
 		if ( isset( $_POST['cn_admin_alta_socia'] ) && check_admin_referer( 'cn_alta_socia', 'cn_alta_socia_nonce' ) ) {
 			$nombre  = sanitize_text_field( wp_unslash( $_POST['cn_nombre'] ?? '' ) );
@@ -218,6 +387,7 @@ class CN_Admin {
 				<?php submit_button( 'Dar de alta', 'primary', 'cn_admin_alta_socia' ); ?>
 			</form>
 			<?php self::bloque_generar_link( $cn_link_res ); ?>
+			<?php self::bloque_vincular_mp( $cn_vm_res ); ?>
 			<h2>Listado</h2>
 			<?php
 			// Resumen de socias por tipo (solo lectura, calculado sobre $socias ya cargada).
@@ -610,7 +780,7 @@ class CN_Admin {
 			.cn-cruce-ids td, .cn-cruce-ids th { -webkit-user-select: text; user-select: text; vertical-align: middle; }
 			.cn-cruce-ids code.cn-id { -webkit-user-select: all; user-select: all; word-break: break-all; }
 		</style>
-		<table class="widefat striped cn-cruce-ids"><thead><tr><th>ID de preapproval</th><th>external_reference</th><th>Estado</th><th>Plan / reason</th><th>Email del pagador</th><th>Alta</th><th>next_payment_date</th></tr></thead><tbody>
+		<table class="widefat striped cn-cruce-ids"><thead><tr><th>ID de preapproval</th><th>external_reference</th><th>Estado</th><th>Plan / reason</th><th>Email del pagador</th><th>Alta</th><th>next_payment_date</th><th>Vincular</th></tr></thead><tbody>
 		<?php
 		foreach ( array( 'authorized', 'paused', 'cancelled' ) as $estado_det ) {
 			foreach ( $por_estado[ $estado_det ] as $r ) {
@@ -635,11 +805,20 @@ class CN_Admin {
 				echo '<td>' . esc_html( $dash( isset( $r['payer_email'] ) ? $r['payer_email'] : '' ) ) . '</td>';
 				echo '<td>' . esc_html( $dia( isset( $r['date_created'] ) ? $r['date_created'] : '' ) ) . '</td>';
 				echo '<td>' . esc_html( $dia( isset( $r['next_payment_date'] ) ? $r['next_payment_date'] : '' ) ) . '</td>';
+				// Fase 4-G: enlace que precarga el ID en el bloque "Vincular suscripción" (solo suscripciones autorizadas).
+				echo '<td>';
+				if ( '—' !== $id_det && 'authorized' === $estado_det && preg_match( '/^[A-Za-z0-9_-]{16,64}$/', $id_det ) ) {
+					$url_vinc = add_query_arg( array( 'page' => 'cn-socias', 'cn_vincular_id' => $id_det ), admin_url( 'admin.php' ) ) . '#cn-vincular-mp';
+					echo '<a class="button button-small" href="' . esc_url( $url_vinc ) . '">Vincular</a>';
+				} else {
+					echo '&mdash;';
+				}
+				echo '</td>';
 				echo '</tr>';
 			}
 		}
 		if ( 0 === $total_det ) {
-			echo '<tr><td colspan="7">Mercado Pago no devolvi&oacute; suscripciones.</td></tr>';
+			echo '<tr><td colspan="8">Mercado Pago no devolvi&oacute; suscripciones.</td></tr>';
 		}
 		?>
 		</tbody></table>
