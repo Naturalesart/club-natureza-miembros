@@ -19,9 +19,9 @@ class CN_MP {
 		return (float) get_option( 'cn_mp_precio_trial', 7000 );
 	}
 	/**
-	 * Planes de suscripción (alta automática, Fase 2A). El precio vive en el plan de
-	 * Mercado Pago (preapproval_plan_id), acá solo se deja como referencia. Los IDs
-	 * de plan salen de las opciones cn_plan_id_basico / cn_plan_id_full (vacías por defecto).
+	 * Planes de suscripción (alta automática). El link se genera SIN preapproval_plan_id
+	 * (con plan asociado MP exige tarjeta al crearlo), así que el monto sale de este mapa.
+	 * Las opciones cn_plan_id_basico / cn_plan_id_full quedan solo como dato informativo.
 	 */
 	const PLANES = array(
 		'basico' => array( 'nombre' => 'Club Natureza', 'precio' => 15500 ),
@@ -186,10 +186,6 @@ class CN_MP {
 		if ( ! is_string( $plan ) || ! isset( $planes[ $plan ] ) ) {
 			return new WP_Error( 'cn_plan_invalido', 'Plan inválido.' );
 		}
-		$plan_id = self::get_plan_id( $plan );
-		if ( '' === $plan_id ) {
-			return new WP_Error( 'cn_plan_sin_id', 'Falta configurar el ID del plan de Mercado Pago para "' . $plan . '".' );
-		}
 		$token = self::get_access_token();
 		if ( '' === $token ) {
 			return new WP_Error( 'cn_sin_token', 'Falta configurar el access token de Mercado Pago (Suscripciones).' );
@@ -245,11 +241,19 @@ class CN_MP {
 			return new WP_Error( 'cn_susc_pendiente', 'No pudimos registrar la suscripción. Probá de nuevo.' );
 		}
 		$body = array(
-			'preapproval_plan_id' => $plan_id,
-			'reason'              => $planes[ $plan ]['nombre'],
-			'external_reference'  => $external_reference,
-			'back_url'            => home_url( '/club-natureza-miembros/' ),
-			'status'              => 'pending',
+			// Sin preapproval_plan_id: MP exige tarjeta en el momento (card_token_id) para las
+			// suscripciones con plan asociado. Sin plan, el link para pagar después sí existe.
+			// Mismo formato que crear_preapproval(); el monto sale del mapa PLANES.
+			'reason'             => 'Club Natureza — ' . $planes[ $plan ]['nombre'],
+			'external_reference' => $external_reference,
+			'auto_recurring'     => array(
+				'frequency'          => 1,
+				'frequency_type'     => 'months',
+				'transaction_amount' => (float) $planes[ $plan ]['precio'],
+				'currency_id'        => 'ARS',
+			),
+			'back_url' => home_url( '/club-natureza-miembros/' ),
+			'status'   => 'pending',
 		);
 		if ( '' !== $email ) {
 			$body['payer_email'] = $email;

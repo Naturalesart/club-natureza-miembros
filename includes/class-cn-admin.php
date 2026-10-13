@@ -101,7 +101,10 @@ class CN_Admin {
 				</tr>
 				<tr>
 					<th><label>Email (opcional)</label></th>
-					<td><input type="email" name="cn_gl_email" class="regular-text" value="<?php echo esc_attr( $val( 'cn_gl_email' ) ); ?>"></td>
+					<td>
+						<input type="email" name="cn_gl_email" class="regular-text" value="<?php echo esc_attr( $val( 'cn_gl_email' ) ); ?>">
+						<p class="description">Conviene que sea el email de la cuenta de Mercado Pago de la socia</p>
+					</td>
 				</tr>
 			</table>
 			<?php submit_button( 'Generar link', 'secondary', 'cn_admin_generar_link' ); ?>
