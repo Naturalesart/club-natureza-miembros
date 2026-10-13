@@ -44,6 +44,11 @@ class CN_Admin {
 		if ( empty( $norm['valido'] ) || '' === (string) $norm['normalizado'] ) {
 			return array( 'ok' => false, 'mensaje' => 'El celular no es válido. Revisalo (código de área + número).', 'link' => '' );
 		}
+		// El email es obligatorio (Mercado Pago lo exige para la suscripción): se valida acá, sin llamar a MP.
+		$email = sanitize_email( trim( $email ) );
+		if ( '' === $email || ! is_email( $email ) ) {
+			return array( 'ok' => false, 'mensaje' => 'Ingresá un email válido: es obligatorio para generar el link.', 'link' => '' );
+		}
 		$res = CN_MP::crear_suscripcion_link( $plan, $nombre, $norm['normalizado'], $email, 'panel', array() );
 		if ( is_wp_error( $res ) ) {
 			return array( 'ok' => false, 'mensaje' => $res->get_error_message(), 'link' => '' );
@@ -100,9 +105,9 @@ class CN_Admin {
 					<td><input type="text" name="cn_gl_celular" class="regular-text" required value="<?php echo esc_attr( $val( 'cn_gl_celular' ) ); ?>"></td>
 				</tr>
 				<tr>
-					<th><label>Email (opcional)</label></th>
+					<th><label>Email</label></th>
 					<td>
-						<input type="email" name="cn_gl_email" class="regular-text" value="<?php echo esc_attr( $val( 'cn_gl_email' ) ); ?>">
+						<input type="email" name="cn_gl_email" class="regular-text" required value="<?php echo esc_attr( $val( 'cn_gl_email' ) ); ?>">
 						<p class="description">Conviene que sea el email de la cuenta de Mercado Pago de la socia</p>
 					</td>
 				</tr>
