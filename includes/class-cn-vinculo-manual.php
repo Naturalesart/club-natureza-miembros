@@ -253,11 +253,11 @@ class CN_Vinculo_Manual extends CN_Webhook {
 	}
 
 	protected static function resultado_base() {
-		return array( 'ok' => false, 'accion' => 'rechazada', 'mensaje' => '', 'socia_id' => null, 'estado_anterior' => null, 'estado_nuevo' => null, 'notificacion' => '' );
+		return array( 'ok' => false, 'accion' => 'rechazada', 'mensaje' => '', 'socia_id' => null, 'estado_anterior' => null, 'estado_nuevo' => null, 'notificacion' => '', 'motivo' => '' );
 	}
 
 	/** Confirma el vínculo. Revalida todo del lado del servidor (MP incluido). */
-	public static function confirmar( $d, $norm ) {
+	public static function confirmar( $d, $norm, $log_tipo = 'vinculo_manual' ) {
 		global $wpdb;
 		$res = self::resultado_base();
 		$id  = $d['id'];
@@ -265,10 +265,12 @@ class CN_Vinculo_Manual extends CN_Webhook {
 		$mp = self::consultar( $id ); // antes de abrir la transacción: no se bloquean filas esperando a MP.
 		if ( ! $mp['ok'] ) {
 			$res['mensaje'] = $mp['error'];
+			$res['motivo']  = 'mp';
 			return $res;
 		}
 		if ( ! $mp['confirmable'] ) {
 			$res['mensaje'] = $mp['motivo'] . ' No se cambió nada.';
+			$res['motivo']  = 'no_confirmable';
 			self::registrar_log_mp( 'sub_vinculacion_rechazada', array( 'preapproval_id' => $id, 'origen' => 'vinculo_manual', 'motivo' => mb_substr( $mp['motivo'], 0, 200 ) ) );
 			return $res;
 		}
@@ -278,15 +280,18 @@ class CN_Vinculo_Manual extends CN_Webhook {
 		if ( 'nueva' === $eleccion ) {
 			if ( $cands && ! self::ya_vinculada_con_celular( $id, $norm ) ) {
 				$res['mensaje'] = 'Ahora hay socias posibles para ese celular: volvé a previsualizar y elegí. No se cambió nada.';
+				$res['motivo']  = 'ambigua';
 				return $res;
 			}
 			if ( '' === $d['nombre'] || '' === $d['email'] ) {
 				$res['mensaje'] = 'Para crear una socia nueva hacen falta nombre y apellido y un email válido. No se cambió nada.';
+				$res['motivo']  = 'datos';
 				return $res;
 			}
 		} elseif ( ctype_digit( $eleccion ) && (int) $eleccion > 0 ) {
 			if ( ! isset( $cands[ (int) $eleccion ] ) ) {
 				$res['mensaje'] = 'La socia elegida no es una de las posibles para ese celular. Volvé a previsualizar. No se cambió nada.';
+				$res['motivo']  = 'ambigua';
 				return $res;
 			}
 		} else {
@@ -326,6 +331,7 @@ class CN_Vinculo_Manual extends CN_Webhook {
 							$wpdb->query( 'ROLLBACK' );
 							$en_transaccion = false;
 							$res['mensaje'] = 'Mientras tanto apareció una socia con ese celular. Volvé a previsualizar. No se cambió nada.';
+							$res['motivo']  = 'ambigua';
 							return $res;
 						}
 					}
@@ -458,12 +464,13 @@ class CN_Vinculo_Manual extends CN_Webhook {
 			self::sub_avisar_una_vez_por_hora( 'sub_error', $clave, $detalle );
 			$res            = self::resultado_base();
 			$res['mensaje'] = 'Error interno: no se guardó nada. Quedó registrado en el log de Mercado Pago.';
+			$res['motivo']  = 'error';
 			return $res;
 		}
 
 		// Ya confirmado: auditoría (sin emails ni celulares ni tokens).
 		$usuario = wp_get_current_user();
-		self::registrar_log_mp( 'vinculo_manual', array(
+		self::registrar_log_mp( $log_tipo, array(
 			'preapproval_id'  => $id,
 			'miembro_id'      => $res['socia_id'],
 			'accion'          => $res['accion'],

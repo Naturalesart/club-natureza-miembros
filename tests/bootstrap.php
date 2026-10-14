@@ -118,6 +118,15 @@ function current_user_can( $c ) {
 function check_admin_referer( $a = '', $b = '' ) {
 	return true;
 }
+function wp_enqueue_style( $h ) {
+}
+function add_shortcode( $t, $cb ) {
+}
+function add_action( $h, $cb ) {
+}
+function wp_verify_nonce( $n, $a ) {
+	return false !== ( $GLOBALS['cn_nonce_ok'] ?? true );
+}
 function get_current_user_id() {
 	return 1;
 }
@@ -286,6 +295,7 @@ require_once $cn_raiz . 'includes/class-cn-mp.php';
 require_once $cn_raiz . 'includes/class-cn-webhook.php';
 require_once $cn_raiz . 'includes/class-cn-vinculo.php';
 require_once $cn_raiz . 'includes/class-cn-vinculo-manual.php';
+require_once $cn_raiz . 'includes/class-cn-retorno.php';
 if ( file_exists( $cn_raiz . 'includes/class-cn-sync.php' ) ) {
 	require_once $cn_raiz . 'includes/class-cn-sync.php';
 }
