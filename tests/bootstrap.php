@@ -118,6 +118,12 @@ function current_user_can( $c ) {
 function check_admin_referer( $a = '', $b = '' ) {
 	return true;
 }
+function get_current_user_id() {
+	return 1;
+}
+function wp_get_current_user() {
+	return (object) array( 'user_login' => 'admin' );
+}
 function sanitize_key( $s ) {
 	return preg_replace( '/[^a-z0-9_\-]/', '', strtolower( (string) $s ) );
 }
@@ -199,6 +205,9 @@ class CN_Fake_Wpdb {
 		}
 		return null;
 	}
+	public function esc_like( $t ) {
+		return addcslashes( (string) $t, '_%\\' );
+	}
 	public function prepare( $sql, ...$args ) {
 		if ( 1 === count( $args ) && is_array( $args[0] ) ) {
 			$args = $args[0];
@@ -276,6 +285,7 @@ require_once $cn_raiz . 'includes/class-cn-db.php';
 require_once $cn_raiz . 'includes/class-cn-mp.php';
 require_once $cn_raiz . 'includes/class-cn-webhook.php';
 require_once $cn_raiz . 'includes/class-cn-vinculo.php';
+require_once $cn_raiz . 'includes/class-cn-vinculo-manual.php';
 if ( file_exists( $cn_raiz . 'includes/class-cn-sync.php' ) ) {
 	require_once $cn_raiz . 'includes/class-cn-sync.php';
 }

@@ -22,6 +22,7 @@ require_once CN_PATH . 'includes/class-cn-mp.php';
 require_once CN_PATH . 'includes/class-cn-meta-capi.php';
 require_once CN_PATH . 'includes/class-cn-webhook.php';
 require_once CN_PATH . 'includes/class-cn-vinculo.php';
+require_once CN_PATH . 'includes/class-cn-vinculo-manual.php';
 require_once CN_PATH . 'includes/class-cn-sync.php';
 require_once CN_PATH . 'includes/class-cn-shortcodes.php';
 require_once CN_PATH . 'includes/class-cn-admin.php';

@@ -422,6 +422,7 @@ class CN_Admin {
 		$tabla = CN_DB::tabla( 'miembros' );
 		$cn_link_res = self::procesar_generar_link(); // Fase 2C: solo actúa si se envió su propio formulario.
 		$cn_vm_res   = self::procesar_vincular_mp(); // Fase 4-G: solo actúa si se envió su propio formulario.
+		$cn_vm2_res  = CN_Vinculo_Manual::procesar(); // Vincular por celular: solo actúa si se envió su propio formulario.
 		// Alta rápida.
 		if ( isset( $_POST['cn_admin_alta_socia'] ) && check_admin_referer( 'cn_alta_socia', 'cn_alta_socia_nonce' ) ) {
 			$nombre  = sanitize_text_field( wp_unslash( $_POST['cn_nombre'] ?? '' ) );
@@ -520,6 +521,7 @@ class CN_Admin {
 			</form>
 			<?php self::bloque_generar_link( $cn_link_res ); ?>
 			<?php self::bloque_vincular_mp( $cn_vm_res ); ?>
+			<?php CN_Vinculo_Manual::render( $cn_vm2_res ); ?>
 			<?php self::bloque_duplicados( $socias ); // Fase 5: solo lectura, sobre el listado completo (antes de filtrar). ?>
 			<h2>Listado</h2>
 			<?php
