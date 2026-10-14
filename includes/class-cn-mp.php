@@ -330,6 +330,38 @@ class CN_MP {
 	public static function buscar_authorized_payments( $preapproval_id ) {
 		return self::get( '/authorized_payments/search?preapproval_id=' . rawurlencode( (string) $preapproval_id ), self::get_access_token() );
 	}
+	/**
+	 * Igual que obtener_preapproval() pero distinguiendo el motivo del fallo (solo lectura). Lo usa "Vincular por celular".
+	 * Deja el mismo rastro 'mp_api_error' que get() en caso de error.
+	 *
+	 * @return array{ok:bool,http:mixed,data:?array}  http: código HTTP, 'wp_error' o 'sin_token'.
+	 */
+	public static function obtener_preapproval_detalle( $id ) {
+		$token = self::get_access_token();
+		if ( ! $token ) {
+			return array( 'ok' => false, 'http' => 'sin_token', 'data' => null );
+		}
+		$path      = '/preapproval/' . rawurlencode( (string) $id );
+		$respuesta = wp_remote_get( self::API_BASE . $path, array(
+			'timeout' => 20,
+			'headers' => array( 'Authorization' => 'Bearer ' . $token ),
+		) );
+		if ( is_wp_error( $respuesta ) ) {
+			self::registrar_error_api( $path, 'wp_error', $respuesta->get_error_message() );
+			return array( 'ok' => false, 'http' => 'wp_error', 'data' => null );
+		}
+		$codigo = (int) wp_remote_retrieve_response_code( $respuesta );
+		if ( $codigo < 200 || $codigo >= 300 ) {
+			self::registrar_error_api( $path, $codigo, wp_remote_retrieve_body( $respuesta ) );
+			return array( 'ok' => false, 'http' => $codigo, 'data' => null );
+		}
+		$data = json_decode( wp_remote_retrieve_body( $respuesta ), true );
+		if ( ! is_array( $data ) ) {
+			self::registrar_error_api( $path, $codigo, 'respuesta no JSON' );
+			return array( 'ok' => false, 'http' => $codigo, 'data' => null );
+		}
+		return array( 'ok' => true, 'http' => $codigo, 'data' => $data );
+	}
 	protected static function get( $path, $token ) {
 		if ( ! $token ) {
 			return null;
