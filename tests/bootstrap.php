@@ -118,6 +118,9 @@ function current_user_can( $c ) {
 function check_admin_referer( $a = '', $b = '' ) {
 	return true;
 }
+function sanitize_textarea_field( $s ) {
+	return trim( strip_tags( (string) $s ) );
+}
 function wp_enqueue_style( $h ) {
 }
 function add_shortcode( $t, $cb ) {
@@ -296,6 +299,7 @@ require_once $cn_raiz . 'includes/class-cn-webhook.php';
 require_once $cn_raiz . 'includes/class-cn-vinculo.php';
 require_once $cn_raiz . 'includes/class-cn-vinculo-manual.php';
 require_once $cn_raiz . 'includes/class-cn-retorno.php';
+require_once $cn_raiz . 'includes/class-cn-vinculo-lote.php';
 if ( file_exists( $cn_raiz . 'includes/class-cn-sync.php' ) ) {
 	require_once $cn_raiz . 'includes/class-cn-sync.php';
 }

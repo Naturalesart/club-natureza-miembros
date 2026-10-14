@@ -24,6 +24,7 @@ require_once CN_PATH . 'includes/class-cn-webhook.php';
 require_once CN_PATH . 'includes/class-cn-vinculo.php';
 require_once CN_PATH . 'includes/class-cn-vinculo-manual.php';
 require_once CN_PATH . 'includes/class-cn-retorno.php';
+require_once CN_PATH . 'includes/class-cn-vinculo-lote.php';
 require_once CN_PATH . 'includes/class-cn-sync.php';
 require_once CN_PATH . 'includes/class-cn-shortcodes.php';
 require_once CN_PATH . 'includes/class-cn-admin.php';
