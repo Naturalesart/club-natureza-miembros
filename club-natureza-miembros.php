@@ -23,12 +23,14 @@ require_once CN_PATH . 'includes/class-cn-meta-capi.php';
 require_once CN_PATH . 'includes/class-cn-webhook.php';
 require_once CN_PATH . 'includes/class-cn-vinculo.php';
 require_once CN_PATH . 'includes/class-cn-vinculo-manual.php';
+require_once CN_PATH . 'includes/class-cn-retorno.php';
 require_once CN_PATH . 'includes/class-cn-sync.php';
 require_once CN_PATH . 'includes/class-cn-shortcodes.php';
 require_once CN_PATH . 'includes/class-cn-admin.php';
 require_once CN_PATH . 'includes/class-cn-clarity.php';
 register_activation_hook( __FILE__, array( 'CN_Activator', 'activar' ) );
 add_action( 'init', array( 'CN_Shortcodes', 'registrar' ) );
+add_action( 'init', array( 'CN_Retorno', 'registrar' ) );
 add_action( 'rest_api_init', array( 'CN_Webhook', 'registrar_rutas' ) );
 // maybe_upgrade se dispara en init (todo request) además de admin_init: sin
 // esta línea, cuando cambia DB_VERSION las nuevas columnas no existen hasta

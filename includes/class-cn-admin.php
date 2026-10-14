@@ -1320,6 +1320,8 @@ class CN_Admin {
 			update_option( 'cn_sync_mp_activo', isset( $_POST['cn_sync_mp_activo'] ) ? '1' : '0' );
 			// Fase 5: guarda del cron de trials (mira en MP si pagó por link directo antes de cancelar). Tildado por defecto.
 			update_option( 'cn_guarda_trial_mp', isset( $_POST['cn_guarda_trial_mp'] ) ? '1' : '0' );
+			// Página de retorno de suscripciones por link directo ([cn_retorno_suscripcion]). Apagada por defecto.
+			update_option( 'cn_retorno_activo', isset( $_POST['cn_retorno_activo'] ) ? '1' : '0' );
 			update_option( 'cn_meta_capi_token', sanitize_text_field( wp_unslash( $_POST['cn_meta_capi_token'] ?? '' ) ) );
 			update_option( 'cn_google_drive_api_key', sanitize_text_field( wp_unslash( $_POST['cn_google_drive_api_key'] ?? '' ) ) );
 			update_option( 'cn_clase_especial_link', esc_url_raw( wp_unslash( $_POST['cn_clase_especial_link'] ?? '' ) ) );
@@ -1337,6 +1339,7 @@ class CN_Admin {
 		$sub_modo_seguro  = '1' === (string) get_option( 'cn_sub_modo_seguro', '1' );
 		$sync_mp_activo   = '1' === (string) get_option( 'cn_sync_mp_activo', '1' );
 		$guarda_trial_mp  = '1' === (string) get_option( 'cn_guarda_trial_mp', '1' );
+		$retorno_activo   = '1' === (string) get_option( 'cn_retorno_activo', '0' );
 		$capi_token   = CN_Meta_Capi::get_token();
 		$drive_key    = CN_Drive::get_api_key();
 		$clase_link   = get_option( 'cn_clase_especial_link', '' );
@@ -1404,6 +1407,13 @@ class CN_Admin {
 						<td>
 							<label><input type="checkbox" name="cn_sync_mp_activo" value="1" <?php checked( $sync_mp_activo ); ?>> Revisar en Mercado Pago las suscripciones ya vinculadas, sin depender de los webhooks</label>
 							<p class="description">Tildado por defecto. Cada 30 minutos revisa hasta 20 suscripciones: renovaciones y reanudaciones se aplican; cancelaciones y pausas solo programan la baja (sin cortar el acceso) si el Modo seguro está destildado. También avisa por n8n de las suscripciones autorizadas sin vincular hace más de 1 hora (no vincula nada).</p>
+						</td>
+					</tr>
+					<tr>
+						<th><label>Página de retorno de suscripción</label></th>
+						<td>
+							<label><input type="checkbox" name="cn_retorno_activo" value="1" <?php checked( $retorno_activo ); ?>> Activar el formulario de la página con <code>[cn_retorno_suscripcion]</code></label>
+							<p class="description">Apagado por defecto. Apagado, esa página solo muestra un mensaje de agradecimiento (sin formulario ni consulta a Mercado Pago). Prendido, la clienta que paga por el link directo del plan deja su celular y queda activa sola.</p>
 						</td>
 					</tr>
 					<tr>
