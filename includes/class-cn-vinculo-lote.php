@@ -210,6 +210,55 @@ class CN_Vinculo_Lote extends CN_Vinculo_Manual {
 		);
 	}
 
+	/**
+	 * Completa celular_texto_plano de una ficha que lo tiene vacío o inválido. Solo si el celular tipeado (normalizado)
+	 * coincide con celular_hint Y con celular_hash (password_verify). Es lo único que se escribe; backup antes.
+	 * El celular tipeado nunca se devuelve ni se registra.
+	 */
+	protected static function completar_celular( $sid, $celular ) {
+		global $wpdb;
+		$err = function ( $m ) {
+			return array( 'paso' => 'celular', 'ok' => false, 'mensaje' => $m . ' No se cambió nada.', 'texto' => '' );
+		};
+		if ( $sid <= 0 ) {
+			return $err( 'Indicá el id de la socia.' );
+		}
+		$socia = self::leer_socia( $sid );
+		if ( ! $socia ) {
+			return $err( 'No existe la socia #' . $sid . '.' );
+		}
+		$actual = CN_Helpers::normalizar_celular( (string) $socia->celular_texto_plano );
+		if ( ! empty( $actual['valido'] ) ) {
+			return $err( 'La socia #' . $sid . ' ya tiene un celular guardado válido.' );
+		}
+		$norm = CN_Helpers::normalizar_celular( $celular );
+		if ( empty( $norm['valido'] ) ) {
+			return $err( 'El celular no es válido (se esperan 10 dígitos con código de área, sin 0 ni 15).' );
+		}
+		if ( CN_Helpers::hint_celular( $norm['normalizado'] ) !== (string) $socia->celular_hint ) {
+			return $err( 'Los últimos 4 dígitos no coinciden con los de la ficha (' . CN_Vinculo::mascara_celular( $socia->celular_hint ) . ').' );
+		}
+		if ( ! CN_Helpers::verificar_celular( $norm['normalizado'], (string) $socia->celular_hash ) ) {
+			return $err( 'Ese celular no es el de la ficha (no coincide con el guardado).' );
+		}
+		try {
+			self::backup( $socia, '' ); // lanza si no se pudo guardar: entonces no se escribe.
+		} catch ( Exception $e ) {
+			return $err( 'No se pudo guardar el backup previo.' );
+		}
+		$ok = $wpdb->update(
+			CN_DB::tabla( 'miembros' ),
+			array( 'celular_texto_plano' => $norm['normalizado'] ),
+			array( 'id' => (int) $sid ),
+			array( '%s' ),
+			array( '%d' )
+		);
+		if ( false === $ok ) {
+			return $err( 'No se pudo guardar.' );
+		}
+		return array( 'paso' => 'celular', 'ok' => true, 'mensaje' => 'Listo: se completó el celular de la socia #' . $sid . ' (' . CN_Vinculo::mascara_celular( $socia->celular_hint ) . ').', 'texto' => '' );
+	}
+
 	/** Trae de MP y de la base lo necesario y arma el paso "candidatas". SOLO LECTURA. */
 	protected static function cargar_candidatas( $texto_previo ) {
 		global $wpdb;
@@ -292,6 +341,12 @@ class CN_Vinculo_Lote extends CN_Vinculo_Manual {
 		}
 		check_admin_referer( self::NONCE_L, 'cn_vl_nonce' );
 		$accion = sanitize_key( wp_unslash( $_POST['cn_vl_accion'] ) );
+		if ( 'completar_celular' === $accion ) {
+			return self::completar_celular(
+				absint( $_POST['cn_vl_cc_id'] ?? 0 ),
+				sanitize_text_field( wp_unslash( $_POST['cn_vl_cc_celular'] ?? '' ) )
+			);
+		}
 		if ( 'candidatas' === $accion ) {
 			return self::cargar_candidatas( $texto ); // solo completa el texto: no escribe nada.
 		}
@@ -366,6 +421,9 @@ class CN_Vinculo_Lote extends CN_Vinculo_Manual {
 		if ( 'error' === $paso ) {
 			self::aviso_html( $res['mensaje'], 'error' );
 		}
+		if ( 'celular' === $paso ) {
+			self::aviso_html( $res['mensaje'], $res['ok'] ? 'success' : 'error' );
+		}
 		if ( 'candidatas' === $paso ) {
 			$c = $res['cand'];
 			echo '<p><strong>' . (int) count( $c['pares'] ) . ' candidata(s) segura(s) cargada(s) en el cuadro de abajo.</strong> Todavía no se vinculó nada: revisalas con <em>Previsualizar</em>.';
@@ -422,6 +480,14 @@ class CN_Vinculo_Lote extends CN_Vinculo_Manual {
 				<p><label>Para confirmar escribí <strong><?php echo esc_html( self::FRASE ); ?></strong>: <input type="text" name="cn_vl_frase" autocomplete="off" style="width:140px;"></label></p>
 				<p><button type="submit" name="cn_vl_accion" value="confirmar" class="button button-primary">Confirmar (máx. <?php echo (int) self::MAX_CONFIRM; ?>)</button></p>
 			<?php endif; ?>
+		</form>
+		<h3>Completar celular</h3>
+		<p style="max-width:760px;">Para una ficha que quedó <em>sin celular válido</em>: ingresá el id de la socia y su celular completo. Solo se guarda si los últimos 4 dígitos <strong>y</strong> el celular protegido de la ficha coinciden; si no, no se cambia nada.</p>
+		<form method="post" style="max-width:760px;" action="<?php echo $ancla; ?>" autocomplete="off">
+			<?php wp_nonce_field( self::NONCE_L, 'cn_vl_nonce' ); ?>
+			<p><label>Id de socia: <input type="number" name="cn_vl_cc_id" min="1" style="width:100px;"></label>
+			<label>Celular completo: <input type="text" name="cn_vl_cc_celular" autocomplete="off" style="width:180px;"></label>
+			<button type="submit" name="cn_vl_accion" value="completar_celular" class="button">Completar celular</button></p>
 		</form>
 		<?php
 	}
