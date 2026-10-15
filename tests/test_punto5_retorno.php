@@ -45,7 +45,7 @@ function rp_preparar( $filas, $vinculada = null, $mp = null, $flag = '1' ) {
 	return $wpdb;
 }
 function rp_post( $extra = array() ) {
-	$_POST = array_merge( array( 'cn_ret_submit' => '1', 'cn_ret_id' => RP_ID, 'cn_ret_nonce' => 'x', 'cn_ret_celular' => '11 5555-2165', 'cn_ret_nombre' => '', 'cn_ret_email' => '' ), $extra );
+	$_POST = array_merge( array( 'cn_ret_submit' => '1', 'cn_ret_id' => RP_ID, 'cn_ret_nonce' => 'x', 'cn_ret_celular' => '11 5555-2165', 'cn_ret_nombre' => 'Socia Secreta 10', 'cn_ret_email' => '' ), $extra );
 }
 function rp_esc() {
 	return $GLOBALS['wpdb']->escrituras( 'cn_miembros' );
@@ -91,7 +91,7 @@ rp_post( array( 'cn_ret_nombre' => 'Ana Nueva', 'cn_ret_email' => 'ana@example.c
 $h   = CN_Retorno::shortcode();
 $esc = rp_esc();
 t( 'crea socia activa con preapproval, plan y acceso_hasta', 1 === count( $esc ) && 'insert' === $esc[0][0] && RP_ID === $esc[0][2]['preapproval_id'] && 'basico' === $esc[0][2]['plan'] && '2026-11-10 15:00:00' === $esc[0][2]['acceso_hasta'] && 'activo' === $esc[0][2]['estado'] );
-t( 'confirmación con link de login', false !== strpos( $h, '/club-natureza-miembros/' ) && false !== strpos( $h, 'cuenta quedó creada' ) );
+t( 'confirmación con link de login', false !== strpos( $h, '/club-natureza-miembros/' ) && false !== strpos( $h, 'Tu suscripción quedó activada' ) );
 t( 'log retorno_vinculo (sin vinculo_manual) y sin email/celular en el log', in_array( 'retorno_vinculo', $w->log_mp_tipos(), true ) && ! in_array( 'vinculo_manual', $w->log_mp_tipos(), true ) && false === strpos( rp_payload( $w, 'retorno_vinculo' ), '@' ) && false === strpos( rp_payload( $w, 'retorno_vinculo' ), '1155552165' ) );
 t( 'mail + Subscribe una vez (event_id vinc_<id>)', 1 === count( $GLOBALS['cn_mails'] ) && 'ana@example.com' === $GLOBALS['cn_mails'][0]['to'] && 1 === count( $GLOBALS['cn_capi'] ) && 'vinc_' . RP_ID === $GLOBALS['cn_capi'][0][0] );
 $w = rp_preparar( array() );
@@ -102,17 +102,17 @@ t( 'celular nuevo sin nombre/email: vuelve al formulario y no escribe', false !=
 seccion( 'retorno: POST socia existente (celular exacto)' );
 $a = rp_fila( 10, '1155552165' );
 $w = rp_preparar( array( $a ) );
-rp_post( array( 'cn_ret_email' => 'otro@example.com', 'cn_ret_nombre' => 'Intrusa' ) );
+rp_post( array( 'cn_ret_email' => 'otro@example.com', 'cn_ret_nombre' => 'socia secreta 10' ) );
 $h   = CN_Retorno::shortcode();
 $esc = rp_esc();
 t( 'activa a la socia 10 (update) con backup previo', 1 === count( $esc ) && 'update' === $esc[0][0] && array( 'id' => 10 ) === $esc[0][3] && in_array( 'vinculo_backup', $w->log_mp_tipos(), true ) );
-t( 'no muestra nombre ni email de la socia ni el tipeado', false === strpos( $h, 'Secreta' ) && false === strpos( $h, 'guardado10' ) && false === strpos( $h, 'otro@example.com' ) && false !== strpos( $h, 'Encontramos tu cuenta' ) );
+t( 'no muestra nombre ni email de la socia ni el tipeado', false === strpos( $h, 'Secreta' ) && false === strpos( $h, 'guardado10' ) && false === strpos( $h, 'otro@example.com' ) && false !== strpos( $h, 'Tu suscripción quedó activada' ) );
 t( 'el mail va al email guardado, no al tipeado', 1 === count( $GLOBALS['cn_mails'] ) && 'guardado10@example.com' === $GLOBALS['cn_mails'][0]['to'] );
 $ya = rp_fila( 10, '1155552165', array( 'preapproval_id' => RP_ID, 'plan' => 'basico', 'acceso_hasta' => '2026-11-10 15:00:00', 'fecha_fin_trial' => null ) );
 $w  = rp_preparar( array( $ya ), $ya );
 rp_post();
 $h = CN_Retorno::shortcode();
-t( 'doble submit: ok, cero escrituras, sin mail ni Meta', false !== strpos( $h, 'Encontramos tu cuenta' ) && ! rp_esc() && ! $GLOBALS['cn_mails'] && ! $GLOBALS['cn_capi'] );
+t( 'doble submit: ok, cero escrituras, sin mail ni Meta', false !== strpos( $h, 'Tu suscripción quedó activada' ) && ! rp_esc() && ! $GLOBALS['cn_mails'] && ! $GLOBALS['cn_capi'] );
 
 seccion( 'retorno: ambigüedad y conflictos' );
 $b = rp_fila( 11, '1155552165' );
@@ -165,3 +165,75 @@ function rp_payload( $w, $tipo ) {
 	}
 	return '';
 }
+
+seccion( 'retorno: éxito uniforme y nombre (fix/retorno-seguro)' );
+// 2a) mismo mensaje para socia nueva y existente.
+$w = rp_preparar( array() );
+rp_post( array( 'cn_ret_nombre' => 'Ana Nueva', 'cn_ret_email' => 'ana@example.com' ) );
+$h_nueva = CN_Retorno::shortcode();
+$w = rp_preparar( array( $a ) );
+rp_post( array( 'cn_ret_nombre' => 'Socia Secreta 10' ) );
+$h_exist = CN_Retorno::shortcode();
+t( '2a: el texto de éxito es idéntico para nueva y existente', $h_nueva === $h_exist && false !== strpos( $h_nueva, 'Tu suscripción quedó activada' ) && false === strpos( $h_nueva, 'creada' ) && false === strpos( $h_nueva, 'Encontramos' ) );
+
+// 2b) ficha existente: el nombre tiene que parecerse.
+$w = rp_preparar( array( $a ) );
+rp_post( array( 'cn_ret_nombre' => 'Maria Gonzalez Perez' ) );
+$h = CN_Retorno::shortcode();
+t( '2b: nombre distinto en ficha existente: no escribe, no manda mail/Meta, mensaje neutro', ! rp_esc() && ! $GLOBALS['cn_mails'] && ! $GLOBALS['cn_capi'] && false !== strpos( $h, CN_Retorno::TEXTO_CONTACTO ) && false === strpos( $h, '<form' ) && false === strpos( $h, 'Secreta' ) );
+t( '2b: deja rastro retorno_nombre_distinto sin nombre ni celular', in_array( 'retorno_nombre_distinto', $w->log_mp_tipos(), true ) && false === strpos( rp_payload( $w, 'retorno_nombre_distinto' ), 'Maria' ) && false === strpos( rp_payload( $w, 'retorno_nombre_distinto' ), '1155552165' ) );
+$w = rp_preparar( array( $a ) );
+rp_post( array( 'cn_ret_nombre' => '' ) );
+$h = CN_Retorno::shortcode();
+t( '2b: nombre vacío en ficha existente: no escribe', ! rp_esc() );
+$w = rp_preparar( array( $a ) );
+rp_post( array( 'cn_ret_nombre' => 'Secreta Socia 10' ) ); // mismas palabras, otro orden
+CN_Retorno::shortcode();
+t( '2b: mismas palabras en otro orden: activa', 1 === count( rp_esc() ) );
+$w = rp_preparar( array( $a ) );
+rp_post( array( 'cn_ret_nombre' => 'Socia Secreta 1O' ) ); // una letra distinta
+CN_Retorno::shortcode();
+t( '2b: a ≤2 letras de distancia: activa', 1 === count( rp_esc() ) );
+
+// 2c) topes por preapproval_id y por celular, además del de IP.
+$w = rp_preparar( array() );
+$h = '';
+for ( $i = 1; $i <= 6; $i++ ) {
+	$_SERVER['REMOTE_ADDR'] = '9.9.9.' . $i; // IPs distintas: solo puede frenar el tope por suscripción.
+	rp_post( array( 'cn_ret_celular' => '11 5555-' . str_pad( (string) ( 2000 + $i ), 4, '0', STR_PAD_LEFT ) ) ); // celulares distintos
+	$h = CN_Retorno::shortcode();
+	if ( $i <= 5 ) {
+		$ok5 = isset( $ok5 ) ? $ok5 && false === strpos( $h, 'muchos intentos' ) : false === strpos( $h, 'muchos intentos' );
+	}
+}
+t( '2c: tope por preapproval_id: 5 pasan, el 6.º se bloquea aunque cambie la IP y el celular', $ok5 && false !== strpos( $h, 'con esta suscripción' ) );
+$w = rp_preparar( array() );
+set_transient( 'cn_ret_envio_cel_' . md5( '1155552165' ), 5, 3600 );
+rp_post( array( 'cn_ret_nombre' => 'Ana Nueva', 'cn_ret_email' => 'ana@example.com' ) );
+$h = CN_Retorno::shortcode();
+t( '2c: tope por celular (5/hora): bloquea sin escribir ni consultar MP', false !== strpos( $h, 'con ese celular' ) && ! rp_esc() && ! $GLOBALS['cn_http_log'] );
+$w = rp_preparar( array() );
+set_transient( 'cn_ret_envio_cel_' . md5( '1155552165' ), 4, 3600 );
+rp_post( array( 'cn_ret_nombre' => 'Ana Nueva', 'cn_ret_email' => 'ana@example.com' ) );
+$h = CN_Retorno::shortcode();
+t( '2c: con 4 envíos previos del celular todavía pasa (crea)', false === strpos( $h, 'muchos intentos' ) && 1 === count( rp_esc() ) );
+$w = rp_preparar( array() );
+set_transient( 'cn_ret_envio_id_' . md5( RP_ID ), 5, 3600 );
+rp_post( array( 'cn_ret_nombre' => 'Ana Nueva', 'cn_ret_email' => 'ana@example.com' ) );
+$h = CN_Retorno::shortcode();
+t( '2c: tope por preapproval_id ya lleno: bloquea sin escribir', false !== strpos( $h, 'con esta suscripción' ) && ! rp_esc() );
+$w = rp_preparar( array() );
+set_transient( 'cn_ret_envio_' . md5( '1.2.3.4' ), 5, 600 );
+rp_post( array( 'cn_ret_nombre' => 'Ana Nueva', 'cn_ret_email' => 'ana@example.com' ) );
+$h = CN_Retorno::shortcode();
+t( '2c: el tope por IP sigue funcionando', false !== strpos( $h, 'muchos intentos' ) && ! rp_esc() );
+
+seccion( 'retorno: textos (fix/retorno-seguro)' );
+$w = rp_preparar( array(), null, null, '0' );
+$h = CN_Retorno::shortcode();
+t( '2d: gate apagado usa el texto nuevo', false !== strpos( $h, CN_Retorno::TEXTO_CONTACTO ) );
+$w = rp_preparar( array() );
+$h = CN_Retorno::shortcode();
+t( '2d: sin parámetros usa el texto nuevo', false !== strpos( $h, CN_Retorno::TEXTO_CONTACTO ) );
+$src = file_get_contents( dirname( __DIR__ ) . '/includes/class-cn-retorno.php' );
+t( '2d: ya no queda "para activarte" ni "te contactamos" en la clase', false === strpos( $src, 'para activarte' ) && false === strpos( $src, 'te contactamos' ) );

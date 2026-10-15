@@ -16,6 +16,10 @@ class CN_Retorno extends CN_Vinculo_Manual {
 	const MAX_ENVIOS = 5;   // envíos del formulario por IP
 	const MAX_VISTAS = 20;  // consultas a MP al abrir la página, por IP
 	const VENTANA    = 600; // 10 minutos
+	const MAX_ENVIOS_ID  = 5;    // envíos del formulario por preapproval_id
+	const MAX_ENVIOS_CEL = 5;    // envíos del formulario por celular
+	const VENTANA_LARGA  = 3600; // 1 hora (topes por preapproval_id y por celular)
+	const TEXTO_CONTACTO = 'Estamos confirmando tu suscripción; si en unos minutos no podés ingresar, escribinos por WhatsApp.';
 
 	public static function registrar() {
 		add_shortcode( self::SHORTCODE, array( __CLASS__, 'shortcode' ) );
@@ -43,13 +47,13 @@ class CN_Retorno extends CN_Vinculo_Manual {
 	}
 
 	/** Cuenta un intento de esta IP; true si todavía está dentro del tope. */
-	protected static function permitido( $clase, $max ) {
-		$clave = 'cn_ret_' . $clase . '_' . md5( CN_Helpers::get_client_ip() );
+	protected static function permitido( $clase, $max, $sujeto = null, $ventana = self::VENTANA ) {
+		$clave = 'cn_ret_' . $clase . '_' . md5( null === $sujeto ? CN_Helpers::get_client_ip() : (string) $sujeto );
 		$n     = (int) get_transient( $clave );
 		if ( $n >= $max ) {
 			return false;
 		}
-		set_transient( $clave, $n + 1, self::VENTANA );
+		set_transient( $clave, $n + 1, $ventana );
 		return true;
 	}
 
@@ -62,7 +66,7 @@ class CN_Retorno extends CN_Vinculo_Manual {
 	}
 
 	protected static function mensaje_contacto() {
-		return 'Estamos confirmando tu suscripción. Te contactamos por WhatsApp para activarte. ¡Gracias!';
+		return self::TEXTO_CONTACTO;
 	}
 
 	/** Deja rastro sin datos personales: solo el ID de la suscripción y un motivo. */
@@ -73,12 +77,12 @@ class CN_Retorno extends CN_Vinculo_Manual {
 	public static function shortcode( $atts = array() ) {
 		wp_enqueue_style( 'cn-style' );
 		if ( ! self::activo() ) {
-			return self::envolver( self::caja( '¡Gracias por sumarte al Club Natureza! Recibimos tu suscripción y te contactamos por WhatsApp para activarte.' ) );
+			return self::envolver( self::caja( '¡Gracias por sumarte al Club Natureza! ' . self::TEXTO_CONTACTO ) );
 		}
 		$id_raw = isset( $_POST['cn_ret_id'] ) ? $_POST['cn_ret_id'] : ( isset( $_GET['preapproval_id'] ) ? $_GET['preapproval_id'] : '' );
 		$id     = strtolower( trim( sanitize_text_field( wp_unslash( $id_raw ) ) ) );
 		if ( ! self::id_valido( $id ) ) {
-			return self::envolver( self::caja( 'Si acabás de suscribirte, ¡gracias! Te contactamos por WhatsApp para activarte.', 'success' ) );
+			return self::envolver( self::caja( 'Si acabás de suscribirte, ¡gracias! ' . self::TEXTO_CONTACTO, 'success' ) );
 		}
 		if ( isset( $_POST['cn_ret_submit'] ) ) {
 			return self::procesar_envio( $id );
@@ -93,7 +97,7 @@ class CN_Retorno extends CN_Vinculo_Manual {
 		}
 		$mp = self::consultar( $id ); // un error de MP ya dejó mp_api_error; no se escribe nada.
 		if ( ! $mp['ok'] ) {
-			return self::envolver( self::caja( 'No pudimos confirmar tu pago en este momento. Probá de nuevo en unos minutos; si sigue igual, te contactamos por WhatsApp.', 'error' ) );
+			return self::envolver( self::caja( 'No pudimos confirmar tu pago en este momento. Probá de nuevo en unos minutos; si sigue igual, escribinos por WhatsApp.', 'error' ) );
 		}
 		if ( ! $mp['confirmable'] ) {
 			if ( ! get_transient( 'cn_ret_na_' . md5( $id ) ) ) { // un solo rastro cada 10 min por suscripción.
@@ -140,6 +144,9 @@ class CN_Retorno extends CN_Vinculo_Manual {
 		if ( ! self::permitido( 'envio', self::MAX_ENVIOS ) ) {
 			return self::envolver( self::caja( 'Hubo muchos intentos. Esperá unos minutos y probá de nuevo.', 'error' ) );
 		}
+		if ( ! self::permitido( 'envio_id', self::MAX_ENVIOS_ID, $id, self::VENTANA_LARGA ) ) { // tope por suscripción, venga de la IP que venga.
+			return self::envolver( self::caja( 'Hubo muchos intentos con esta suscripción. Esperá una hora y probá de nuevo, o escribinos por WhatsApp.', 'error' ) );
+		}
 		$celular = trim( sanitize_text_field( wp_unslash( $_POST['cn_ret_celular'] ?? '' ) ) );
 		$nombre  = trim( sanitize_text_field( wp_unslash( $_POST['cn_ret_nombre'] ?? '' ) ) );
 		$email   = sanitize_email( trim( sanitize_text_field( wp_unslash( $_POST['cn_ret_email'] ?? '' ) ) ) );
@@ -148,12 +155,17 @@ class CN_Retorno extends CN_Vinculo_Manual {
 			return self::mostrar_formulario( $id, self::caja( 'El celular no es válido. Revisalo (código de área + número).', 'error' ) );
 		}
 		$norm = (string) $norm['normalizado'];
+		if ( ! self::permitido( 'envio_cel', self::MAX_ENVIOS_CEL, $norm, self::VENTANA_LARGA ) ) { // tope por celular (hash en la clave: no se guarda el número).
+			return self::envolver( self::caja( 'Hubo muchos intentos con ese celular. Esperá una hora y probá de nuevo, o escribinos por WhatsApp.', 'error' ) );
+		}
 
-		// Solo cuenta el celular EXACTO (mismo criterio que el login). Parecidos/nombre no se usan para decidir.
+		// Solo cuenta el celular EXACTO (mismo criterio que el login). Parecidos/nombre no se usan para decidir la socia.
 		$exactas = array();
+		$filas   = array();
 		foreach ( self::candidatas( $norm, '', '' ) as $k => $c ) {
 			if ( in_array( 'celular exacto', $c['motivos'], true ) ) {
-				$exactas[] = (int) $k;
+				$exactas[]       = (int) $k;
+				$filas[ (int) $k ] = $c['fila'];
 			}
 		}
 		if ( count( $exactas ) > 1 ) {
@@ -162,6 +174,13 @@ class CN_Retorno extends CN_Vinculo_Manual {
 			return self::envolver( self::caja( self::mensaje_contacto() ) );
 		}
 		if ( 1 === count( $exactas ) ) {
+			// Contra quien tipea un celular ajeno: el nombre tiene que parecerse al guardado. Si no, no se escribe nada y la
+			// respuesta es la neutra (no revela que el celular existe); se deja rastro sin datos personales y se avisa.
+			if ( ! self::nombres_parecidos( $nombre, (string) $filas[ $exactas[0] ]->nombre_apellido ) ) {
+				self::rastro( 'retorno_nombre_distinto', $id, array( 'socia' => $exactas[0] ) );
+				self::sub_avisar_una_vez_por_hora( 'retorno_nombre_distinto', 'ret_' . $id, array( 'preapproval_id' => $id, 'socia' => $exactas[0] ) );
+				return self::envolver( self::caja( self::mensaje_contacto() ) );
+			}
 			// Existente: el mail de bienvenida va al email guardado de la socia (o al del pagador en MP), nunca al que tipeó
 			// quien abrió la página, para no filtrar datos de la cuenta.
 			$d = array( 'id' => $id, 'celular' => $celular, 'email' => '', 'nombre' => '', 'notificar' => true, 'socia' => (string) $exactas[0] );
@@ -175,11 +194,8 @@ class CN_Retorno extends CN_Vinculo_Manual {
 		$r = self::confirmar( $d, $norm, 'retorno_vinculo' );
 		if ( ! empty( $r['ok'] ) ) {
 			$login = home_url( '/club-natureza-miembros/' );
-			$txt   = ( 'crear' === $r['accion'] )
-				? '¡Listo! Tu cuenta quedó creada y tu plan activo.'
-				: ( 1 === count( $exactas ) ? 'Encontramos tu cuenta y te activamos el plan.' : '¡Listo!' );
 			return self::envolver(
-				self::caja( $txt )
+				self::caja( '¡Listo! Tu suscripción quedó activada.' ) // mismo texto para socia nueva y existente: no revela si el celular ya estaba.
 				. '<p>Ingresá al área de socias con tu <strong>nombre y apellido</strong> y tu <strong>celular</strong>.</p>'
 				. '<p><a class="cn-boton" href="' . esc_url( $login ) . '">Entrar al Club →</a></p>'
 			);
@@ -189,7 +205,7 @@ class CN_Retorno extends CN_Vinculo_Manual {
 			self::sub_avisar_una_vez_por_hora( 'retorno_ambiguo', 'ret_' . $id, array( 'preapproval_id' => $id ) );
 		}
 		if ( 'mp' === $r['motivo'] ) {
-			return self::envolver( self::caja( 'No pudimos confirmar tu pago en este momento. Probá de nuevo en unos minutos; si sigue igual, te contactamos por WhatsApp.', 'error' ) );
+			return self::envolver( self::caja( 'No pudimos confirmar tu pago en este momento. Probá de nuevo en unos minutos; si sigue igual, escribinos por WhatsApp.', 'error' ) );
 		}
 		// Conflicto / otra socia / no confirmable / error: ya quedó registrado y avisado por quien confirma; nada se escribió.
 		return self::envolver( self::caja( self::mensaje_contacto() ) );

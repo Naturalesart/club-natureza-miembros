@@ -102,26 +102,6 @@ class CN_Vinculo_Lote extends CN_Vinculo_Manual {
 		return substr( $p[0], 0, 1 ) . '***@' . $p[1];
 	}
 
-	/** ¿Dos nombres son iguales o parecidos? (normalizados; mismas palabras en otro orden, o a ≤2 letras de distancia). */
-	protected static function nombres_parecidos( $a, $b ) {
-		$a = CN_Vinculo::nombre_normalizado( $a );
-		$b = CN_Vinculo::nombre_normalizado( $b );
-		if ( '' === $a || '' === $b ) {
-			return false;
-		}
-		if ( $a === $b ) {
-			return true;
-		}
-		$ta = explode( ' ', $a );
-		$tb = explode( ' ', $b );
-		sort( $ta );
-		sort( $tb );
-		if ( $ta === $tb ) {
-			return true;
-		}
-		return min( strlen( $a ), strlen( $b ) ) >= 5 && levenshtein( substr( $a, 0, 100 ), substr( $b, 0, 100 ) ) <= 2;
-	}
-
 	/** ¿Celulares iguales o que difieren en ≤1 dígito (normalizados)? Vacíos/inválidos nunca coinciden. */
 	protected static function celulares_parecidos( $a, $b ) {
 		$na = CN_Helpers::normalizar_celular( (string) $a );
