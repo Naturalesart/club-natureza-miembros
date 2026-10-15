@@ -13,6 +13,7 @@ class CN_Vinculo_Lote extends CN_Vinculo_Manual {
 	const MAX_PARES   = 20; // pares por lote pegado
 	const MAX_CONFIRM = 5;  // pares que se escriben por clic
 	const FRASE       = 'VINCULAR';
+	const FRASE_REASIGNAR = 'REASIGNAR';
 
 	/**
 	 * Pares válidos de un texto: una línea por par, "<32 hex> <id de socia>" separados por coma, espacio, tab o ;.
@@ -259,6 +260,178 @@ class CN_Vinculo_Lote extends CN_Vinculo_Manual {
 		return array( 'paso' => 'celular', 'ok' => true, 'mensaje' => 'Listo: se completó el celular de la socia #' . $sid . ' (' . CN_Vinculo::mascara_celular( $socia->celular_hint ) . ').', 'texto' => '' );
 	}
 
+	// ------------------------------------------------------------------ reasignar vínculo
+
+	/**
+	 * SOLO LECTURA: qué pasaría si se mueve la suscripción $id a la ficha $dest_id.
+	 * Requisitos: authorized en MP con plan conocido; la sub hoy está en OTRA ficha (origen); el destino existe, tiene
+	 * celular_texto_plano válido y no tiene otra suscripción. Si el destino ya la tiene, es 'ya_hecho' (idempotente).
+	 *
+	 * @return array{ok:bool,accion:string,texto:string,mp:?array,origen:?object,destino:?object}
+	 */
+	protected static function reasignar_evaluar( $id, $dest_id ) {
+		global $wpdb;
+		$r = array( 'ok' => false, 'accion' => '', 'texto' => '', 'mp' => null, 'origen' => null, 'destino' => null );
+		if ( ! self::id_valido( $id ) ) {
+			$r['texto'] = 'El ID de preapproval tiene que tener 32 caracteres hexadecimales.';
+			return $r;
+		}
+		if ( $dest_id <= 0 ) {
+			$r['texto'] = 'Indicá el id de la socia destino.';
+			return $r;
+		}
+		$mp = self::consultar( $id );
+		if ( ! $mp['ok'] ) {
+			$r['texto'] = $mp['error'];
+			return $r;
+		}
+		$r['mp'] = $mp;
+		$destino = self::leer_socia( $dest_id );
+		$origen  = $wpdb->get_row( $wpdb->prepare( 'SELECT ' . self::COLS . ' FROM ' . CN_DB::tabla( 'miembros' ) . ' WHERE preapproval_id = %s LIMIT 1', $id ) );
+		$r['destino'] = $destino;
+		$r['origen']  = $origen ? $origen : null;
+		if ( ! $mp['confirmable'] ) {
+			$r['texto'] = $mp['motivo'];
+			return $r;
+		}
+		if ( ! $destino ) {
+			$r['texto'] = 'No existe la socia destino #' . (int) $dest_id . '.';
+			return $r;
+		}
+		$norm = CN_Helpers::normalizar_celular( (string) $destino->celular_texto_plano );
+		if ( empty( $norm['valido'] ) ) {
+			$r['texto'] = 'La ficha destino no tiene un celular guardado válido: completalo primero con "Completar celular".';
+			return $r;
+		}
+		if ( (string) $destino->preapproval_id === $id ) {
+			$r['ok']     = true;
+			$r['accion'] = 'ya_hecho';
+			$r['texto']  = 'Ya está hecho: la suscripción ya figura en la ficha destino. No se cambia nada.';
+			return $r;
+		}
+		if ( '' !== (string) $destino->preapproval_id ) {
+			$r['texto'] = 'La ficha destino ya tiene OTRA suscripción vinculada. No se pisa nada.';
+			return $r;
+		}
+		if ( ! $origen ) {
+			$r['texto'] = 'Esa suscripción no está vinculada a ninguna ficha: para eso usá "Vincular en lote".';
+			return $r;
+		}
+		$r['ok']     = true;
+		$r['accion'] = 'mover';
+		$r['texto']  = 'Se mueve la suscripción de la ficha #' . (int) $origen->id . ' a la #' . (int) $dest_id
+			. '. La ficha origen queda en estado "cancelada" y sin suscripción/plan/acceso; la destino queda activa con plan ' . $mp['plan_nombre']
+			. ' y acceso hasta ' . ( null !== $mp['acceso_hasta'] ? $mp['acceso_hasta'] . ' (UTC)' : '—' ) . '. Sin mail ni evento Meta.';
+		return $r;
+	}
+
+	/**
+	 * Ejecuta la reasignación. Revalida todo (MP incluido), transacción con FOR UPDATE (filas en orden de id),
+	 * idempotente. Backup vinculo_backup de origen y destino antes de escribir. Nunca manda mail ni evento Meta.
+	 */
+	protected static function reasignar_ejecutar( $id, $dest_id ) {
+		global $wpdb;
+		$err = function ( $m ) {
+			return array( 'paso' => 'reasignar_resultado', 'ok' => false, 'mensaje' => $m . ' No se cambió nada.', 'texto' => '' );
+		};
+		$ev = self::reasignar_evaluar( $id, $dest_id );
+		if ( ! $ev['ok'] ) {
+			return $err( $ev['texto'] );
+		}
+		if ( 'ya_hecho' === $ev['accion'] ) {
+			return array( 'paso' => 'reasignar_resultado', 'ok' => true, 'mensaje' => $ev['texto'], 'texto' => '' );
+		}
+		$mp      = $ev['mp'];
+		$orig_id = (int) $ev['origen']->id;
+		$t       = CN_DB::tabla( 'miembros' );
+		$en_tx   = false;
+		$ids     = array( $orig_id, (int) $dest_id );
+		sort( $ids );
+		try {
+			if ( false === $wpdb->query( 'START TRANSACTION' ) ) {
+				throw new RuntimeException( 'no se pudo abrir la transaccion' );
+			}
+			$en_tx = true;
+			$filas = array();
+			foreach ( $ids as $k ) { // siempre en orden de id: evita bloqueos cruzados.
+				$filas[ $k ] = $wpdb->get_row( $wpdb->prepare( 'SELECT ' . self::COLS . " FROM {$t} WHERE id = %d FOR UPDATE", $k ) );
+			}
+			$titular = $wpdb->get_row( $wpdb->prepare( 'SELECT ' . self::COLS . " FROM {$t} WHERE preapproval_id = %s LIMIT 1 FOR UPDATE", $id ) );
+			if ( '' !== (string) $wpdb->last_error ) {
+				throw new RuntimeException( 'error buscando en la base: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
+			}
+			$o = $filas[ $orig_id ];
+			$d = $filas[ (int) $dest_id ];
+			if ( ! $o || ! $d ) {
+				$wpdb->query( 'ROLLBACK' );
+				return $err( 'Una de las fichas ya no existe.' );
+			}
+			if ( (string) $d->preapproval_id === $id && $titular && (int) $titular->id === (int) $d->id ) { // otro clic se adelantó.
+				$wpdb->query( 'ROLLBACK' );
+				return array( 'paso' => 'reasignar_resultado', 'ok' => true, 'mensaje' => 'Ya está hecho: la suscripción ya figura en la ficha destino. No se cambia nada.', 'texto' => '' );
+			}
+			$norm = CN_Helpers::normalizar_celular( (string) $d->celular_texto_plano );
+			if ( ! $titular || (int) $titular->id !== $orig_id || '' !== (string) $d->preapproval_id || empty( $norm['valido'] ) ) {
+				$wpdb->query( 'ROLLBACK' );
+				return $err( 'Mientras tanto cambió el estado de las fichas. Volvé a previsualizar.' );
+			}
+			self::backup( $o, $id );
+			self::backup( $d, $id );
+			$ahora = current_time( 'mysql', true );
+			$ok    = $wpdb->update(
+				$t,
+				array( 'preapproval_id' => null, 'plan' => null, 'acceso_hasta' => null, 'estado' => 'cancelada', 'fecha_modificacion' => $ahora ),
+				array( 'id' => $orig_id ),
+				array( '%s', '%s', '%s', '%s', '%s' ),
+				array( '%d' )
+			);
+			if ( false === $ok ) {
+				throw new RuntimeException( 'no se pudo liberar la ficha origen: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
+			}
+			$ok = $wpdb->update(
+				$t,
+				array( 'preapproval_id' => $id, 'plan' => $mp['plan'], 'acceso_hasta' => $mp['acceso_hasta'], 'estado' => 'activo', 'fecha_fin_trial' => null, 'fecha_modificacion' => $ahora ),
+				array( 'id' => (int) $dest_id ),
+				array( '%s', '%s', '%s', '%s', '%s', '%s' ),
+				array( '%d' )
+			);
+			if ( false === $ok ) {
+				throw new RuntimeException( 'no se pudo vincular la ficha destino: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
+			}
+			if ( false === $wpdb->query( 'COMMIT' ) ) {
+				throw new RuntimeException( 'no se pudo confirmar la transaccion' );
+			}
+			$en_tx = false;
+		} catch ( Throwable $e ) {
+			if ( $en_tx ) {
+				$wpdb->query( 'ROLLBACK' );
+			}
+			self::registrar_log_mp( 'sub_error', array( 'paso' => 'vinculo_reasignar', 'external_reference' => 'vinc_' . $id, 'mensaje' => mb_substr( $e->getMessage(), 0, 300 ) ) );
+			return $err( 'Error interno (quedó registrado en el log de Mercado Pago).' );
+		}
+		$usuario = wp_get_current_user();
+		self::registrar_log_mp( 'vinculo_reasignado', array(
+			'preapproval_id' => $id,
+			'origen'         => $orig_id,
+			'destino'        => (int) $dest_id,
+			'plan'           => $mp['plan'],
+			'usuario_id'     => (int) get_current_user_id(),
+			'usuario'        => ( $usuario && ! empty( $usuario->user_login ) ) ? (string) $usuario->user_login : '',
+		) );
+		return array( 'paso' => 'reasignar_resultado', 'ok' => true, 'mensaje' => 'Listo: la suscripción pasó de la ficha #' . $orig_id . ' a la #' . (int) $dest_id . '. La ficha origen quedó cancelada.', 'texto' => '' );
+	}
+
+	/** Línea de una ficha para pantalla (sin celular completo ni email). */
+	protected static function ficha_linea( $f ) {
+		if ( ! $f ) {
+			return '—';
+		}
+		return '#' . (int) $f->id . ' ' . $f->nombre_apellido . ' · ' . CN_Vinculo::mascara_celular( $f->celular_hint )
+			. ' · estado ' . $f->estado . ' · plan ' . ( null !== $f->plan && '' !== (string) $f->plan ? $f->plan : '—' )
+			. ' · acceso hasta ' . ( ! empty( $f->acceso_hasta ) ? substr( (string) $f->acceso_hasta, 0, 10 ) : '—' )
+			. ' · suscripción ' . ( '' !== (string) $f->preapproval_id ? substr( (string) $f->preapproval_id, 0, 8 ) . '…' : 'ninguna' );
+	}
+
 	/** Trae de MP y de la base lo necesario y arma el paso "candidatas". SOLO LECTURA. */
 	protected static function cargar_candidatas( $texto_previo ) {
 		global $wpdb;
@@ -347,6 +520,17 @@ class CN_Vinculo_Lote extends CN_Vinculo_Manual {
 				sanitize_text_field( wp_unslash( $_POST['cn_vl_cc_celular'] ?? '' ) )
 			);
 		}
+		if ( 'reasignar_prev' === $accion || 'reasignar_ejec' === $accion ) {
+			$sub  = strtolower( trim( sanitize_text_field( wp_unslash( $_POST['cn_vl_ra_sub'] ?? '' ) ) ) );
+			$dest = absint( $_POST['cn_vl_ra_dest'] ?? 0 );
+			if ( 'reasignar_ejec' === $accion ) {
+				if ( self::FRASE_REASIGNAR !== trim( sanitize_text_field( wp_unslash( $_POST['cn_vl_ra_frase'] ?? '' ) ) ) ) {
+					return array( 'paso' => 'reasignar_resultado', 'ok' => false, 'mensaje' => 'Para confirmar escribí ' . self::FRASE_REASIGNAR . '. No se cambió nada.', 'texto' => '' );
+				}
+				return self::reasignar_ejecutar( $sub, $dest );
+			}
+			return array( 'paso' => 'reasignar_prev', 'texto' => '', 'sub' => $sub, 'dest' => $dest, 'ev' => self::reasignar_evaluar( $sub, $dest ) ); // solo lectura.
+		}
 		if ( 'candidatas' === $accion ) {
 			return self::cargar_candidatas( $texto ); // solo completa el texto: no escribe nada.
 		}
@@ -424,6 +608,9 @@ class CN_Vinculo_Lote extends CN_Vinculo_Manual {
 		if ( 'celular' === $paso ) {
 			self::aviso_html( $res['mensaje'], $res['ok'] ? 'success' : 'error' );
 		}
+		if ( 'reasignar_resultado' === $paso ) {
+			self::aviso_html( $res['mensaje'], $res['ok'] ? 'success' : 'error' );
+		}
 		if ( 'candidatas' === $paso ) {
 			$c = $res['cand'];
 			echo '<p><strong>' . (int) count( $c['pares'] ) . ' candidata(s) segura(s) cargada(s) en el cuadro de abajo.</strong> Todavía no se vinculó nada: revisalas con <em>Previsualizar</em>.';
@@ -488,6 +675,32 @@ class CN_Vinculo_Lote extends CN_Vinculo_Manual {
 			<p><label>Id de socia: <input type="number" name="cn_vl_cc_id" min="1" style="width:100px;"></label>
 			<label>Celular completo: <input type="text" name="cn_vl_cc_celular" autocomplete="off" style="width:180px;"></label>
 			<button type="submit" name="cn_vl_accion" value="completar_celular" class="button">Completar celular</button></p>
+		</form>
+		<h3 id="cn-reasignar">Reasignar vínculo</h3>
+		<p style="max-width:760px;">Para una suscripción que quedó en la ficha equivocada: ingresá el ID de preapproval y el id de la socia <strong>destino</strong>. Primero <em>Previsualizar</em> (solo lectura). Al confirmar, la ficha origen queda <em>cancelada</em> y sin suscripción, y la destino queda activa. Sin mail ni evento Meta. <strong>Exportá la tabla de socias antes.</strong></p>
+		<?php
+		$ra_prev = ( 'reasignar_prev' === $paso );
+		$ra_sub  = $ra_prev ? $res['sub'] : '';
+		$ra_dest = ( $ra_prev && $res['dest'] > 0 ) ? (int) $res['dest'] : '';
+		if ( $ra_prev ) {
+			$ev = $res['ev'];
+			echo '<table class="widefat striped" style="max-width:1000px;margin-bottom:12px;"><tbody>';
+			echo '<tr><th>Mercado Pago</th><td>' . ( $ev['mp'] ? esc_html( $ev['mp']['status'] . ' · ' . ( null !== $ev['mp']['plan'] ? $ev['mp']['plan_nombre'] : 'plan desconocido' ) . ' · próx. ' . ( '' !== $ev['mp']['next_payment_date'] ? substr( $ev['mp']['next_payment_date'], 0, 10 ) : '—' ) ) : '—' ) . '</td></tr>';
+			echo '<tr><th>Ficha origen (hoy)</th><td>' . esc_html( self::ficha_linea( $ev['origen'] ) ) . '</td></tr>';
+			echo '<tr><th>Ficha destino</th><td>' . esc_html( self::ficha_linea( $ev['destino'] ) ) . '</td></tr>';
+			echo '<tr><th>Qué pasaría</th><td>' . ( $ev['ok'] ? '✅ ' : '⛔ ' ) . esc_html( $ev['texto'] ) . '</td></tr>';
+			echo '</tbody></table>';
+		}
+		?>
+		<form method="post" style="max-width:760px;" action="<?php echo $ancla; ?>" autocomplete="off">
+			<?php wp_nonce_field( self::NONCE_L, 'cn_vl_nonce' ); ?>
+			<p><label>ID de preapproval: <input type="text" name="cn_vl_ra_sub" value="<?php echo esc_attr( $ra_sub ); ?>" style="width:290px;" class="code"></label>
+			<label>Id de socia destino: <input type="number" name="cn_vl_ra_dest" min="1" value="<?php echo esc_attr( $ra_dest ); ?>" style="width:100px;"></label>
+			<button type="submit" name="cn_vl_accion" value="reasignar_prev" class="button button-secondary">Previsualizar reasignación</button></p>
+			<?php if ( $ra_prev && ! empty( $res['ev']['ok'] ) && 'mover' === $res['ev']['accion'] ) : ?>
+				<p><label>Para confirmar escribí <strong><?php echo esc_html( self::FRASE_REASIGNAR ); ?></strong>: <input type="text" name="cn_vl_ra_frase" autocomplete="off" style="width:140px;"></label>
+				<button type="submit" name="cn_vl_accion" value="reasignar_ejec" class="button button-primary">Confirmar reasignación</button></p>
+			<?php endif; ?>
 		</form>
 		<?php
 	}
