@@ -328,3 +328,62 @@ t( '2d: sin parámetros usa el texto nuevo', false !== strpos( $h, CN_Retorno::T
 $src = file_get_contents( dirname( __DIR__ ) . '/includes/class-cn-retorno.php' );
 t( '2d: ya no queda "para activarte" ni "te contactamos" en la clase', false === strpos( $src, 'para activarte' ) && false === strpos( $src, 'te contactamos' ) );
 t( 'ninguna alerta a n8n por retorno_nombre_distinto en el código', false === strpos( $src, "sub_avisar_una_vez_por_hora( 'retorno_nombre_distinto'" ) );
+
+seccion( 'retorno: registro de visitas' );
+// Tres visitas seguidas sin resetear (rp_preparar borra las opciones): formulario, ID inválido y error de MP.
+$w = rp_preparar( array() );
+$_GET['preapproval_id'] = RP_ID;
+CN_Retorno::shortcode();
+$_GET['preapproval_id'] = 'no-es-hex';
+CN_Retorno::shortcode();
+cn_http_on( 'GET', '#/preapproval/' . RP_ID . '#', 503 );
+$_GET['preapproval_id'] = strtoupper( RP_ID );
+CN_Retorno::shortcode();
+$reg = get_option( 'cn_retorno_registro' );
+t( 'cada visita GET se registra', is_array( $reg ) && 3 === count( $reg ), json_encode( $reg ) );
+t( 'con formulario: ID válido, 8 primeros y caso formulario', $reg[0]['valido'] && substr( RP_ID, 0, 8 ) === $reg[0]['id8'] && 'formulario' === $reg[0]['caso'] );
+t( 'ID inválido: valido=no, sin guardar lo que llegó, caso genérico', ! $reg[1]['valido'] && '' === $reg[1]['id8'] && 'generico' === $reg[1]['caso'] && false === strpos( json_encode( $reg[1] ), 'hex' ) );
+t( 'MP caído: caso error_mp', $reg[2]['valido'] && 'error_mp' === $reg[2]['caso'] );
+t( 'el registro no tiene nombres, celulares ni emails ni el ID completo', false === strpos( json_encode( $reg ), RP_ID ) && false === strpos( json_encode( $reg ), '@' ) && false === strpos( json_encode( $reg ), '1155' ) );
+t( 'cada entrada tiene fecha', ! empty( $reg[0]['fecha'] ) && ! empty( $reg[2]['fecha'] ) );
+
+$w = rp_preparar( array(), null, rp_mp( 'pending' ) );
+$_GET['preapproval_id'] = RP_ID;
+CN_Retorno::shortcode();
+$w = null;
+t( 'suscripción no autorizada: caso genérico', 'generico' === get_option( 'cn_retorno_registro' )[0]['caso'] );
+
+rp_preparar( array() );
+$_GET = array();
+CN_Retorno::shortcode();
+$e = get_option( 'cn_retorno_registro' );
+t( 'visita sin parámetros: se registra como no válida', 1 === count( $e ) && ! $e[0]['valido'] && 'generico' === $e[0]['caso'] );
+
+rp_preparar( array(), null, null, '0' );
+$_GET['preapproval_id'] = RP_ID;
+CN_Retorno::shortcode();
+t( 'gate apagado: no se registra nada', false === get_option( 'cn_retorno_registro', false ) );
+
+rp_preparar( array() );
+rp_post( array( 'cn_ret_nombre' => 'Ana Nueva', 'cn_ret_email' => 'ana@example.com' ) );
+CN_Retorno::shortcode();
+t( 'un envío del formulario (POST) no se registra como visita', false === get_option( 'cn_retorno_registro', false ) );
+
+rp_preparar( array() );
+$ant = array();
+for ( $i = 1; $i <= 60; $i++ ) {
+	$ant[] = array( 'fecha' => '2026-10-15 10:00:00', 'valido' => false, 'id8' => '', 'caso' => 'generico', 'n' => $i );
+}
+update_option( 'cn_retorno_registro', $ant );
+$_GET['preapproval_id'] = RP_ID;
+CN_Retorno::shortcode();
+$r = get_option( 'cn_retorno_registro' );
+t( 'guarda solo las últimas 50 (descarta las más viejas)', 50 === count( $r ) && 'formulario' === $r[49]['caso'] && 12 === $r[0]['n'] );
+
+$html = CN_Retorno::registro_html();
+t( 'sección Registro de retorno: tabla con las visitas, la más nueva primero', false !== strpos( $html, 'Registro de retorno' ) && false !== strpos( $html, 'Formulario' ) && strpos( $html, 'Formulario' ) < strpos( $html, 'Mensaje genérico' ) && false !== strpos( $html, substr( RP_ID, 0, 8 ) ) );
+t( 'la sección es de solo lectura (sin formularios ni botones)', false === strpos( $html, '<form' ) && false === strpos( $html, '<button' ) && false === strpos( $html, '<input' ) );
+rp_preparar( array() );
+t( 'sin visitas: mensaje vacío', false !== strpos( CN_Retorno::registro_html(), 'Todavía no hay visitas' ) );
+$adm = file_get_contents( dirname( __DIR__ ) . '/includes/class-cn-admin.php' );
+t( 'la pantalla Socias muestra el registro al final', false !== strpos( $adm, 'CN_Retorno::registro_html()' ) && strpos( $adm, 'CN_Retorno::registro_html()' ) > strpos( $adm, '<h2>Listado</h2>' ) );
