@@ -501,14 +501,17 @@ class CN_Webhook {
 		$cuerpo .= '<span style="color:#f5f3ef;font-size:22px;letter-spacing:1px;">🌿 Club Natureza</span></td></tr>';
 		$cuerpo .= '<tr><td style="padding:32px;">';
 		$cuerpo .= '<h1 style="font-size:20px;color:#2f3b2c;margin:0 0 16px;">¡Bienvenida, ' . esc_html( $nombre ) . '! 🎉</h1>';
-		$cuerpo .= '<p style="font-size:15px;color:#333;line-height:1.6;margin:0 0 20px;">Tu suscripción al Club Natureza (' . esc_html( $plan_nombre ) . ') está activa.</p>';
+		$planes    = CN_MP::get_planes();
+		$es_basico = isset( $planes['basico']['nombre'] ) && (string) $planes['basico']['nombre'] === (string) $plan_nombre; // el básico se llama igual que el club: sin paréntesis repetido.
+		$cuerpo .= '<p style="font-size:15px;color:#333;line-height:1.6;margin:0 0 20px;">Tu suscripción al Club Natureza' . ( $es_basico ? '' : ' (' . esc_html( $plan_nombre ) . ')' ) . ' está activa.</p>';
 		$cuerpo .= '<table role="presentation" width="100%" style="background:#f5f3ef;border-radius:8px;margin:0 0 24px;">';
 		$cuerpo .= '<tr><td style="padding:18px 20px;">';
 		$cuerpo .= '<p style="font-size:13px;color:#777;margin:0 0 4px;">USUARIO (nombre y apellido)</p>';
 		$cuerpo .= '<p style="font-size:16px;color:#2f3b2c;margin:0 0 14px;font-weight:bold;">' . esc_html( $nombre ) . '</p>';
-		$cuerpo .= '<p style="font-size:13px;color:#777;margin:0 0 4px;">CONTRASEÑA (tu celular)</p>';
+		$cuerpo .= '<p style="font-size:13px;color:#777;margin:0 0 4px;">CELULAR (el que registraste)</p>';
 		$cuerpo .= '<p style="font-size:16px;color:#2f3b2c;margin:0;font-weight:bold;">' . esc_html( $celular ) . '</p>';
 		$cuerpo .= '</td></tr></table>';
+		$cuerpo .= '<p style="font-size:14px;color:#555;line-height:1.6;margin:0 0 24px;">Escribí tu nombre y apellido tal cual figura arriba.</p>';
 		$cuerpo .= '<table role="presentation" width="100%"><tr><td align="center">';
 		$cuerpo .= '<a href="' . esc_url( $login_url ) . '" style="display:inline-block;background:#2f3b2c;color:#f5f3ef;text-decoration:none;padding:14px 32px;border-radius:8px;font-size:15px;margin-bottom:24px;">Entrar al Club →</a>';
 		$cuerpo .= '</td></tr></table>';
