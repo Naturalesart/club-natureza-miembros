@@ -671,6 +671,7 @@ class CN_Admin {
 					<?php endforeach; ?>
 				</tbody>
 			</table>
+			<?php echo CN_Retorno::registro_html(); // Registro de retorno: solo lectura. ?>
 		</div>
 		<?php
 	}

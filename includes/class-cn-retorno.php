@@ -20,6 +20,11 @@ class CN_Retorno extends CN_Vinculo_Manual {
 	const OPT_WHATSAPP   = 'cn_retorno_whatsapp'; // Config: número de WhatsApp (solo dígitos, con código de país) para la salida
 	const OPT_PENDIENTES = 'cn_retorno_pendientes'; // [ preapproval_id => [ fecha, motivo ] ]: SIN nombres ni celulares
 	const MAX_PENDIENTES = 50;
+	const OPT_REGISTRO   = 'cn_retorno_registro'; // últimas visitas GET a la página: fecha, 8 primeros del preapproval (si era válido) y caso. SIN datos personales.
+	const MAX_REGISTRO   = 50;
+
+	/** Caso que mostró la última vista: 'formulario' | 'generico' | 'error_mp'. */
+	protected static $caso = 'generico';
 	const MSG_REVISAR    = 'Revisá que el nombre, el celular y el email sean los de tu inscripción.';
 	const MAX_ENVIOS_CEL = 5;    // envíos del formulario por celular
 	const VENTANA_LARGA  = 3600; // 1 hora (topes por preapproval_id y por celular)
@@ -85,6 +90,15 @@ class CN_Retorno extends CN_Vinculo_Manual {
 		}
 		$id_raw = isset( $_POST['cn_ret_id'] ) ? $_POST['cn_ret_id'] : ( isset( $_GET['preapproval_id'] ) ? $_GET['preapproval_id'] : '' );
 		$id     = strtolower( trim( sanitize_text_field( wp_unslash( $id_raw ) ) ) );
+		self::$caso = 'generico';
+		$html = self::vista( $id );
+		if ( ! isset( $_POST['cn_ret_submit'] ) ) { // solo las visitas (GET); los envíos del formulario no se registran acá.
+			self::registrar_visita( self::id_valido( $id ) ? $id : '', self::$caso );
+		}
+		return $html;
+	}
+
+	protected static function vista( $id ) {
 		if ( ! self::id_valido( $id ) ) {
 			return self::envolver( self::caja( 'Si acabás de suscribirte, ¡gracias! ' . self::TEXTO_CONTACTO, 'success' ) );
 		}
@@ -95,6 +109,39 @@ class CN_Retorno extends CN_Vinculo_Manual {
 			return self::procesar_envio( $id );
 		}
 		return self::mostrar_formulario( $id );
+	}
+
+	// ------------------------------------------------------------------ registro de visitas (solo lectura en Socias)
+
+	/** Guarda la visita (últimas MAX_REGISTRO). Sin nombres, celulares ni emails: solo fecha, 8 primeros del ID válido y el caso. */
+	protected static function registrar_visita( $id, $caso ) {
+		$r = get_option( self::OPT_REGISTRO, array() );
+		$r = is_array( $r ) ? $r : array();
+		$r[] = array(
+			'fecha'  => current_time( 'mysql', true ),
+			'valido' => '' !== $id,
+			'id8'    => '' !== $id ? substr( $id, 0, 8 ) : '',
+			'caso'   => in_array( $caso, array( 'formulario', 'generico', 'error_mp' ), true ) ? $caso : 'generico',
+		);
+		update_option( self::OPT_REGISTRO, array_slice( $r, -self::MAX_REGISTRO ), false );
+	}
+
+	/** Sección "Registro de retorno" de la pantalla Socias: solo lectura, la más nueva primero. */
+	public static function registro_html() {
+		$r    = get_option( self::OPT_REGISTRO, array() );
+		$r    = is_array( $r ) ? array_reverse( $r ) : array();
+		$html = '<h2 id="cn-registro-retorno">Registro de retorno</h2><p style="max-width:760px;">Últimas ' . (int) self::MAX_REGISTRO . ' visitas a la página de retorno de suscripción (solo con el formulario prendido). Sin nombres, celulares ni emails.</p>';
+		if ( ! $r ) {
+			return $html . '<p><em>Todavía no hay visitas registradas.</em></p>';
+		}
+		$caso = array( 'formulario' => 'Formulario', 'generico' => 'Mensaje genérico', 'error_mp' => 'Error de Mercado Pago' );
+		$html .= '<table class="widefat striped" style="max-width:760px;margin-bottom:16px;"><thead><tr><th>Fecha</th><th>Llegó preapproval_id válido</th><th>Qué se mostró</th></tr></thead><tbody>';
+		foreach ( $r as $e ) {
+			$html .= '<tr><td>' . esc_html( (string) mysql2date( 'd/m/Y H:i', $e['fecha'] ) ) . '</td><td>'
+				. ( ! empty( $e['valido'] ) ? 'Sí · <code>' . esc_html( (string) $e['id8'] ) . '</code>' : 'No' ) . '</td><td>'
+				. esc_html( isset( $caso[ $e['caso'] ] ) ? $caso[ $e['caso'] ] : (string) $e['caso'] ) . '</td></tr>';
+		}
+		return $html . '</tbody></table>';
 	}
 
 	// ------------------------------------------------------------------ intentos agotados: WhatsApp + pendientes
@@ -207,6 +254,7 @@ class CN_Retorno extends CN_Vinculo_Manual {
 		}
 		$mp = self::consultar( $id ); // un error de MP ya dejó mp_api_error; no se escribe nada.
 		if ( ! $mp['ok'] ) {
+			self::$caso = 'error_mp';
 			return self::envolver( self::caja( 'No pudimos confirmar tu pago en este momento. Probá de nuevo en unos minutos; si sigue igual, escribinos por WhatsApp.', 'error' ) );
 		}
 		if ( ! $mp['confirmable'] ) {
@@ -216,6 +264,7 @@ class CN_Retorno extends CN_Vinculo_Manual {
 			}
 			return self::envolver( self::caja( self::mensaje_contacto() ) );
 		}
+		self::$caso = 'formulario';
 		ob_start();
 		?>
 		<form class="cn-form" method="post">
