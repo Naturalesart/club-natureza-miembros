@@ -486,6 +486,7 @@ class CN_Admin {
 		?>
 		<div class="wrap">
 			<h1>Socias</h1>
+			<?php echo CN_Retorno::cartel_pendientes(); // vacío si no hay clientas esperando acceso. ?>
 			<?php if ( $socia_editar ) : ?>
 				<h2>Editar socia</h2>
 				<form method="post" style="max-width:480px;">
@@ -1324,6 +1325,7 @@ class CN_Admin {
 			update_option( 'cn_guarda_trial_mp', isset( $_POST['cn_guarda_trial_mp'] ) ? '1' : '0' );
 			// Página de retorno de suscripciones por link directo ([cn_retorno_suscripcion]). Apagada por defecto.
 			update_option( 'cn_retorno_activo', isset( $_POST['cn_retorno_activo'] ) ? '1' : '0' );
+			update_option( CN_Retorno::OPT_WHATSAPP, preg_replace( '/D+/', '', sanitize_text_field( wp_unslash( $_POST['cn_retorno_whatsapp'] ?? '' ) ) ) ); // solo dígitos
 			update_option( 'cn_meta_capi_token', sanitize_text_field( wp_unslash( $_POST['cn_meta_capi_token'] ?? '' ) ) );
 			update_option( 'cn_google_drive_api_key', sanitize_text_field( wp_unslash( $_POST['cn_google_drive_api_key'] ?? '' ) ) );
 			update_option( 'cn_clase_especial_link', esc_url_raw( wp_unslash( $_POST['cn_clase_especial_link'] ?? '' ) ) );
@@ -1342,6 +1344,7 @@ class CN_Admin {
 		$sync_mp_activo   = '1' === (string) get_option( 'cn_sync_mp_activo', '1' );
 		$guarda_trial_mp  = '1' === (string) get_option( 'cn_guarda_trial_mp', '1' );
 		$retorno_activo   = '1' === (string) get_option( 'cn_retorno_activo', '0' );
+		$retorno_wa       = (string) get_option( CN_Retorno::OPT_WHATSAPP, '' );
 		$capi_token   = CN_Meta_Capi::get_token();
 		$drive_key    = CN_Drive::get_api_key();
 		$clase_link   = get_option( 'cn_clase_especial_link', '' );
@@ -1416,6 +1419,8 @@ class CN_Admin {
 						<td>
 							<label><input type="checkbox" name="cn_retorno_activo" value="1" <?php checked( $retorno_activo ); ?>> Activar el formulario de la página con <code>[cn_retorno_suscripcion]</code></label>
 							<p class="description">Apagado por defecto. Apagado, esa página solo muestra un mensaje de agradecimiento (sin formulario ni consulta a Mercado Pago). Prendido, la clienta que paga por el link directo del plan deja su celular y queda activa sola.</p>
+							<p style="margin-top:10px;"><label>WhatsApp para clientas que no logran activarse: <input type="text" name="cn_retorno_whatsapp" value="<?php echo esc_attr( $retorno_wa ); ?>" class="regular-text" placeholder="5491122334455" autocomplete="off"></label></p>
+							<p class="description">Número con código de país, solo dígitos (ej. 5491122334455). Después de 3 intentos fallidos la página muestra un botón que abre este WhatsApp con el código de la suscripción. Vacío: no se muestra el botón.</p>
 						</td>
 					</tr>
 					<tr>

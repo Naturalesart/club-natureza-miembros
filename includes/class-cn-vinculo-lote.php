@@ -574,6 +574,12 @@ class CN_Vinculo_Lote extends CN_Vinculo_Manual {
 	public static function render( $res ) {
 		$paso  = is_array( $res ) ? $res['paso'] : '';
 		$texto = is_array( $res ) ? $res['texto'] : '';
+		if ( '' === $texto && ! is_array( $res ) && isset( $_GET['cn_vl_pre'] ) ) { // enlace del cartel "esperando acceso": precarga el preapproval (solo rellena el cuadro).
+			$pre = strtolower( trim( sanitize_text_field( wp_unslash( $_GET['cn_vl_pre'] ) ) ) );
+			if ( self::id_valido( $pre ) ) {
+				$texto = $pre . ' ';
+			}
+		}
 		$ancla = esc_url( '#cn-vincular-lote' );
 		echo '<h2 id="cn-vincular-lote">Vincular en lote</h2>';
 		echo '<p style="max-width:760px;">Pegá un par por línea: <code>ID_de_preapproval id_de_socia</code> (ej. <code>7e9baadc542b441fb37131549f6bbad7 222</code>). Primero <em>Previsualizar</em> (solo lectura) y después <em>Confirmar</em>: escribe como máximo ' . (int) self::MAX_CONFIRM . ' por clic, sin mail ni evento Meta. <strong>Antes de confirmar, exportá la tabla de socias desde phpMyAdmin.</strong></p>';
