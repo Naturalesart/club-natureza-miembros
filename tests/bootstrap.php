@@ -82,7 +82,7 @@ function home_url( $p = '' ) {
 	return 'https://naturalesart.com' . $p;
 }
 function wp_mail( $to, $asunto, $cuerpo, $headers = array() ) {
-	$GLOBALS['cn_mails'][] = array( 'to' => $to, 'asunto' => $asunto );
+	$GLOBALS['cn_mails'][] = array( 'to' => $to, 'asunto' => $asunto, 'cuerpo' => $cuerpo, 'headers' => $headers );
 	return true;
 }
 function esc_html( $s ) {
