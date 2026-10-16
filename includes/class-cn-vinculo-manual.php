@@ -252,6 +252,26 @@ class CN_Vinculo_Manual extends CN_Webhook {
 		}
 	}
 
+	/** ¿Dos nombres son iguales o parecidos? (normalizados; mismas palabras en otro orden, o a ≤2 letras de distancia). Compartida con Lote y Retorno. */
+	protected static function nombres_parecidos( $a, $b ) {
+		$a = CN_Vinculo::nombre_normalizado( $a );
+		$b = CN_Vinculo::nombre_normalizado( $b );
+		if ( '' === $a || '' === $b ) {
+			return false;
+		}
+		if ( $a === $b ) {
+			return true;
+		}
+		$ta = explode( ' ', $a );
+		$tb = explode( ' ', $b );
+		sort( $ta );
+		sort( $tb );
+		if ( $ta === $tb ) {
+			return true;
+		}
+		return min( strlen( $a ), strlen( $b ) ) >= 5 && levenshtein( substr( $a, 0, 100 ), substr( $b, 0, 100 ) ) <= 2;
+	}
+
 	protected static function resultado_base() {
 		return array( 'ok' => false, 'accion' => 'rechazada', 'mensaje' => '', 'socia_id' => null, 'estado_anterior' => null, 'estado_nuevo' => null, 'notificacion' => '', 'motivo' => '' );
 	}

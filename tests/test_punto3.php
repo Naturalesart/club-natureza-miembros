@@ -109,7 +109,15 @@ foreach ( $casos as $nombre => $pagos ) {
 	t( "{$nombre}: se cancela", 1 === count( cancelaciones( $w ) ) && ! alertas( 'trial_pago_directo' ) );
 }
 $w = preparar_trials( array( trial_row( 5, array( 'trial_payment_id' => null ) ) ) );
-mp_pagos_email( 'socia5@example.com', array( pago_mp( '90005', 7000, 86400 * 8, 'socia5@example.com' ), pago_mp( '5555', 32000, 86400 * 9, 'socia5@example.com' ) ) );
+// Fechas FIJAS relativas a fecha_fin_trial (2026-10-12 10:00 UTC -> referencia 2026-10-05 10:00 UTC), no a time(): el resultado no depende del día en que corra.
+$ref_fija = strtotime( '2026-10-12 10:00:00 UTC' ) - 7 * 86400;
+$fecha_fija = function ( $ts ) {
+	return array( 'date_created' => gmdate( 'Y-m-d\TH:i:s.000', $ts ) . '-00:00' );
+};
+mp_pagos_email( 'socia5@example.com', array(
+	pago_mp( '90005', 7000, 0, 'socia5@example.com', $fecha_fija( $ref_fija + 300 ) ),         // el del trial (< $15.500)
+	pago_mp( '5555', 32000, 0, 'socia5@example.com', $fecha_fija( $ref_fija - 86400 ) ),       // >= $15.500 pero 1 día ANTES de la referencia
+) );
 mp_subs_email( 'socia5@example.com', array() );
 CN_Auth::revocar_trials_vencidos();
 t( 'sin trial_payment_id: la referencia es fin del trial - 7 días; un cobro previo a eso no cuenta', 1 === count( cancelaciones( $w ) ) );

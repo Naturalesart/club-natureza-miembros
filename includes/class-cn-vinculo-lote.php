@@ -102,26 +102,6 @@ class CN_Vinculo_Lote extends CN_Vinculo_Manual {
 		return substr( $p[0], 0, 1 ) . '***@' . $p[1];
 	}
 
-	/** ¿Dos nombres son iguales o parecidos? (normalizados; mismas palabras en otro orden, o a ≤2 letras de distancia). */
-	protected static function nombres_parecidos( $a, $b ) {
-		$a = CN_Vinculo::nombre_normalizado( $a );
-		$b = CN_Vinculo::nombre_normalizado( $b );
-		if ( '' === $a || '' === $b ) {
-			return false;
-		}
-		if ( $a === $b ) {
-			return true;
-		}
-		$ta = explode( ' ', $a );
-		$tb = explode( ' ', $b );
-		sort( $ta );
-		sort( $tb );
-		if ( $ta === $tb ) {
-			return true;
-		}
-		return min( strlen( $a ), strlen( $b ) ) >= 5 && levenshtein( substr( $a, 0, 100 ), substr( $b, 0, 100 ) ) <= 2;
-	}
-
 	/** ¿Celulares iguales o que difieren en ≤1 dígito (normalizados)? Vacíos/inválidos nunca coinciden. */
 	protected static function celulares_parecidos( $a, $b ) {
 		$na = CN_Helpers::normalizar_celular( (string) $a );
@@ -594,6 +574,12 @@ class CN_Vinculo_Lote extends CN_Vinculo_Manual {
 	public static function render( $res ) {
 		$paso  = is_array( $res ) ? $res['paso'] : '';
 		$texto = is_array( $res ) ? $res['texto'] : '';
+		if ( '' === $texto && ! is_array( $res ) && isset( $_GET['cn_vl_pre'] ) ) { // enlace del cartel "esperando acceso": precarga el preapproval (solo rellena el cuadro).
+			$pre = strtolower( trim( sanitize_text_field( wp_unslash( $_GET['cn_vl_pre'] ) ) ) );
+			if ( self::id_valido( $pre ) ) {
+				$texto = $pre . ' ';
+			}
+		}
 		$ancla = esc_url( '#cn-vincular-lote' );
 		echo '<h2 id="cn-vincular-lote">Vincular en lote</h2>';
 		echo '<p style="max-width:760px;">Pegá un par por línea: <code>ID_de_preapproval id_de_socia</code> (ej. <code>7e9baadc542b441fb37131549f6bbad7 222</code>). Primero <em>Previsualizar</em> (solo lectura) y después <em>Confirmar</em>: escribe como máximo ' . (int) self::MAX_CONFIRM . ' por clic, sin mail ni evento Meta. <strong>Antes de confirmar, exportá la tabla de socias desde phpMyAdmin.</strong></p>';
