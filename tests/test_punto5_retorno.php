@@ -254,7 +254,7 @@ set_transient( 'cn_ret_envio_id_' . md5( RP_ID ), 3, 3600 );
 $_GET['preapproval_id'] = RP_ID;
 t( 'número inválido en Config: tampoco hay botón', false === strpos( CN_Retorno::shortcode(), 'wa.me' ) );
 $adm = file_get_contents( dirname( __DIR__ ) . '/includes/class-cn-admin.php' );
-t( 'Config guarda la opción cn_retorno_whatsapp solo con dígitos', 'cn_retorno_whatsapp' === CN_Retorno::OPT_WHATSAPP && false !== strpos( $adm, 'CN_Retorno::OPT_WHATSAPP, preg_replace(' ) );
+t( 'Config guarda la opción cn_retorno_whatsapp solo con dígitos', 'cn_retorno_whatsapp' === CN_Retorno::OPT_WHATSAPP && false !== strpos( $adm, "CN_Retorno::OPT_WHATSAPP, preg_replace( '/\\D+/'," ) );
 
 seccion( 'retorno: lista de pendientes' );
 $w = rp_preparar( array( $a2 ) );
