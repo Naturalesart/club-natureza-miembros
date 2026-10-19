@@ -113,7 +113,22 @@ function wp_nonce_field( $a = '', $b = '' ) {
 	echo '<input type="hidden" name="' . $b . '">';
 }
 function current_user_can( $c ) {
-	return true;
+	return isset( $GLOBALS['cn_caps'] ) ? in_array( $c, $GLOBALS['cn_caps'], true ) : true;
+}
+function esc_url_raw( $s ) {
+	return trim( (string) $s );
+}
+function add_role( $rol, $nombre, $caps = array() ) {
+	$GLOBALS['cn_roles'][ $rol ] = array( 'nombre' => $nombre, 'caps' => $caps );
+}
+function get_role( $rol ) {
+	return $GLOBALS['cn_roles'][ $rol ] ?? null;
+}
+function add_menu_page( $t, $m, $cap, $slug, $cb = null, $icono = '', $pos = null ) {
+	$GLOBALS['cn_menus'][] = array( $slug, $cap );
+}
+function user_can( $u, $c ) {
+	return in_array( $c, $u->caps ?? array(), true );
 }
 function check_admin_referer( $a = '', $b = '' ) {
 	return true;
@@ -305,6 +320,7 @@ if ( file_exists( $cn_raiz . 'includes/class-cn-sync.php' ) ) {
 }
 require_once $cn_raiz . 'includes/class-cn-auth.php';
 require_once $cn_raiz . 'includes/class-cn-admin.php';
+require_once $cn_raiz . 'includes/class-cn-colaboradora.php';
 // ---------------------------------------------------------------- mini framework de tests
 $GLOBALS['cn_t_ok']   = 0;
 $GLOBALS['cn_t_fail'] = array();

@@ -28,10 +28,14 @@ require_once CN_PATH . 'includes/class-cn-vinculo-lote.php';
 require_once CN_PATH . 'includes/class-cn-sync.php';
 require_once CN_PATH . 'includes/class-cn-shortcodes.php';
 require_once CN_PATH . 'includes/class-cn-admin.php';
+require_once CN_PATH . 'includes/class-cn-colaboradora.php';
 require_once CN_PATH . 'includes/class-cn-clarity.php';
 register_activation_hook( __FILE__, array( 'CN_Activator', 'activar' ) );
 add_action( 'init', array( 'CN_Shortcodes', 'registrar' ) );
 add_action( 'init', array( 'CN_Retorno', 'registrar' ) );
+// Rol "Colaboradora Club": acceso acotado (solo cargar contenido), sin permisos de administrador.
+add_action( 'init', array( 'CN_Colaboradora', 'registrar_rol' ) );
+add_filter( 'login_redirect', array( 'CN_Colaboradora', 'redirigir_login' ), 10, 3 );
 add_action( 'rest_api_init', array( 'CN_Webhook', 'registrar_rutas' ) );
 // maybe_upgrade se dispara en init (todo request) además de admin_init: sin
 // esta línea, cuando cambia DB_VERSION las nuevas columnas no existen hasta
@@ -61,6 +65,7 @@ add_action( 'wp_enqueue_scripts', function () {
 } );
 if ( is_admin() ) {
 	add_action( 'admin_menu', array( 'CN_Admin', 'registrar_menu' ) );
+	add_action( 'admin_menu', array( 'CN_Colaboradora', 'registrar_menu' ) );
 }
 add_action( 'template_redirect', function () {
 	if ( ! is_singular() ) {
