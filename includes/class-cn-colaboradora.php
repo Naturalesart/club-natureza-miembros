@@ -173,11 +173,15 @@ class CN_Colaboradora {
 		}
 		global $wpdb;
 		$res    = self::procesar();
-		$cursos = (array) $wpdb->get_results( 'SELECT id, nombre FROM ' . CN_DB::tabla( 'cursos' ) . ' ORDER BY orden ASC, id ASC' );
+		$cursos = (array) $wpdb->get_results( 'SELECT id, nombre, link_drive FROM ' . CN_DB::tabla( 'cursos' ) . ' ORDER BY orden ASC, id ASC' );
 		$ultimos = (array) $wpdb->get_results( 'SELECT c.tipo, c.titulo, cu.nombre AS curso_nombre FROM ' . CN_DB::tabla( 'contenidos' ) . ' c LEFT JOIN ' . CN_DB::tabla( 'cursos' ) . ' cu ON cu.id = c.curso_id ORDER BY c.id DESC LIMIT 10' );
 		$opciones = '';
+		$carpetas = '';
 		foreach ( $cursos as $c ) {
 			$opciones .= '<option value="' . esc_attr( $c->id ) . '">' . esc_html( $c->nombre ) . '</option>';
+			if ( self::link_ok( isset( $c->link_drive ) ? $c->link_drive : '', self::HOSTS_DRIVE ) ) {
+				$carpetas .= '<p><a class="button" href="' . esc_url( $c->link_drive ) . '" target="_blank" rel="noopener noreferrer">Abrir carpeta: ' . esc_html( $c->nombre ) . '</a></p>';
+			}
 		}
 		?>
 		<style>
@@ -236,6 +240,12 @@ class CN_Colaboradora {
 					<input type="url" name="cn_link" required placeholder="https://drive.google.com/drive/folders/...">
 					<button type="submit" name="cn_colab_curso" value="1" class="button button-primary">Crear curso</button>
 				</form>
+			</div>
+
+			<div class="card">
+				<h2>Subir videos desde el celular</h2>
+				<p><strong>1.</strong> Abrí la carpeta del curso.<br><strong>2.</strong> Tocá "+", después "Subir" y elegí el video de la galería (mejor con wifi).<br><strong>3.</strong> Cuando termine de subir, volvé acá y tocá "Sincronizar con Drive" acá abajo.</p>
+				<?php echo $carpetas ? $carpetas : '<p>Todavía no hay cursos con carpeta de Drive.</p>'; // phpcs:ignore WordPress.Security.EscapeOutput ?>
 			</div>
 
 			<div class="card">

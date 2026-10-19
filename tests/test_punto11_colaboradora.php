@@ -102,4 +102,20 @@ seccion( 'sincronizar con Drive' );
 list( $r, $w ) = cb_run( $CAP, array( 'cn_colab_sync' => '1', 'cn_curso_id' => '77' ) );
 t( 'curso inexistente: rechaza sin llamar a Drive', 'error' === $r['tipo'] && ! $GLOBALS['cn_http_log'] );
 
+seccion( 'pantalla: atajo a las carpetas de Drive' );
+cn_test_reset();
+$GLOBALS['cn_caps'] = $CAP;
+$_POST = array();
+global $wpdb;
+$wpdb->on( '/^SELECT id, nombre, link_drive FROM wp_cn_cursos/', array(
+	cn_fila( array( 'id' => 5, 'nombre' => 'Peonía', 'link_drive' => 'https://drive.google.com/drive/folders/1AbC' ) ),
+	cn_fila( array( 'id' => 6, 'nombre' => 'Raro', 'link_drive' => 'https://evil.com/x' ) ),
+) );
+ob_start();
+CN_Colaboradora::pagina();
+$html = ob_get_clean();
+t( 'muestra el botón de la carpeta de Drive del curso', false !== strpos( $html, 'href="https://drive.google.com/drive/folders/1AbC"' ) && false !== strpos( $html, 'Abrir carpeta: Peonía' ) );
+t( 'no muestra links que no son de Drive', false === strpos( $html, 'evil.com' ) );
+t( 'la pantalla no ofrece borrar ni editar', false === stripos( $html, 'borrar' ) && false === stripos( $html, 'cn_action' ) );
+
 unset( $GLOBALS['cn_caps'] ); // el resto de los tests asume permisos de administrador (stub por defecto).
