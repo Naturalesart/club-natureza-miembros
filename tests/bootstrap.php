@@ -253,6 +253,10 @@ class CN_Fake_Wpdb {
 		$r = $this->resolver( $sql );
 		return is_array( $r ) ? $r : array();
 	}
+	public function get_col( $sql ) {
+		$r = $this->resolver( $sql );
+		return is_array( $r ) ? $r : array();
+	}
 	public function get_var( $sql ) {
 		$r = $this->resolver( $sql );
 		return is_scalar( $r ) ? $r : null;
