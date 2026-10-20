@@ -416,6 +416,50 @@ class CN_Admin {
 		}
 		echo '</tbody></table>';
 	}
+	/**
+	 * Buscador del listado de socias (solo lectura). Devuelve los id que coinciden con $q.
+	 * LIKE sobre la collation de la tabla (insensible a mayúsculas y tildes). Nunca toca ni expone el hash del celular.
+	 */
+	public static function ids_busqueda( $q ) {
+		global $wpdb;
+		$q = trim( (string) $q );
+		if ( '' === $q ) {
+			return array();
+		}
+		$tabla = CN_DB::tabla( 'miembros' );
+		$like  = function ( $v ) use ( $wpdb ) {
+			return '%' . $wpdb->esc_like( $v ) . '%';
+		};
+		$cond = array( 'nombre_apellido LIKE %s', 'email LIKE %s', 'preapproval_id LIKE %s' );
+		$args = array( $like( $q ), $like( $q ), $like( $q ) );
+		if ( preg_match( '/^#?\s*(\d+)$/', $q, $m ) ) {
+			$cond[] = 'id = %d';
+			$args[] = (int) $m[1];
+		}
+		$digitos = preg_replace( '/\D+/', '', $q );
+		if ( '#' !== substr( $q, 0, 1 ) && strlen( $digitos ) >= 4 ) {
+			if ( strlen( $digitos ) >= 8 ) {
+				// Número largo: se normaliza igual que en el alta y se busca también tal cual.
+				$norm = CN_Helpers::normalizar_celular( $q );
+				foreach ( array_unique( array( $norm['normalizado'], $digitos ) ) as $c ) {
+					$cond[] = 'celular_texto_plano LIKE %s';
+					$args[] = $like( $c );
+				}
+				// Fichas sin celular en texto plano: solo queda el hint (últimos 4).
+				$cond[] = "(celular_hint = %s AND (celular_texto_plano IS NULL OR celular_texto_plano = ''))";
+				$args[] = substr( $norm['normalizado'], -4 );
+			} else {
+				$cond[] = 'celular_texto_plano LIKE %s';
+				$args[] = $like( $digitos );
+				if ( 4 === strlen( $digitos ) ) {
+					$cond[] = 'celular_hint = %s';
+					$args[] = $digitos;
+				}
+			}
+		}
+		$sql = "SELECT id FROM {$tabla} WHERE " . implode( ' OR ', $cond );
+		return array_map( 'intval', (array) $wpdb->get_col( $wpdb->prepare( $sql, $args ) ) );
+	}
 	public static function pagina_socias() {
 		if ( ! current_user_can( 'manage_options' ) ) return;
 		global $wpdb;
@@ -567,7 +611,12 @@ class CN_Admin {
 				return ! empty( $s->fecha_fin_trial ) ? 'trial' : 'manual';
 			};
 			$cn_total_listado = count( (array) $socias );
-			$cn_filtradas = array_values( array_filter( (array) $socias, function ( $s ) use ( $cn_tipo_sel, $cn_tipo_de ) {
+			$cn_q     = isset( $_GET['q'] ) ? sanitize_text_field( wp_unslash( $_GET['q'] ) ) : '';
+			$cn_q_ids = '' !== $cn_q ? self::ids_busqueda( $cn_q ) : null;
+			$cn_filtradas = array_values( array_filter( (array) $socias, function ( $s ) use ( $cn_tipo_sel, $cn_tipo_de, $cn_q_ids ) {
+				if ( null !== $cn_q_ids && ! in_array( (int) $s->id, $cn_q_ids, true ) ) {
+					return false;
+				}
 				$t = $cn_tipo_de( $s );
 				if ( 'activas' === $cn_tipo_sel ) {
 					return in_array( $t, array( 'suscripta', 'manual' ), true );
@@ -611,6 +660,13 @@ class CN_Admin {
 			</div>
 			<form method="get" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 12px;">
 				<input type="hidden" name="page" value="cn-socias">
+				<label>Buscar
+					<input type="search" name="q" value="<?php echo esc_attr( $cn_q ); ?>" class="regular-text" placeholder="Nombre, email, #id, celular o preapproval">
+				</label>
+				<button type="submit" class="button">Buscar</button>
+				<?php if ( '' !== $cn_q ) : ?>
+					<a href="<?php echo esc_url( add_query_arg( array( 'page' => 'cn-socias', 'cn_tipo' => $cn_tipo_sel, 'cn_orden' => $cn_orden_sel ), admin_url( 'admin.php' ) ) ); ?>">Limpiar</a>
+				<?php endif; ?>
 				<label>Mostrar
 					<select name="cn_tipo">
 						<?php foreach ( $cn_tipos_ok as $cn_k => $cn_v ) : ?>
@@ -629,14 +685,19 @@ class CN_Admin {
 				<a href="<?php echo esc_url( admin_url( 'admin.php?page=cn-socias' ) ); ?>">Quitar filtros</a>
 				<span style="color:#50575e;">Mostrando <?php echo (int) count( $socias ); ?> de <?php echo (int) $cn_total_listado; ?></span>
 			</form>
+			<?php if ( '' !== $cn_q ) : ?>
+				<p><strong><?php echo (int) count( $socias ); ?> <?php echo 1 === count( $socias ) ? 'resultado' : 'resultados'; ?></strong> para &laquo;<?php echo esc_html( $cn_q ); ?>&raquo;<?php echo 0 === count( $socias ) ? ' &mdash; no se encontró ninguna socia (probá con menos letras, o revisá que "Mostrar" no esté filtrando por tipo).' : ''; ?></p>
+			<?php endif; ?>
 			<table class="widefat striped">
 				<thead>
 					<tr>
 						<th>Nombre y Apellido</th>
+						<?php if ( '' !== $cn_q ) : ?><th>Email</th><?php endif; ?>
 						<th>Celular</th>
 						<th>Estado</th>
 						<th>Tipo</th>
 						<th>Alta</th>
+						<?php if ( '' !== $cn_q ) : ?><th>Plan / acceso hasta</th><?php endif; ?>
 						<th>Acciones</th>
 					</tr>
 				</thead>
@@ -647,6 +708,7 @@ class CN_Admin {
 					<?php foreach ( $socias as $socia ) : ?>
 						<tr>
 							<td><?php echo esc_html( $socia->nombre_apellido ); ?></td>
+							<?php if ( '' !== $cn_q ) : ?><td><?php echo esc_html( (string) $socia->email ); ?></td><?php endif; ?>
 							<td>****<?php echo esc_html( $socia->celular_hint ); ?></td>
 							<td><?php echo 'activo' === $socia->estado ? '<span style="color:#2e7d32;">Activo</span>' : ( 'cancelada' === $socia->estado ? '<span style="color:#c62828;">Cancelada</span>' : '<span style="color:#c62828;">Pausado</span>' ); ?></td>
 							<td><?php
@@ -657,6 +719,7 @@ class CN_Admin {
 							}
 							?></td>
 							<td><?php echo esc_html( mysql2date( 'd/m/Y', $socia->fecha_alta ) ); ?></td>
+							<?php if ( '' !== $cn_q ) : ?><td><?php echo esc_html( trim( (string) $socia->plan . ( ! empty( $socia->acceso_hasta ) ? ' · hasta ' . mysql2date( 'd/m/Y', $socia->acceso_hasta ) : '' ) ) ); ?></td><?php endif; ?>
 							<td>
 								<a href="<?php echo esc_url( add_query_arg( array( 'page' => 'cn-socias', 'editar' => $socia->id ) ) ); ?>">Editar</a> |
 								<?php if ( 'activo' === $socia->estado ) : ?>
