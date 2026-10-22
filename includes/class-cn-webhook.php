@@ -1354,7 +1354,7 @@ class CN_Webhook {
 	/** Tipo de fila de mp_log con que se registran los avisos técnicos (los lee el cartel "Avisos" de Club Natureza → Socias). */
 	const TIPO_AVISO = 'aviso_error';
 	/** Motivos de "una socia pagó y no pudo recibir acceso": se anotan como caso (CN_Alertas) y, si pasan 72 hs sin resolverse, entran en el resumen diario. Ya no mandan mail inmediato. */
-	const MOTIVOS_PAGO_SIN_ACCESO = array( 'excepcion_trial_alta', 'metadata_incompleta', 'preapproval_sin_match', 'alta_mail_sin_email' );
+	const MOTIVOS_PAGO_SIN_ACCESO = array( 'excepcion_trial_alta', 'metadata_incompleta', 'preapproval_sin_match' );
 	/**
 	 * Aviso técnico: NO manda mail ni webhook. Deja una fila en mp_log (tipo aviso_error) que el cartel "Avisos" muestra
 	 * agrupada: mismo motivo + mismo detalle = una línea con contador. Nunca lanza ni bloquea (es accesorio).

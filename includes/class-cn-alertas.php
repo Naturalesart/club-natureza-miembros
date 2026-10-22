@@ -6,10 +6,11 @@ if ( ! defined( 'ABSPATH' ) ) exit;
  *
  *  1. Sync caído: más de 24 hs sin una corrida COMPLETA y exitosa de CN_Sync::correr. Máx. 1 mail cada 24 hs; al
  *     recuperarse queda mp_log 'sync_recuperado' (sin mail).
- *  2. Token de Mercado Pago inválido: un GET devolvió 401/403 (429 y 5xx no cuentan). Máx. 1 mail cada 24 hs mientras
- *     siga pasando; se limpia solo cuando una llamada vuelve a andar.
+ *  2. Token de Mercado Pago inválido: una racha de GET con 401/403 (429 y 5xx no cuentan) que lleva 60 min o más sin ningún
+ *     2xx en el medio. Antes de los 60 min solo se marca la racha. Máx. 1 mail cada 24 hs mientras siga; se limpia solo cuando
+ *     una llamada vuelve a andar.
  *  3. Pagos sin acceso: los casos "pagó y no tiene acceso" (preapproval_sin_match, excepcion_trial_alta,
- *     metadata_incompleta, alta_mail_sin_email) se anotan con la fecha de la primera vez (opción acotada a 500) y un
+ *     metadata_incompleta) se anotan con la fecha de la primera vez (opción acotada a 500) y un
  *     chequeo diario manda UN mail resumen con los que llevan más de 72 hs sin resolverse (resuelto = ya hay ficha con
  *     ese preapproval_id o ese pago). Máx. 1 mail por día; ids enmascarados (6 caracteres + ...), nunca emails ni nombres.
  *
@@ -29,12 +30,12 @@ class CN_Alertas {
 	const SYNC_MAX_SEG       = 86400; // 24 hs sin corrida exitosa
 	const CASO_MAX_SEG       = 259200; // 72 hs sin resolverse
 	const REPETIR_SEG        = 86400; // cada alerta, como máximo 1 mail por día
+	const TOKEN_RACHA_SEG    = 3600;  // 60 min de 401/403 seguidos (sin ningún 2xx) antes de mandar el mail del token
 	/** Motivos que cuentan como "pagó y no tiene acceso" y de qué campo del detalle sale el id a vigilar. */
 	const MOTIVOS_CASO = array(
 		'preapproval_sin_match' => 'preapproval_id',
 		'excepcion_trial_alta'  => 'payment_id',
 		'metadata_incompleta'   => 'payment_id',
-		'alta_mail_sin_email'   => 'preapproval_id',
 	);
 	const ASUNTO_SYNC  = '[Club Natureza] GRAVE: sync caído hace más de 24 hs';
 	const ASUNTO_TOKEN = '[Club Natureza] GRAVE: token de Mercado Pago inválido';
@@ -113,7 +114,7 @@ class CN_Alertas {
 	// ======================================================================
 	// 2. TOKEN DE MERCADO PAGO INVÁLIDO
 	// ======================================================================
-	/** Lo llama CN_MP cuando un GET devuelve 401/403 (nunca por 429 ni 5xx). */
+	/** Lo llama CN_MP cuando un GET devuelve 401/403 (nunca por 429 ni 5xx). Manda el mail solo si la racha lleva TOKEN_RACHA_SEG o más. */
 	public static function token_invalido( $ruta, $http ) {
 		$http = (int) $http;
 		if ( ! in_array( $http, array( 401, 403 ), true ) ) {
@@ -125,6 +126,9 @@ class CN_Alertas {
 			update_option( self::OPT_TOKEN_DESDE, $desde, false );
 		}
 		update_option( self::OPT_TOKEN_HTTP, $http, false );
+		if ( time() - $desde < self::TOKEN_RACHA_SEG ) {
+			return; // racha corta (puede ser un rechazo puntual): solo se marca; si sigue a los 60 min, ahí se avisa.
+		}
 		if ( time() - (int) get_option( self::OPT_MAIL_TOKEN, 0 ) < self::REPETIR_SEG ) {
 			return;
 		}

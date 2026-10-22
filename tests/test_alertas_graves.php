@@ -82,33 +82,61 @@ cn_http_on( 'GET', '#/preapproval/search\?status=authorized#', function () {
 CN_Sync::correr();
 t( 'una excepción en cualquiera de los 3 pasos = corrida NO exitosa (no renueva el heartbeat)', time() - (int) get_option( CN_Alertas::OPT_SYNC_OK ) >= 3600 - 5 );
 
-seccion( 'token de Mercado Pago inválido (D3)' );
+seccion( 'token de Mercado Pago inválido (D3): racha de 60 min antes del mail' );
+/** Arma una racha: primer 401/403 hace $seg segundos y vuelve a fallar ahora. */
+function ag_racha( $code, $seg ) {
+	ag_reset();
+	cn_http_on( 'GET', '#/preapproval/PRE1$#', $code );
+	CN_MP::obtener_preapproval( 'PRE1' );
+	update_option( CN_Alertas::OPT_TOKEN_DESDE, time() - $seg );
+	CN_MP::obtener_preapproval( 'PRE1' );
+}
 foreach ( array( 401, 403 ) as $code ) {
 	ag_reset();
 	cn_http_on( 'GET', '#/preapproval/PRE1$#', $code );
 	CN_MP::obtener_preapproval( 'PRE1' );
+	CN_MP::obtener_preapproval( 'PRE1' );
+	t( "{$code} recién empezado: marca la racha pero NO manda mail", ! ag_alertas() && abs( (int) get_option( CN_Alertas::OPT_TOKEN_DESDE ) - time() ) <= 2 && $code === (int) get_option( CN_Alertas::OPT_TOKEN_HTTP ) );
+	ag_racha( $code, 59 * 60 );
+	t( "{$code} con 59 min de racha: todavía no", ! ag_alertas() );
+	ag_racha( $code, 60 * 60 );
 	$a = ag_alertas();
-	t( "{$code}: UNA alerta mp_token_invalido con asunto claro y el código", 1 === count( $a ) && 'mp_token_invalido' === $a[0]['motivo'] && CN_Alertas::ASUNTO_TOKEN === $a[0]['asunto'] && false !== strpos( $a[0]['cuerpo'], "HTTP {$code}" ) && false !== strpos( $a[0]['cuerpo'], 'Config' ) );
+	t( "{$code} con 60 min de racha: UNA alerta mp_token_invalido con asunto claro y el código", 1 === count( $a ) && 'mp_token_invalido' === $a[0]['motivo'] && CN_Alertas::ASUNTO_TOKEN === $a[0]['asunto'] && false !== strpos( $a[0]['cuerpo'], "HTTP {$code}" ) && false !== strpos( $a[0]['cuerpo'], 'Config' ) );
 	CN_MP::obtener_preapproval( 'PRE1' );
 	CN_MP::obtener_preapproval( 'PRE1' );
-	t( "{$code} repetido: no repite el mail dentro de las 24 hs", 1 === count( ag_alertas() ) && (int) get_option( CN_Alertas::OPT_TOKEN_DESDE ) > 0 );
+	t( "{$code} sigue: no repite el mail dentro de las 24 hs", 1 === count( ag_alertas() ) );
 }
 foreach ( array( 429, 500, 502, 404, 400 ) as $code ) {
+	ag_racha( $code, 2 * 3600 );
+	t( "{$code}: NO es token inválido (sin mail)", ! ag_alertas() );
 	ag_reset();
 	cn_http_on( 'GET', '#/preapproval/PRE1$#', $code );
 	CN_MP::obtener_preapproval( 'PRE1' );
-	t( "{$code}: NO es token inválido (sin mail, sin marca)", ! ag_alertas() && 0 === (int) get_option( CN_Alertas::OPT_TOKEN_DESDE, 0 ) );
+	t( "{$code}: no marca racha", 0 === (int) get_option( CN_Alertas::OPT_TOKEN_DESDE, 0 ) );
 }
 ag_reset();
 cn_http_on( 'GET', '#/preapproval/PRE1$#', null );
 CN_MP::obtener_preapproval( 'PRE1' );
-t( 'sin respuesta (red): tampoco', ! ag_alertas() );
+t( 'sin respuesta (red): tampoco marca', ! ag_alertas() && 0 === (int) get_option( CN_Alertas::OPT_TOKEN_DESDE, 0 ) );
+// Un 2xx en el medio corta la racha: el contador vuelve a cero.
 ag_reset();
 cn_http_on( 'GET', '#/preapproval/PRE1$#', 401 );
 CN_MP::obtener_preapproval( 'PRE1' );
+update_option( CN_Alertas::OPT_TOKEN_DESDE, time() - 50 * 60 );
+cn_http_on( 'GET', '#/preapproval/OK$#', array( 'id' => 'OK', 'status' => 'authorized' ) );
+CN_MP::obtener_preapproval( 'OK' );
+t( 'un 2xx a los 50 min limpia la racha (mp_token_recuperado, sin mail)', 0 === (int) get_option( CN_Alertas::OPT_TOKEN_DESDE ) && in_array( 'mp_token_recuperado', ag_tipos(), true ) && ! ag_alertas() );
+CN_MP::obtener_preapproval( 'PRE1' );
+update_option( CN_Alertas::OPT_TOKEN_DESDE, time() - 15 * 60 );
+CN_MP::obtener_preapproval( 'PRE1' );
+t( 'la racha nueva arranca de cero: a los 15 min (65 desde el primer 401 original) no avisa', ! ag_alertas() );
+update_option( CN_Alertas::OPT_TOKEN_DESDE, time() - 61 * 60 );
+CN_MP::obtener_preapproval( 'PRE1' );
+t( 'y a los 61 min seguidos sin 2xx, avisa', 1 === count( ag_alertas() ) );
+ag_racha( 401, 2 * 3600 );
 update_option( CN_Alertas::OPT_MAIL_TOKEN, time() - 25 * 3600 );
 CN_MP::obtener_preapproval( 'PRE1' );
-t( 'sigue en 401 pasadas 24 hs: vuelve a avisar (1 por día)', 2 === count( ag_alertas() ) );
+t( 'sigue en 401 pasadas 24 hs del mail: vuelve a avisar (1 por día)', 2 === count( ag_alertas() ) );
 cn_http_on( 'GET', '#/preapproval/PRE1$#', array( 'id' => 'PRE1', 'status' => 'authorized' ) );
 CN_MP::obtener_preapproval( 'PRE1' );
 t( 'una llamada que vuelve a andar limpia la condición (mp_token_recuperado, sin mail)', 0 === (int) get_option( CN_Alertas::OPT_TOKEN_DESDE ) && in_array( 'mp_token_recuperado', ag_tipos(), true ) && 2 === count( ag_alertas() ) );
@@ -116,7 +144,9 @@ CN_MP::obtener_preapproval( 'PRE1' );
 t( 'con el token sano no escribe nada más', 1 === count( array_keys( ag_tipos(), 'mp_token_recuperado', true ) ) );
 cn_http_on( 'GET', '#/preapproval/PRE1$#', 401 );
 CN_MP::obtener_preapproval( 'PRE1' );
-t( 'si vuelve a fallar enseguida después de recuperarse: nueva racha, pero el tope de 1 mail por 24 hs sigue valiendo (sin spam por intermitencias)', 2 === count( ag_alertas() ) && (int) get_option( CN_Alertas::OPT_TOKEN_DESDE ) > 0 );
+update_option( CN_Alertas::OPT_TOKEN_DESDE, time() - 2 * 3600 );
+CN_MP::obtener_preapproval( 'PRE1' );
+t( 'racha nueva de 2 hs enseguida después de recuperarse: el tope de 1 mail por 24 hs sigue valiendo', 2 === count( ag_alertas() ) && (int) get_option( CN_Alertas::OPT_TOKEN_DESDE ) > 0 );
 update_option( CN_Alertas::OPT_MAIL_TOKEN, time() - 25 * 3600 );
 CN_MP::obtener_preapproval( 'PRE1' );
 t( '...y pasadas 24 hs del último mail, avisa de la nueva racha', 3 === count( ag_alertas() ) );
@@ -125,11 +155,15 @@ ag_reset();
 cn_http_on( 'GET', '#/preapproval/PRE2$#', 403 );
 $pres = array( 'requests' => 10, 'espera' => 10, 'hasta' => time() + 60 );
 CN_MP::obtener_preapproval_con_reintentos( 'PRE2', $pres );
-t( 'get_con_reintentos (sync): 403 también alerta', 1 === count( ag_alertas() ) );
+update_option( CN_Alertas::OPT_TOKEN_DESDE, time() - 2 * 3600 );
+CN_MP::obtener_preapproval_con_reintentos( 'PRE2', $pres );
+t( 'get_con_reintentos (sync): 403 también marca y alerta', 1 === count( ag_alertas() ) );
 ag_reset();
 cn_http_on( 'GET', '#/preapproval/PRE3$#', 401 );
 CN_MP::obtener_preapproval_detalle( 'PRE3' );
-t( 'obtener_preapproval_detalle: 401 también alerta', 1 === count( ag_alertas() ) );
+update_option( CN_Alertas::OPT_TOKEN_DESDE, time() - 2 * 3600 );
+CN_MP::obtener_preapproval_detalle( 'PRE3' );
+t( 'obtener_preapproval_detalle: 401 también marca y alerta', 1 === count( ag_alertas() ) );
 cn_http_on( 'GET', '#/preapproval/PRE3$#', array( 'id' => 'PRE3', 'status' => 'authorized' ) );
 CN_MP::obtener_preapproval_detalle( 'PRE3' );
 t( '...y un 200 por esa vía también limpia', 0 === (int) get_option( CN_Alertas::OPT_TOKEN_DESDE ) );
@@ -137,6 +171,7 @@ ag_reset();
 cn_http_on( 'GET', '#/preapproval/PRE1$#', 401 );
 CN_MP::obtener_preapproval( 'PRE1' );
 t( 'el 401 sigue dejando mp_api_error y el aviso del cartel como antes', in_array( 'mp_api_error', ag_tipos(), true ) && in_array( CN_Webhook::TIPO_AVISO, ag_tipos(), true ) );
+t( 'la racha mínima son 60 min', 3600 === CN_Alertas::TOKEN_RACHA_SEG );
 
 seccion( 'pagos sin acceso: resumen diario a las 72 hs (D1/D4)' );
 const AG_PRE = 'abcdef1234567890abcdef1234567890';
@@ -153,9 +188,11 @@ ag_reset();
 CN_Webhook::avisar_error_n8n( 'preapproval_sin_match', array( 'preapproval_id' => AG_PRE, 'payer_email' => 'sandra@gmail.com' ) );
 CN_Webhook::avisar_error_n8n( 'excepcion_trial_alta', array( 'payment_id' => '5550001', 'mensaje' => 'x' ) );
 CN_Webhook::avisar_error_n8n( 'metadata_incompleta', array( 'payment_id' => '5550002' ) );
-CN_Webhook::avisar_error_n8n( 'alta_mail_sin_email', array( 'preapproval_id' => AG_PRE, 'horas' => 80 ) );
+CN_Webhook::avisar_error_n8n( 'alta_mail_sin_email', array( 'preapproval_id' => 'ffffff1234567890abcdef1234567890', 'horas' => 80 ) );
 $c = get_option( CN_Alertas::OPT_CASOS );
-t( 'los 4 motivos se anotan como caso, sin mail; el mismo preapproval por 2 motivos es UN caso', ! ag_alertas() && ! $GLOBALS['cn_mails'] && 3 === count( $c ) && isset( $c[ 'preapproval|' . AG_PRE ], $c['pago|5550001'], $c['pago|5550002'] ) );
+t( 'los 3 motivos se anotan como caso, sin mail; alta_mail_sin_email NO (solo cartel)', ! ag_alertas() && ! $GLOBALS['cn_mails'] && 3 === count( $c ) && isset( $c[ 'preapproval|' . AG_PRE ], $c['pago|5550001'], $c['pago|5550002'] ) && ! isset( $c['preapproval|ffffff1234567890abcdef1234567890'] ) && in_array( CN_Webhook::TIPO_AVISO, ag_tipos(), true ) );
+CN_Webhook::avisar_error_n8n( 'alta_mail_sin_email', array( 'preapproval_id' => AG_PRE ) );
+t( 'alta_mail_sin_email tampoco toca un caso ya existente del mismo preapproval', 3 === count( get_option( CN_Alertas::OPT_CASOS ) ) );
 t( 'el caso guarda la fecha de la primera vez y no datos personales', abs( $c[ 'preapproval|' . AG_PRE ]['desde'] - time() ) <= 2 && false === strpos( json_encode( $c ), 'sandra' ) );
 $d1 = $c[ 'preapproval|' . AG_PRE ]['desde'] - 100;
 $c[ 'preapproval|' . AG_PRE ]['desde'] = $d1;
@@ -224,8 +261,6 @@ $src = file_get_contents( dirname( __DIR__ ) . '/includes/class-cn-alertas.php' 
 t( 'CN_Alertas no llama a Mercado Pago ni escribe en miembros (solo SELECT)', false === strpos( $src, 'wp_remote_get' ) && false === strpos( $src, 'api.mercadopago' ) && ! preg_match( '/->insert\(|->update\(|->delete\(|->query\(/', $src ) );
 t( 'los 3 asuntos son distintos y empiezan con [Club Natureza] GRAVE', 3 === count( array_unique( array( CN_Alertas::ASUNTO_SYNC, CN_Alertas::ASUNTO_TOKEN, sprintf( CN_Alertas::ASUNTO_CASOS, 2 ) ) ) ) && 0 === strpos( CN_Alertas::ASUNTO_SYNC, '[Club Natureza] GRAVE' ) && 0 === strpos( CN_Alertas::ASUNTO_TOKEN, '[Club Natureza] GRAVE' ) && 0 === strpos( CN_Alertas::ASUNTO_CASOS, '[Club Natureza] GRAVE' ) );
 t( 'cada alerta deja rastro alerta_grave_enviada en mp_log', ( function () {
-	ag_reset();
-	cn_http_on( 'GET', '#/preapproval/PRE1$#', 401 );
-	CN_MP::obtener_preapproval( 'PRE1' );
+	ag_racha( 401, 2 * 3600 );
 	return in_array( 'alerta_grave_enviada', ag_tipos(), true );
 } )() );

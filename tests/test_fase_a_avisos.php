@@ -42,7 +42,7 @@ foreach ( CN_Webhook::MOTIVOS_PAGO_SIN_ACCESO as $motivo ) {
 	CN_Webhook::avisar_error_n8n( $motivo, array( $campo => '12345678901234567890123456789012' ) );
 	t( "{$motivo}: cero llamadas a n8n, queda en el cartel y como UN caso anotado", ! n8n_calls() && 2 === count( avisos_insertados( $GLOBALS['wpdb'] ) ) && ! $GLOBALS['cn_mails'] && 1 === count( get_option( CN_Alertas::OPT_CASOS ) ) );
 }
-t( 'son exactamente los 4 motivos de pago sin acceso, y ningún error técnico está en la lista', array( 'excepcion_trial_alta', 'metadata_incompleta', 'preapproval_sin_match', 'alta_mail_sin_email' ) === CN_Webhook::MOTIVOS_PAGO_SIN_ACCESO && array_keys( CN_Alertas::MOTIVOS_CASO ) === array( 'preapproval_sin_match', 'excepcion_trial_alta', 'metadata_incompleta', 'alta_mail_sin_email' ) );
+t( 'son exactamente los 3 motivos de pago sin acceso, y ningún error técnico (ni alta_mail_sin_email) está en la lista', array( 'excepcion_trial_alta', 'metadata_incompleta', 'preapproval_sin_match' ) === CN_Webhook::MOTIVOS_PAGO_SIN_ACCESO && array_keys( CN_Alertas::MOTIVOS_CASO ) === array( 'preapproval_sin_match', 'excepcion_trial_alta', 'metadata_incompleta' ) );
 cn_test_reset();
 cn_http_on( 'POST', '#club-trial-alerta#', array() );
 CN_Webhook::avisar_error_n8n( 'sub_sin_vincular', array( 'cantidad' => 1 ) );
