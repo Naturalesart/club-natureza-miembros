@@ -30,9 +30,11 @@ require_once CN_PATH . 'includes/class-cn-shortcodes.php';
 require_once CN_PATH . 'includes/class-cn-admin.php';
 require_once CN_PATH . 'includes/class-cn-colaboradora.php';
 require_once CN_PATH . 'includes/class-cn-clarity.php';
+require_once CN_PATH . 'includes/class-cn-planes-mp.php';
 register_activation_hook( __FILE__, array( 'CN_Activator', 'activar' ) );
 add_action( 'init', array( 'CN_Shortcodes', 'registrar' ) );
 add_action( 'init', array( 'CN_Retorno', 'registrar' ) );
+CN_Planes_MP::registrar();
 // Rol "Colaboradora Club": acceso acotado (solo cargar contenido), sin permisos de administrador.
 add_action( 'init', array( 'CN_Colaboradora', 'registrar_rol' ) );
 add_filter( 'login_redirect', array( 'CN_Colaboradora', 'redirigir_login' ), 10, 3 );
