@@ -119,7 +119,7 @@ $b = rp_fila( 11, '1155552165' );
 $w = rp_preparar( array( $a, $b ) );
 rp_post();
 $h = CN_Retorno::shortcode();
-t( 'celular en 2 socias: no adivina, log retorno_ambiguo, alerta n8n, sin escrituras', false !== strpos( $h, 'WhatsApp' ) && ! rp_esc() && in_array( 'retorno_ambiguo', $w->log_mp_tipos(), true ) && 1 === count( cn_http_calls( '#club-trial-alerta#' ) ) );
+t( 'celular en 2 socias: no adivina, log retorno_ambiguo, aviso en el cartel (sin n8n), sin escrituras', false !== strpos( $h, 'WhatsApp' ) && ! rp_esc() && in_array( 'retorno_ambiguo', $w->log_mp_tipos(), true ) && ! cn_http_calls( '#club-trial-alerta#' ) && in_array( CN_Webhook::TIPO_AVISO, $w->log_mp_tipos(), true ) );
 $g = rp_fila( 12, '1155552167' );
 $w = rp_preparar( array( $g ) );
 rp_post( array( 'cn_ret_nombre' => 'Otra Persona', 'cn_ret_email' => 'otra@example.com' ) );

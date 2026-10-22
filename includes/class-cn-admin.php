@@ -10,6 +10,24 @@ class CN_Admin {
 		add_submenu_page( 'cn-socias', 'Videos', 'Videos', 'manage_options', 'cn-videos', array( __CLASS__, 'pagina_videos' ) );
 		add_submenu_page( 'cn-socias', 'Config', 'Config', 'manage_options', 'cn-config', array( __CLASS__, 'pagina_config' ) );
 	}
+	/**
+	 * Cartel "Avisos": los errores técnicos que antes salían por mail/n8n, ahora acá. Contador + últimas 50 líneas
+	 * (motivo, última fecha, detalle), con lo repetido agrupado en una sola línea con contador. Solo lectura.
+	 */
+	public static function cartel_avisos() {
+		$a = CN_Webhook::listar_avisos( 50 );
+		if ( ! $a['total'] ) {
+			return '<div class="notice notice-success inline"><p><strong>Avisos:</strong> sin errores técnicos registrados.</p></div>';
+		}
+		$h  = '<div class="notice notice-warning inline" style="padding:6px 12px;"><details>';
+		$h .= '<summary style="cursor:pointer;"><strong>Avisos:</strong> ' . (int) $a['distintos'] . ' distintos (' . (int) $a['total'] . ' en total, últimos registros). Tocá para ver.</summary>';
+		$h .= '<table class="widefat striped" style="margin:8px 0;"><thead><tr><th>Tipo</th><th>Última vez (UTC)</th><th>Veces</th><th>Detalle</th></tr></thead><tbody>';
+		foreach ( $a['lineas'] as $l ) {
+			$h .= '<tr><td><code>' . esc_html( $l['motivo'] ) . '</code></td><td>' . esc_html( $l['ultima'] ) . '</td><td>' . (int) $l['veces'] . '</td><td style="word-break:break-word;">' . esc_html( $l['detalle'] ) . '</td></tr>';
+		}
+		$h .= '</tbody></table></details></div>';
+		return $h;
+	}
 	protected static function aviso( $texto, $tipo = 'success' ) {
 		echo '<div class="notice notice-' . esc_attr( $tipo ) . ' is-dismissible"><p>' . esc_html( $texto ) . '</p></div>';
 	}
@@ -531,6 +549,7 @@ class CN_Admin {
 		<div class="wrap">
 			<h1>Socias</h1>
 			<?php echo CN_Retorno::cartel_pendientes(); // vacío si no hay clientas esperando acceso. ?>
+			<?php echo self::cartel_avisos(); // errores técnicos registrados (sin mails ni n8n). ?>
 			<?php if ( $socia_editar ) : ?>
 				<h2>Editar socia</h2>
 				<form method="post" style="max-width:480px;">
@@ -1387,6 +1406,8 @@ class CN_Admin {
 			update_option( 'cn_sync_mp_activo', isset( $_POST['cn_sync_mp_activo'] ) ? '1' : '0' );
 			// Fase 5: guarda del cron de trials (mira en MP si pagó por link directo antes de cancelar). Tildado por defecto.
 			update_option( 'cn_guarda_trial_mp', isset( $_POST['cn_guarda_trial_mp'] ) ? '1' : '0' );
+			// Guarda de trials en modo solo-log: tildado por defecto. Tildado = registra su decisión y no cambia nada.
+			update_option( 'cn_guarda_trial_solo_log', isset( $_POST['cn_guarda_trial_solo_log'] ) ? '1' : '0' );
 			// Página de retorno de suscripciones por link directo ([cn_retorno_suscripcion]). Apagada por defecto.
 			update_option( 'cn_retorno_activo', isset( $_POST['cn_retorno_activo'] ) ? '1' : '0' );
 			update_option( CN_Retorno::OPT_WHATSAPP, preg_replace( '/\D+/', '', sanitize_text_field( wp_unslash( $_POST['cn_retorno_whatsapp'] ?? '' ) ) ) ); // solo dígitos
@@ -1407,6 +1428,7 @@ class CN_Admin {
 		$sub_modo_seguro  = '1' === (string) get_option( 'cn_sub_modo_seguro', '1' );
 		$sync_mp_activo   = '1' === (string) get_option( 'cn_sync_mp_activo', '1' );
 		$guarda_trial_mp  = '1' === (string) get_option( 'cn_guarda_trial_mp', '1' );
+		$guarda_solo_log  = '1' === (string) get_option( 'cn_guarda_trial_solo_log', '1' );
 		$retorno_activo   = '1' === (string) get_option( 'cn_retorno_activo', '0' );
 		$retorno_wa       = (string) get_option( CN_Retorno::OPT_WHATSAPP, '' );
 		$capi_token   = CN_Meta_Capi::get_token();
@@ -1475,7 +1497,7 @@ class CN_Admin {
 						<th><label>Sincronizar con Mercado Pago (cada 30 min)</label></th>
 						<td>
 							<label><input type="checkbox" name="cn_sync_mp_activo" value="1" <?php checked( $sync_mp_activo ); ?>> Revisar en Mercado Pago las suscripciones ya vinculadas, sin depender de los webhooks</label>
-							<p class="description">Tildado por defecto. Cada 30 minutos revisa hasta 20 suscripciones: renovaciones y reanudaciones se aplican; cancelaciones y pausas solo programan la baja (sin cortar el acceso) si el Modo seguro está destildado. También avisa por n8n de las suscripciones autorizadas sin vincular hace más de 1 hora (no vincula nada).</p>
+							<p class="description">Tildado por defecto. Cada 30 minutos revisa hasta 20 suscripciones: renovaciones y reanudaciones se aplican; cancelaciones y pausas solo programan la baja (sin cortar el acceso) si el Modo seguro está destildado. También deja un aviso de las suscripciones autorizadas sin vincular hace más de 1 hora (no vincula nada).</p>
 						</td>
 					</tr>
 					<tr>
@@ -1490,8 +1512,10 @@ class CN_Admin {
 					<tr>
 						<th><label>Guarda del cron de trials (Mercado Pago)</label></th>
 						<td>
-							<label><input type="checkbox" name="cn_guarda_trial_mp" value="1" <?php checked( $guarda_trial_mp ); ?>> Antes de cancelar un trial vencido, mirar en Mercado Pago si ya pagó por link directo</label>
-							<p class="description">Tildado por defecto. Si encuentra un cobro de $15.500 o más posterior al de $7.000 (o una suscripción autorizada con ese email), no cancela a la socia y avisa por n8n para vincularla. Si Mercado Pago no responde, tampoco cancela y reintenta en la próxima corrida diaria.</p>
+							<label><input type="checkbox" name="cn_guarda_trial_mp" value="1" <?php checked( $guarda_trial_mp ); ?>> Antes de cancelar un trial vencido, mirar en Mercado Pago si ya tiene una suscripción</label>
+							<p class="description">Tildado por defecto. Toma el id del pagador del cobro del trial y busca si tiene una suscripción autorizada. Si Mercado Pago no responde o no hay forma confiable de saberlo, no cancela y reintenta en la próxima corrida diaria.</p>
+							<p style="margin-top:8px;"><label><input type="checkbox" name="cn_guarda_trial_solo_log" value="1" <?php checked( $guarda_solo_log ); ?>> Modo solo-log: solo registrar lo que decidiría la guarda, sin cambiar nada</label></p>
+							<p class="description">Tildado por defecto. Con esto tildado la guarda anota su decisión en el registro (tipo <code>trial_guarda_decision</code>) y el cron NO cancela a nadie, igual que hasta ahora. Destildarlo hace que la guarda actúe: con suscripción no cancela y deja un aviso; sin suscripción cancela como siempre. Destildalo recién después de revisar las decisiones registradas.</p>
 						</td>
 					</tr>
 					<tr>

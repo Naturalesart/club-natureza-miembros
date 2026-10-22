@@ -303,6 +303,30 @@ class CN_MP {
 	public static function buscar_preapprovals_por_email( $email ) {
 		return self::get( '/preapproval/search?status=authorized&limit=100&payer_email=' . rawurlencode( (string) $email ), self::get_access_token() );
 	}
+	/**
+	 * GUARDA DE TRIALS (solo lectura): el cobro del trial, para leer payer.id. Se pide con el token del trial (Checkout Pro,
+	 * la app que lo creó) y, si falla, con el de suscripciones. null = MP no respondió (no es "no existe").
+	 */
+	public static function obtener_pago_para_guarda( $id ) {
+		foreach ( array( self::get_access_token_trial(), self::get_access_token() ) as $token ) {
+			if ( '' === $token ) {
+				continue;
+			}
+			$data = self::get( '/v1/payments/' . rawurlencode( (string) $id ), $token );
+			if ( is_array( $data ) ) {
+				return $data;
+			}
+		}
+		return null;
+	}
+	/**
+	 * Suscripciones de un pagador por su id de usuario de MP: GET /preapproval/search?payer_id=… (parámetro documentado
+	 * en la referencia de Suscripciones → Search in subscriptions; ahí NO figura `status`, por eso no se manda: quien llama
+	 * filtra por status en los resultados). Solo lectura; null si MP falló.
+	 */
+	public static function buscar_preapprovals_por_payer_id( $payer_id ) {
+		return self::get( '/preapproval/search?limit=100&payer_id=' . rawurlencode( (string) $payer_id ), self::get_access_token() );
+	}
 	/** Cobros aprobados recientes de un email, del más nuevo al más viejo. Prueba el token de suscripciones y, si falla, el del trial. */
 	public static function buscar_pagos_aprobados_por_email( $email ) {
 		$path = '/v1/payments/search?status=approved&sort=date_created&criteria=desc&limit=100&payer.email=' . rawurlencode( (string) $email );
@@ -362,6 +386,89 @@ class CN_MP {
 		}
 		return array( 'ok' => true, 'http' => $codigo, 'data' => $data );
 	}
+	// ---- Sync de 30 min: GET con reintentos ante 429 (solo lectura) ----
+	/** Reintentos máximos ante 429 por pedido (esperas de 2 s, 4 s, 8 s si MP no manda Retry-After). */
+	const REINTENTOS_429 = 3;
+	/** Espera máxima de UN reintento, aunque Retry-After pida más. */
+	const ESPERA_MAX_SEG = 30;
+	/** Función de espera (segundos); null = sleep(). Propiedad solo para poder probar sin esperar. */
+	public static $dormir = null;
+	protected static function dormir( $seg ) {
+		if ( is_callable( self::$dormir ) ) {
+			call_user_func( self::$dormir, $seg );
+			return;
+		}
+		sleep( (int) ceil( $seg ) );
+	}
+	/** Segundos que pide el encabezado Retry-After (número o fecha HTTP); null si no viene o no se entiende. */
+	public static function segundos_retry_after( $valor ) {
+		$valor = trim( (string) $valor );
+		if ( '' === $valor ) {
+			return null;
+		}
+		if ( ctype_digit( $valor ) ) {
+			return (int) $valor;
+		}
+		$ts = strtotime( $valor );
+		return false === $ts ? null : max( 0, $ts - time() );
+	}
+	/**
+	 * GET con reintentos ante 429 para el sync. $presupuesto (por referencia) lleva los topes de la corrida:
+	 * 'requests' (pedidos que quedan), 'espera' (segundos de espera que quedan) y 'hasta' (timestamp límite).
+	 * Respeta Retry-After; sin él, espera 2 s, 4 s, 8 s. Si el tope no alcanza para esperar, se rinde en ese pedido.
+	 * Solo GET. Deja el rastro mp_api_error del último intento fallido (igual que get()).
+	 *
+	 * @return array{ok:bool,http:mixed,data:?array,intentos:int,motivo:string}
+	 */
+	public static function get_con_reintentos( $path, $token, &$presupuesto ) {
+		$res = array( 'ok' => false, 'http' => 'sin_token', 'data' => null, 'intentos' => 0, 'motivo' => 'sin token' );
+		if ( ! $token ) {
+			return $res;
+		}
+		for ( $n = 0; $n <= self::REINTENTOS_429; $n++ ) {
+			if ( $presupuesto['requests'] <= 0 || time() >= $presupuesto['hasta'] ) {
+				$res['http']   = 'tope';
+				$res['motivo'] = 'tope de la corrida (pedidos o tiempo)';
+				return $res;
+			}
+			$presupuesto['requests']--;
+			$res['intentos']++;
+			$respuesta = wp_remote_get( self::API_BASE . $path, array( 'timeout' => 20, 'headers' => array( 'Authorization' => 'Bearer ' . $token ) ) );
+			if ( is_wp_error( $respuesta ) ) {
+				self::registrar_error_api( $path, 'wp_error', $respuesta->get_error_message() );
+				return array( 'http' => 'wp_error', 'motivo' => 'sin respuesta de MP' ) + $res;
+			}
+			$codigo = (int) wp_remote_retrieve_response_code( $respuesta );
+			if ( $codigo >= 200 && $codigo < 300 ) {
+				$data = json_decode( wp_remote_retrieve_body( $respuesta ), true );
+				if ( ! is_array( $data ) ) {
+					self::registrar_error_api( $path, $codigo, 'respuesta no JSON' );
+					return array( 'http' => $codigo, 'motivo' => 'respuesta no JSON' ) + $res;
+				}
+				return array( 'ok' => true, 'http' => $codigo, 'data' => $data, 'motivo' => '' ) + $res;
+			}
+			$res['http']   = $codigo;
+			$res['motivo'] = 'HTTP ' . $codigo;
+			if ( 429 !== $codigo || $n >= self::REINTENTOS_429 ) {
+				self::registrar_error_api( $path, $codigo, wp_remote_retrieve_body( $respuesta ) );
+				return $res;
+			}
+			$pedida = self::segundos_retry_after( function_exists( 'wp_remote_retrieve_header' ) ? wp_remote_retrieve_header( $respuesta, 'retry-after' ) : '' );
+			$espera = null !== $pedida ? min( $pedida, self::ESPERA_MAX_SEG ) : 2 * ( 2 ** $n ); // 2, 4, 8
+			if ( $espera > $presupuesto['espera'] || time() + $espera >= $presupuesto['hasta'] ) {
+				self::registrar_error_api( $path, $codigo, '429 y sin tiempo de espera en esta corrida' );
+				$res['motivo'] = 'HTTP 429 (sin tiempo de espera en la corrida)';
+				return $res;
+			}
+			$presupuesto['espera'] -= $espera;
+			self::dormir( $espera );
+		}
+		return $res;
+	}
+	/** GET /preapproval/{id} para el sync (con reintentos ante 429). */
+	public static function obtener_preapproval_con_reintentos( $id, &$presupuesto ) {
+		return self::get_con_reintentos( '/preapproval/' . rawurlencode( (string) $id ), self::get_access_token(), $presupuesto );
+	}
 	protected static function get( $path, $token ) {
 		if ( ! $token ) {
 			return null;
@@ -384,15 +491,15 @@ class CN_MP {
 		return json_decode( wp_remote_retrieve_body( $respuesta ), true );
 	}
 	/**
-	 * Deja rastro de un error de la API de MP (mp_log + aviso a n8n, máx. 1/hora por
-	 * ruta+código). Nunca lanza ni cambia lo que devuelve get().
+	 * Deja rastro de un error de la API de MP (mp_log + línea en el cartel "Avisos", máx. 1/hora por
+	 * ruta+código; ya no manda nada a n8n). Nunca lanza ni cambia lo que devuelve get().
 	 */
 	protected static function registrar_error_api( $path, $http, $cuerpo ) {
 		try {
 			$ruta   = (string) strtok( (string) $path, '?' );
 			$cuerpo = mb_substr( preg_replace( '/APP_USR-[A-Za-z0-9\-]+/', '[oculto]', (string) $cuerpo ), 0, 300 );
 			CN_Webhook::registrar_log_mp( 'mp_api_error', array( 'ruta' => $ruta, 'http' => $http, 'cuerpo' => $cuerpo ) );
-			// Solo avisa a n8n por errores de acceso/servicio; 404 y otros 4xx quedan solo en el log.
+			// Solo avisa (cartel Avisos) por errores de acceso/servicio; 404 y otros 4xx quedan solo en el log.
 			$avisar = ( 'wp_error' === $http )
 				|| ( is_numeric( $http ) && ( in_array( (int) $http, array( 401, 403, 429 ), true ) || (int) $http >= 500 ) );
 			// El id va al final de la ruta: se normaliza para que 39 eventos con 401 no manden 39 avisos.

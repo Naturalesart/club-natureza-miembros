@@ -1,10 +1,8 @@
 <?php
-// Punto 3: guarda de MP en el cron de trials vencidos (CN_Auth::revocar_trials_vencidos) + regresión de los escenarios existentes.
+// Punto 3: guarda de MP en el cron de trials vencidos (CN_Auth::revocar_trials_vencidos).
+// Fase A: la guarda cruza payer.id del cobro del trial con /preapproval/search?payer_id (solo GET) y arranca en modo solo-log.
 if ( PHP_SAPI !== 'cli' ) {
 	exit;
-}
-function mh( $seg_atras ) { // fecha de MP "hace N segundos" (con offset -03:00, como manda MP).
-	return gmdate( 'Y-m-d\TH:i:s.000', time() - $seg_atras ) . '-00:00';
 }
 function trial_row( $id, $extra = array() ) {
 	return cn_fila( array_merge( array(
@@ -12,27 +10,30 @@ function trial_row( $id, $extra = array() ) {
 		'fecha_fin_trial' => '2026-10-12 10:00:00', 'trial_payment_id' => '9000' . $id,
 	), $extra ) );
 }
-function pago_mp( $id, $monto, $seg_atras, $email = null, $extra = array() ) {
-	return array_merge( array( 'id' => $id, 'status' => 'approved', 'transaction_amount' => $monto, 'date_created' => mh( $seg_atras ), 'payer' => array( 'email' => $email ?? 'x@example.com' ) ), $extra );
-}
 /** Prepara: filas vencidas; la relectura FOR UPDATE de cada fila devuelve la fila tal cual (estado activo). */
-function preparar_trials( $rows ) {
+function preparar_trials( $rows, $solo_log = '0' ) {
 	cn_test_reset();
 	global $wpdb;
 	update_option( 'cn_mp_access_token', 'APP_USR-test' );
+	update_option( 'cn_guarda_trial_solo_log', $solo_log );
 	$GLOBALS['cn_now'] = '2026-10-13 15:00:00';
 	$wpdb->on( '/SELECT id, preapproval_id, nombre_apellido, email, fecha_fin_trial, trial_payment_id FROM wp_cn_miembros/', $rows );
 	foreach ( $rows as $r ) {
 		$wpdb->on( '/SELECT id, estado, preapproval_id, fecha_fin_trial FROM wp_cn_miembros WHERE id = ' . $r->id . ' FOR UPDATE/', array( cn_fila( array( 'id' => $r->id, 'estado' => 'activo', 'preapproval_id' => $r->preapproval_id, 'fecha_fin_trial' => $r->fecha_fin_trial ) ) ) );
 	}
 	cn_http_on( 'POST', '#club-trial-alerta#', array() );
-	return $wpdb;
+	return $rows ? $wpdb : $wpdb;
 }
-function mp_pagos_email( $email, $results ) {
-	cn_http_on( 'GET', '#/v1/payments/search\?.*payer\.email=' . preg_quote( rawurlencode( $email ), '#' ) . '#', array( 'results' => $results ) );
+/** GET /v1/payments/{id} -> payer.id (o el valor/código que se pida). */
+function mp_pago_trial( $payment_id, $payer_id ) {
+	cn_http_on( 'GET', '#/v1/payments/' . preg_quote( (string) $payment_id, '#' ) . '$#', array( 'id' => (int) $payment_id, 'status' => 'approved', 'payer' => null === $payer_id ? array( 'email' => 'x@example.com' ) : array( 'id' => $payer_id ) ) );
 }
-function mp_subs_email( $email, $results ) {
-	cn_http_on( 'GET', '#/preapproval/search\?.*payer_email=' . preg_quote( rawurlencode( $email ), '#' ) . '#', array( 'results' => $results ) );
+/** GET /preapproval/search?...payer_id=N -> results (con paging opcional). */
+function mp_subs_payer( $payer_id, $results, $total = null ) {
+	cn_http_on( 'GET', '#/preapproval/search\?.*payer_id=' . preg_quote( (string) $payer_id, '#' ) . '#', array( 'results' => $results, 'paging' => array( 'offset' => 0, 'limit' => 100, 'total' => null === $total ? count( $results ) : $total ) ) );
+}
+function sub_mp( $id, $status, $payer_id ) {
+	return array( 'id' => $id, 'status' => $status, 'payer_id' => $payer_id, 'auto_recurring' => array( 'transaction_amount' => 15500 ), 'date_created' => '2026-10-10T10:00:00.000-03:00' );
 }
 function cancelaciones( $w ) {
 	return array_values( array_filter( $w->escrituras( 'cn_miembros' ), function ( $e ) {
@@ -49,155 +50,186 @@ function alertas( $motivo ) {
 		return false !== strpos( (string) $c['body'], '"motivo":"' . $motivo . '"' );
 	} ) );
 }
+/** Payload decodificado de las filas de mp_log de un tipo. */
+function log_payloads( $w, $tipo ) {
+	$o = array();
+	foreach ( $w->log as $l ) {
+		if ( 'insert' === $l[0] && false !== strpos( $l[1], 'mp_log' ) && $tipo === $l[2]['tipo'] ) {
+			$o[] = json_decode( $l[2]['payload'], true );
+		}
+	}
+	return $o;
+}
+function solo_gets_a_mp() {
+	foreach ( $GLOBALS['cn_http_log'] as $c ) {
+		if ( 'GET' !== $c['metodo'] && false !== strpos( $c['url'], 'api.mercadopago.com' ) ) {
+			return false;
+		}
+	}
+	return true;
+}
 
-seccion( 'opción cn_guarda_trial_mp' );
+seccion( 'flags: cn_guarda_trial_mp y cn_guarda_trial_solo_log' );
 cn_test_reset();
-t( 'activada por defecto', CN_Sync::guarda_trial_activa() );
+t( 'guarda activada por defecto', CN_Sync::guarda_trial_activa() );
+t( 'solo-log activado por defecto (no cambia el comportamiento hasta que alguien lo apague)', CN_Sync::guarda_trial_solo_log() );
 update_option( 'cn_guarda_trial_mp', '0' );
-t( 'se puede apagar', ! CN_Sync::guarda_trial_activa() );
+t( 'la guarda se puede apagar', ! CN_Sync::guarda_trial_activa() );
+update_option( 'cn_guarda_trial_solo_log', '0' );
+t( 'solo-log se puede apagar', ! CN_Sync::guarda_trial_solo_log() );
 
-seccion( 'regresión: los escenarios que ya existían' );
+seccion( 'regresión: los escenarios que no dependen de la guarda' );
 $w = preparar_trials( array( trial_row( 1, array( 'preapproval_id' => 'PRE_YA_SUSCRIPTA0001' ) ) ) );
 CN_Auth::revocar_trials_vencidos();
 t( 'con preapproval_id: solo limpia fecha_fin_trial, no cancela ni consulta a MP', 1 === count( limpiezas( $w ) ) && ! cancelaciones( $w ) && ! $GLOBALS['cn_http_log'] );
-$w = preparar_trials( array( trial_row( 2 ) ) );
-mp_pagos_email( 'socia2@example.com', array( pago_mp( '90002', 7000, 86400 * 8, 'socia2@example.com' ) ) ); // solo el cobro del trial
-mp_subs_email( 'socia2@example.com', array() );
-CN_Auth::revocar_trials_vencidos();
-t( 'trial vencido sin pago posterior: se cancela y se manda el mail de fin de trial', 1 === count( cancelaciones( $w ) ) && 1 === count( $GLOBALS['cn_mails'] ) && 'socia2@example.com' === $GLOBALS['cn_mails'][0]['to'], json_encode( $w->escrituras( 'cn_miembros' ) ) );
-t( 'la cancelación es una transacción con FOR UPDATE', $w->transaccion() === array( 'START TRANSACTION', 'COMMIT' ) && (bool) array_filter( $w->consultas, function ( $q ) {
-	return false !== strpos( $q, 'FOR UPDATE' );
-} ) );
 update_option( 'cn_guarda_trial_mp', '0' );
 $w = preparar_trials( array( trial_row( 3 ) ) );
 update_option( 'cn_guarda_trial_mp', '0' );
 CN_Auth::revocar_trials_vencidos();
-t( 'guarda apagada: se comporta como antes (cancela sin consultar a MP)', 1 === count( cancelaciones( $w ) ) && ! $GLOBALS['cn_http_log'] );
+t( 'guarda apagada: se comporta como antes (cancela sin consultar a MP) y manda el mail de fin de trial', 1 === count( cancelaciones( $w ) ) && ! $GLOBALS['cn_http_log'] && 1 === count( $GLOBALS['cn_mails'] ) && 'socia3@example.com' === $GLOBALS['cn_mails'][0]['to'] );
+t( 'la cancelación es una transacción con FOR UPDATE', $w->transaccion() === array( 'START TRANSACTION', 'COMMIT' ) && (bool) array_filter( $w->consultas, function ( $q ) {
+	return false !== strpos( $q, 'FOR UPDATE' );
+} ) );
 t( 'la consulta de vencidos sigue siendo la misma condición (fecha_fin_trial vencida, no cancelada)', (bool) array_filter( $w->consultas, function ( $q ) {
 	return false !== strpos( $q, 'fecha_fin_trial IS NOT NULL' ) && false !== strpos( $q, 'fecha_fin_trial < UTC_TIMESTAMP()' ) && false !== strpos( $q, "estado != 'cancelada'" );
 } ) );
+$w = preparar_trials( array( trial_row( 11, array( 'preapproval_id' => '0' ) ) ) );
+CN_Auth::revocar_trials_vencidos();
+t( "preapproval_id '0': NO se cancela, solo se limpia fecha_fin_trial", ! cancelaciones( $w ) && 1 === count( limpiezas( $w ) ) && ! $GLOBALS['cn_http_log'] );
 
-seccion( 'guarda: pagó por link directo (cobro >= $15.500 posterior al de $7.000)' );
-foreach ( array( 15500, 32000, 20000 ) as $monto ) {
-	$w = preparar_trials( array( trial_row( 4 ) ) );
-	mp_pagos_email( 'socia4@example.com', array(
-		pago_mp( '90004', 7000, 86400 * 8, 'socia4@example.com' ), // el del trial
-		pago_mp( '5551', $monto, 86400 * 1, 'socia4@example.com' ),
-	) );
+seccion( 'MODO SOLO-LOG (default): registra la decisión y el cron queda exactamente como hoy (no cancela, no limpia, no avisa)' );
+// Hoy la guarda siempre falla (400 de MP) y el cron no hace nada con la socia salvo dejar trial_guarda_error. Se preserva con cualquier decisión.
+$casos = array(
+	'decisión sin_pago'      => function () {
+		mp_pago_trial( '90004', 555 );
+		mp_subs_payer( 555, array() );
+		return 'sin_pago';
+	},
+	'decisión pago'          => function () {
+		mp_pago_trial( '90004', 555 );
+		mp_subs_payer( 555, array( sub_mp( 'SUBPROPIA00000000001', 'authorized', 555 ) ) );
+		return 'pago';
+	},
+	'decisión indeterminado' => function () {
+		mp_pago_trial( '90004', null );
+		return 'indeterminado';
+	},
+	'decisión error (MP caído)' => function () {
+		return 'error';
+	},
+);
+foreach ( $casos as $nombre => $armar ) {
+	$w = preparar_trials( array( trial_row( 4 ) ), '1' );
+	$esperado = $armar();
 	CN_Auth::revocar_trials_vencidos();
-	t( "cobro de \${$monto}: NO cancela, limpia fecha_fin_trial y avisa por n8n", ! cancelaciones( $w ) && 1 === count( limpiezas( $w ) ) && 1 === count( alertas( 'trial_pago_directo' ) ) && ! $GLOBALS['cn_mails'] );
+	$d = log_payloads( $w, 'trial_guarda_decision' );
+	t( "solo-log, {$nombre}: no escribe NADA en miembros, no abre transacción, no manda mail ni aviso", ! $w->escrituras( 'cn_miembros' ) && ! $w->transaccion() && ! $GLOBALS['cn_mails'] && ! alertas( 'trial_pago_directo' ) );
+	t( "solo-log, {$nombre}: deja trial_guarda_decision con socia, resultado y motivo", 1 === count( $d ) && 4 === $d[0]['miembro_id'] && $esperado === $d[0]['resultado'] && '' !== (string) $d[0]['motivo'] && true === $d[0]['solo_log'], json_encode( $d ) );
+	t( "solo-log, {$nombre}: sigue dejando trial_guarda_error como hoy (la fila queda vencida y se reintenta mañana)", in_array( 'trial_guarda_error', $w->log_mp_tipos(), true ) );
+	t( "solo-log, {$nombre}: solo GET a Mercado Pago", solo_gets_a_mp() );
 }
-$a = alertas( 'trial_pago_directo' );
-t( 'el aviso trae socia, email, monto y el pedido de vincular', false !== strpos( (string) $a[0]['body'], 'socia4@example.com' ) && false !== strpos( (string) $a[0]['body'], '5551' ) && false !== strpos( (string) $a[0]['body'], 'vincular' ) || false !== strpos( (string) $a[0]['body'], 'Vincular' ) );
-t( 'deja log trial_pago_directo', in_array( 'trial_pago_directo', $w->log_mp_tipos(), true ) );
+$w = preparar_trials( array( trial_row( 4 ) ), '1' );
+mp_pago_trial( '90004', 555 );
+mp_subs_payer( 555, array() );
+CN_Auth::revocar_trials_vencidos();
+t( 'la decisión sin_pago en solo-log NO cancela (hoy tampoco cancelaba: la guarda fallaba)', ! cancelaciones( $w ) && ! $GLOBALS['cn_mails'] );
+// Excepción en la guarda: tampoco cambia nada.
+$w = preparar_trials( array( trial_row( 4 ) ), '1' );
+cn_http_on( 'GET', '#/v1/payments/#', function () {
+	throw new RuntimeException( 'explotó' );
+} );
+CN_Auth::revocar_trials_vencidos();
+t( 'si la guarda lanza una excepción: la socia no se toca y el cron sigue', ! $w->escrituras( 'cn_miembros' ) && 1 === count( log_payloads( $w, 'trial_guarda_decision' ) ) );
+
+seccion( 'guarda ACTUANDO (cn_guarda_trial_solo_log = 0): hay suscripción authorized del mismo payer_id' );
+$w = preparar_trials( array( trial_row( 6 ) ) );
+mp_pago_trial( '90006', 777 );
+mp_subs_payer( 777, array(
+	sub_mp( 'SUBDEOTRA000000000001', 'authorized', 999 ), // otro payer: el filtro de MP no se respeta a ciegas
+	sub_mp( 'SUBPROPIA000000000002', 'authorized', 777 ),
+) );
+CN_Auth::revocar_trials_vencidos();
+t( 'con suscripción authorized: NO cancela, limpia fecha_fin_trial y deja aviso en el cartel (sin n8n ni mail)', ! cancelaciones( $w ) && 1 === count( limpiezas( $w ) ) && ! alertas( 'trial_pago_directo' ) && ! $GLOBALS['cn_mails'] && in_array( CN_Webhook::TIPO_AVISO, $w->log_mp_tipos(), true ) );
+t( 'deja log trial_pago_directo y la decisión', in_array( 'trial_pago_directo', $w->log_mp_tipos(), true ) && 'pago' === log_payloads( $w, 'trial_guarda_decision' )[0]['resultado'] );
 t( 'no vincula nada ni toca estado/plan/preapproval', ! array_filter( $w->escrituras( 'cn_miembros' ), function ( $e ) {
 	return isset( $e[2]['estado'] ) || isset( $e[2]['preapproval_id'] ) || isset( $e[2]['plan'] );
 } ) );
+t( 'solo GET a MP, y son exactamente los dos: payment y preapproval/search?payer_id', solo_gets_a_mp() && 1 === count( cn_http_calls( '#/v1/payments/90006$#' ) ) && 1 === count( cn_http_calls( '#/preapproval/search\?.*payer_id=777#' ) ) && ! cn_http_calls( '#payer\.email|payer_email#' ) );
 
-seccion( 'guarda: cobros que NO cuentan' );
-$casos = array(
-	'cobro de $7.000 (el del trial)'              => array( pago_mp( '90005', 7000, 86400 * 8, 'socia5@example.com' ) ),
-	'cobro menor a $15.500 posterior ($15.000)'   => array( pago_mp( '90005', 7000, 86400 * 8, 'socia5@example.com' ), pago_mp( '5552', 15000, 3600, 'socia5@example.com' ) ),
-	'cobro >= $15.500 ANTERIOR al del trial'      => array( pago_mp( '90005', 7000, 86400 * 8, 'socia5@example.com' ), pago_mp( '5553', 32000, 86400 * 30, 'socia5@example.com' ) ),
-	'cobro no aprobado'                           => array( pago_mp( '90005', 7000, 86400 * 8, 'socia5@example.com' ), pago_mp( '5554', 32000, 3600, 'socia5@example.com', array( 'status' => 'rejected' ) ) ),
-);
-foreach ( $casos as $nombre => $pagos ) {
+seccion( 'guarda ACTUANDO: sin suscripción -> cancela como siempre' );
+foreach ( array(
+	'el payer no tiene ninguna suscripción'            => array(),
+	'solo suscripciones pausada/cancelada'              => array( sub_mp( 'SUBPAUSADA00000000003', 'paused', 777 ), sub_mp( 'SUBCANCEL00000000004', 'cancelled', 777 ) ),
+	'solo una authorized de OTRO payer'                 => array( sub_mp( 'SUBDEOTRA000000000001', 'authorized', 999 ) ),
+) as $nombre => $subs ) {
 	$w = preparar_trials( array( trial_row( 5 ) ) );
-	mp_pagos_email( 'socia5@example.com', $pagos );
-	mp_subs_email( 'socia5@example.com', array() );
+	mp_pago_trial( '90005', 777 );
+	mp_subs_payer( 777, $subs );
 	CN_Auth::revocar_trials_vencidos();
-	t( "{$nombre}: se cancela", 1 === count( cancelaciones( $w ) ) && ! alertas( 'trial_pago_directo' ) );
+	t( "{$nombre}: se cancela y se manda el mail de fin de trial", 1 === count( cancelaciones( $w ) ) && 1 === count( $GLOBALS['cn_mails'] ) && 'sin_pago' === log_payloads( $w, 'trial_guarda_decision' )[0]['resultado'] );
 }
-$w = preparar_trials( array( trial_row( 5, array( 'trial_payment_id' => null ) ) ) );
-// Fechas FIJAS relativas a fecha_fin_trial (2026-10-12 10:00 UTC -> referencia 2026-10-05 10:00 UTC), no a time(): el resultado no depende del día en que corra.
-$ref_fija = strtotime( '2026-10-12 10:00:00 UTC' ) - 7 * 86400;
-$fecha_fija = function ( $ts ) {
-	return array( 'date_created' => gmdate( 'Y-m-d\TH:i:s.000', $ts ) . '-00:00' );
-};
-mp_pagos_email( 'socia5@example.com', array(
-	pago_mp( '90005', 7000, 0, 'socia5@example.com', $fecha_fija( $ref_fija + 300 ) ),         // el del trial (< $15.500)
-	pago_mp( '5555', 32000, 0, 'socia5@example.com', $fecha_fija( $ref_fija - 86400 ) ),       // >= $15.500 pero 1 día ANTES de la referencia
-) );
-mp_subs_email( 'socia5@example.com', array() );
-CN_Auth::revocar_trials_vencidos();
-t( 'sin trial_payment_id: la referencia es fin del trial - 7 días; un cobro previo a eso no cuenta', 1 === count( cancelaciones( $w ) ) );
 
-seccion( 'guarda: suscripción authorized con ese email' );
-$w = preparar_trials( array( trial_row( 6 ) ) );
-mp_pagos_email( 'socia6@example.com', array( pago_mp( '90006', 7000, 86400 * 8, 'socia6@example.com' ) ) );
-mp_subs_email( 'socia6@example.com', array(
-	array( 'id' => 'SUBDEOTRA000000000001', 'status' => 'authorized', 'payer_email' => 'otra@example.com', 'auto_recurring' => array( 'transaction_amount' => 15500 ) ),
-	array( 'id' => 'SUBPROPIA000000000002', 'status' => 'authorized', 'payer_email' => 'SOCIA6@example.com', 'auto_recurring' => array( 'transaction_amount' => 15500 ) ),
-) );
+seccion( 'guarda ACTUANDO: indeterminado / error -> NUNCA cancela (no se adivina)' );
+$w = preparar_trials( array( trial_row( 7, array( 'trial_payment_id' => null ) ) ) );
 CN_Auth::revocar_trials_vencidos();
-t( 'suscripción authorized con ese email: no cancela y avisa', ! cancelaciones( $w ) && 1 === count( limpiezas( $w ) ) && 1 === count( alertas( 'trial_pago_directo' ) ) );
-$w = preparar_trials( array( trial_row( 6 ) ) );
-mp_pagos_email( 'socia6@example.com', array( pago_mp( '90006', 7000, 86400 * 8, 'socia6@example.com' ) ) );
-mp_subs_email( 'socia6@example.com', array(
-	array( 'id' => 'SUBDEOTRA000000000001', 'status' => 'authorized', 'payer_email' => 'otra@example.com', 'auto_recurring' => array( 'transaction_amount' => 15500 ) ), // el filtro de MP no se respeta
-	array( 'id' => 'SUBPAUSADA00000000003', 'status' => 'paused', 'payer_email' => 'socia6@example.com', 'auto_recurring' => array( 'transaction_amount' => 15500 ) ),
-) );
+$d = log_payloads( $w, 'trial_guarda_decision' );
+t( 'sin trial_payment_id: indeterminado, no cancela y no consulta a MP', ! $w->escrituras( 'cn_miembros' ) && 'indeterminado' === $d[0]['resultado'] && ! $GLOBALS['cn_http_log'] );
+$w = preparar_trials( array( trial_row( 7 ) ) );
+mp_pago_trial( '90007', null );
 CN_Auth::revocar_trials_vencidos();
-t( 'suscripción de OTRO email o no authorized: no cuenta, se cancela', 1 === count( cancelaciones( $w ) ) );
-
-seccion( 'guarda: si MP falla NO se cancela y se reintenta' );
+t( 'el cobro no trae payer.id: indeterminado, no cancela', ! $w->escrituras( 'cn_miembros' ) && 'indeterminado' === log_payloads( $w, 'trial_guarda_decision' )[0]['resultado'] && ! cn_http_calls( '#/preapproval/search#' ) );
+$w = preparar_trials( array( trial_row( 7 ) ) );
+cn_http_on( 'GET', '#/v1/payments/90007$#', array( 'id' => 90007, 'payer' => array( 'id' => '0' ) ) );
+CN_Auth::revocar_trials_vencidos();
+t( "payer.id '0' o no numérico: indeterminado", ! $w->escrituras( 'cn_miembros' ) && 'indeterminado' === log_payloads( $w, 'trial_guarda_decision' )[0]['resultado'] );
+$w = preparar_trials( array( trial_row( 7 ) ) );
+mp_pago_trial( '90007', 777 );
+mp_subs_payer( 777, array( sub_mp( 'SUBA0000000000000001', 'cancelled', 777 ) ), 250 ); // MP dice que hay 250 y devolvió 1
+CN_Auth::revocar_trials_vencidos();
+t( 'más resultados que los devueltos en la página: indeterminado, no cancela', ! $w->escrituras( 'cn_miembros' ) && 'indeterminado' === log_payloads( $w, 'trial_guarda_decision' )[0]['resultado'] );
 $w = preparar_trials( array( trial_row( 7 ) ) ); // sin reglas de MP: todo falla
 CN_Auth::revocar_trials_vencidos();
-t( 'cobros: MP no responde -> no cancela, no limpia, no manda mail, no abre transacción', ! $w->escrituras( 'cn_miembros' ) && ! $GLOBALS['cn_mails'] && ! $w->transaccion() );
+t( 'el cobro del trial no se puede leer (MP caído): error, no cancela, no limpia, no manda mail, no abre transacción', ! $w->escrituras( 'cn_miembros' ) && ! $GLOBALS['cn_mails'] && ! $w->transaccion() && 'error' === log_payloads( $w, 'trial_guarda_decision' )[0]['resultado'] );
 t( 'deja rastro trial_guarda_error', in_array( 'trial_guarda_error', $w->log_mp_tipos(), true ) );
 $w = preparar_trials( array( trial_row( 7 ) ) );
-cn_http_on( 'GET', '#/v1/payments/search#', 500 );
-CN_Auth::revocar_trials_vencidos();
-t( 'cobros: HTTP 500 -> no cancela', ! $w->escrituras( 'cn_miembros' ) );
-$w = preparar_trials( array( trial_row( 7 ) ) );
-mp_pagos_email( 'socia7@example.com', array( pago_mp( '90007', 7000, 86400 * 8, 'socia7@example.com' ) ) );
+mp_pago_trial( '90007', 777 );
 cn_http_on( 'GET', '#/preapproval/search#', 401 );
 CN_Auth::revocar_trials_vencidos();
-t( 'cobros bien pero la consulta de suscripciones falla -> no cancela', ! $w->escrituras( 'cn_miembros' ) && ! $GLOBALS['cn_mails'] );
-// Reintento: la corrida siguiente, con MP andando y sin pago, cancela; la fila seguía vencida.
+t( 'el cobro se lee pero preapproval/search falla: error, no cancela', ! $w->escrituras( 'cn_miembros' ) && ! $GLOBALS['cn_mails'] && 'error' === log_payloads( $w, 'trial_guarda_decision' )[0]['resultado'] );
 $w = preparar_trials( array( trial_row( 7 ) ) );
-mp_pagos_email( 'socia7@example.com', array( pago_mp( '90007', 7000, 86400 * 8, 'socia7@example.com' ) ) );
-mp_subs_email( 'socia7@example.com', array() );
+mp_pago_trial( '90007', 777 );
+mp_subs_payer( 777, array() );
 CN_Auth::revocar_trials_vencidos();
-t( 'próxima corrida con MP andando: ahora sí cancela', 1 === count( cancelaciones( $w ) ) );
+t( 'próxima corrida con MP andando y sin suscripción: ahora sí cancela', 1 === count( cancelaciones( $w ) ) );
 $w = preparar_trials( array( trial_row( 8 ), trial_row( 9 ) ) );
-mp_pagos_email( 'socia9@example.com', array( pago_mp( '90009', 7000, 86400 * 8, 'socia9@example.com' ) ) );
-mp_subs_email( 'socia9@example.com', array() );
+mp_pago_trial( '90009', 888 );
+mp_subs_payer( 888, array() );
 CN_Auth::revocar_trials_vencidos(); // la 8 falla (sin reglas), la 9 anda
 $c = cancelaciones( $w );
 t( 'una fila con MP caído no frena a las demás (solo cancela la 9)', 1 === count( $c ) && array( 'id' => 9 ) === $c[0][3] );
 
-seccion( 'sin email: no se puede verificar' );
-$w = preparar_trials( array( trial_row( 10, array( 'email' => null ) ) ) );
-CN_Auth::revocar_trials_vencidos();
-t( 'sin email sigue como antes (se cancela) y queda rastro', 1 === count( cancelaciones( $w ) ) && in_array( 'trial_guarda_sin_email', $w->log_mp_tipos(), true ) && ! $GLOBALS['cn_http_log'] );
-
-seccion( "comparación estricta de preapproval_id ('0' no es vacío)" );
-$w = preparar_trials( array( trial_row( 11, array( 'preapproval_id' => '0' ) ) ) );
-CN_Auth::revocar_trials_vencidos();
-t( "preapproval_id '0': NO se cancela, solo se limpia fecha_fin_trial (empty('0') daba true y cancelaba)", ! cancelaciones( $w ) && 1 === count( limpiezas( $w ) ) && ! $GLOBALS['cn_http_log'] );
+seccion( "comparación estricta de preapproval_id ('' vacío sí va por la guarda)" );
 $w = preparar_trials( array( trial_row( 12, array( 'preapproval_id' => '' ) ) ) );
-mp_pagos_email( 'socia12@example.com', array( pago_mp( '90012', 7000, 86400 * 8, 'socia12@example.com' ) ) );
-mp_subs_email( 'socia12@example.com', array() );
+mp_pago_trial( '900012', 321 );
+mp_subs_payer( 321, array() );
 CN_Auth::revocar_trials_vencidos();
 t( "preapproval_id '' (vacío): sigue el camino de trial sin suscripción", 1 === count( cancelaciones( $w ) ) );
 
 seccion( 'carrera: se vinculó una suscripción mientras corría el cron' );
 $w = preparar_trials( array( trial_row( 13 ) ) );
-mp_pagos_email( 'socia13@example.com', array( pago_mp( '90013', 7000, 86400 * 8, 'socia13@example.com' ) ) );
-mp_subs_email( 'socia13@example.com', array() );
+mp_pago_trial( '900013', 321 );
+mp_subs_payer( 321, array() );
 $w->on( '/SELECT id, estado, preapproval_id, fecha_fin_trial FROM wp_cn_miembros WHERE id = 13 FOR UPDATE/', array( cn_fila( array( 'id' => 13, 'estado' => 'activo', 'preapproval_id' => 'PRE_RECIEN_VINCULADA01', 'fecha_fin_trial' => null ) ) ) );
 CN_Auth::revocar_trials_vencidos();
 t( 'la relectura con FOR UPDATE ve la suscripción nueva: ROLLBACK, no cancela, no manda mail', ! cancelaciones( $w ) && in_array( 'ROLLBACK', $w->transaccion(), true ) && ! $GLOBALS['cn_mails'] );
 $w = preparar_trials( array( trial_row( 14 ) ) );
-mp_pagos_email( 'socia14@example.com', array( pago_mp( '90014', 7000, 86400 * 8, 'socia14@example.com' ) ) );
-mp_subs_email( 'socia14@example.com', array() );
+mp_pago_trial( '900014', 321 );
+mp_subs_payer( 321, array() );
 $w->on( '/SELECT id, estado, preapproval_id, fecha_fin_trial FROM wp_cn_miembros WHERE id = 14 FOR UPDATE/', array( cn_fila( array( 'id' => 14, 'estado' => 'cancelada', 'preapproval_id' => null, 'fecha_fin_trial' => '2026-10-12 10:00:00' ) ) ) );
 CN_Auth::revocar_trials_vencidos();
 t( 'ya cancelada por otro camino: no se vuelve a cancelar ni se manda otro mail', ! cancelaciones( $w ) && ! $GLOBALS['cn_mails'] );
 
 seccion( 'funciones puras de la guarda' );
-$ref = CN_Sync::referencia_trial( array( pago_mp( '777', 7000, 86400 * 8 ) ), cn_fila( array( 'trial_payment_id' => '777', 'fecha_fin_trial' => '2026-10-12 10:00:00' ) ) );
-t( 'referencia = fecha del pago del trial si está en la lista', abs( $ref - ( time() - 86400 * 8 ) ) < 5 );
+t( 'suscripcion_authorized_de_payer: exige authorized Y el mismo payer_id', null === CN_Sync::suscripcion_authorized_de_payer( array( sub_mp( 'A', 'paused', 5 ), sub_mp( 'B', 'authorized', 6 ) ), 5 ) && 'C' === CN_Sync::suscripcion_authorized_de_payer( array( sub_mp( 'C', 'authorized', 5 ) ), '5' )['id'] );
 $ref = CN_Sync::referencia_trial( array(), cn_fila( array( 'trial_payment_id' => '777', 'fecha_fin_trial' => '2026-10-12 10:00:00' ) ) );
-t( 'si no está: fin de trial - 7 días', gmdate( 'Y-m-d H:i:s', $ref ) === '2026-10-05 10:00:00', gmdate( 'Y-m-d H:i:s', $ref ) );
+t( 'referencia_trial (sin uso en el cron actual, se conserva): fin de trial - 7 días', gmdate( 'Y-m-d H:i:s', $ref ) === '2026-10-05 10:00:00', gmdate( 'Y-m-d H:i:s', $ref ) );

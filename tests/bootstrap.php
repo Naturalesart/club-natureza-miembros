@@ -172,6 +172,9 @@ function wp_remote_retrieve_response_code( $r ) {
 function wp_remote_retrieve_body( $r ) {
 	return $r['body'];
 }
+function wp_remote_retrieve_header( $r, $h ) {
+	return $r['headers'][ strtolower( $h ) ] ?? '';
+}
 /**
  * Router HTTP falso. Cada regla: metodo, patron (regex sobre la URL), resp:
  *  - array  -> 200 con ese JSON
@@ -190,6 +193,9 @@ function cn_http_request( $metodo, $url, $args ) {
 			}
 			if ( is_int( $resp ) ) {
 				return array( 'response' => array( 'code' => $resp ), 'body' => '{}' );
+			}
+			if ( isset( $resp['__status'] ) ) { // respuesta con código y encabezados propios: array( '__status' => 429, '__headers' => array( 'retry-after' => '7' ), '__body' => array )
+				return array( 'response' => array( 'code' => $resp['__status'] ), 'headers' => $resp['__headers'] ?? array(), 'body' => json_encode( $resp['__body'] ?? new stdClass() ) );
 			}
 			return array( 'response' => array( 'code' => 200 ), 'body' => json_encode( $resp ) );
 		}
@@ -325,6 +331,8 @@ if ( file_exists( $cn_raiz . 'includes/class-cn-sync.php' ) ) {
 require_once $cn_raiz . 'includes/class-cn-auth.php';
 require_once $cn_raiz . 'includes/class-cn-admin.php';
 require_once $cn_raiz . 'includes/class-cn-colaboradora.php';
+CN_MP::$dormir = function () { // los tests nunca esperan de verdad (el 429 del sync pide esperas de segundos).
+};
 // ---------------------------------------------------------------- mini framework de tests
 $GLOBALS['cn_t_ok']   = 0;
 $GLOBALS['cn_t_fail'] = array();

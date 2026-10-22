@@ -117,9 +117,11 @@ $w = preparar_lote( array(
 ) );
 update_option( 'cn_sub_modo_seguro', '0' );
 $r = CN_Sync::sincronizar_lote();
-t( 'MP caído: cero escrituras en miembros', ! $w->escrituras( 'cn_miembros' ) );
-t( 'tras 3 fallos seguidos corta la corrida (no sigue golpeando a MP)', $r['abortada'] && 3 === $r['fallos'] && 3 === count( cn_http_calls( '#/preapproval/#' ) ) );
-t( 'abortada: el cursor no avanza (se reintenta el mismo lote)', 0 === (int) get_option( 'cn_sync_mp_cursor', 0 ) );
+t( 'MP caído: las filas que fallaron no se tocan (solo se aplica la 4ª, que sí respondió)', ! updates_de( $w, 21 ) && ! updates_de( $w, 22 ) && ! updates_de( $w, 23 ) );
+t( 'MP caído en 3 filas: NO corta; sigue con la 4ª y la aplica', 3 === $r['fallos'] && ! $r['abortada'] && 1 === count( updates_de( $w, 24 ) ), json_encode( $r ) );
+t( 'cada fallida queda en mp_log como sync_item_fallido', 3 === count( array_keys( $w->log_mp_tipos(), 'sync_item_fallido', true ) ) );
+t( 'las 3 fallidas quedan en la cola para la próxima corrida', array( 21, 22, 23 ) === array_keys( get_option( 'cn_sync_mp_fallidos' ) ) );
+t( 'el cursor avanza igual (lote incompleto = vuelve a 0, no repite el lote)', 0 === (int) get_option( 'cn_sync_mp_cursor', 99 ) );
 $w = preparar_lote( array(
 	21 => array( 'PRE_FALLA00000000021', 500, ciclo_row() ),
 	24 => array( 'PRE_OK00000000000024', 'authorized', ciclo_row( 'activo', 'basico', '2026-10-20 12:00:00' ) ),
@@ -132,6 +134,89 @@ cn_http_on( 'GET', '#/preapproval/PRE_RARO000000000025$#', array( 'id' => 'OTRO'
 update_option( 'cn_sub_modo_seguro', '0' );
 CN_Sync::sincronizar_lote();
 t( 'MP devuelve otro id: no se aplica nada', ! $w->escrituras( 'cn_miembros' ) );
+
+seccion( 'cola de reintento: lo fallido se reintenta primero en la próxima corrida' );
+$filas = array();
+for ( $i = 1; $i <= 20; $i++ ) {
+	$filas[ $i ] = array( sprintf( 'PRE_COLA%015d', $i ), 'authorized', ciclo_row( 'activo', 'basico', '2026-12-01 15:00:00' ) );
+}
+$filas[3][1] = 500; // la 3 falla; el lote es de 20, así que el cursor queda en 20.
+$w = preparar_lote( $filas );
+cn_http_on( 'GET', '#/preapproval/PRE_COLA000000000000003$#', 500 );
+$r = CN_Sync::sincronizar_lote();
+t( 'lote lleno con un fallo: procesa las otras 19 y el cursor avanza a 20', 19 === $r['procesadas'] && 1 === $r['fallos'] && 20 === (int) get_option( 'cn_sync_mp_cursor' ), json_encode( $r ) );
+t( 'la fallida (3) queda en la cola con contador 1', 1 === get_option( 'cn_sync_mp_fallidos' )[3]['intentos'] );
+// Próxima corrida: el cursor ya pasó la 3, pero la cola la trae igual (y ahora MP responde).
+$w = preparar_lote( array( 3 => array( 'PRE_COLA000000000000003', 'authorized', ciclo_row( 'activo', 'basico', '2026-10-20 12:00:00' ) ), 25 => array( 'PRE_COLA000000000000025', 'authorized', ciclo_row( 'activo', 'basico', '2026-12-01 15:00:00' ) ) ) );
+update_option( 'cn_sync_mp_cursor', 20 );
+update_option( 'cn_sync_mp_fallidos', array( 3 => array( 'preapproval_id' => 'PRE_COLA000000000000003', 'intentos' => 1, 'desde' => 1 ) ) );
+$w->on( '/SELECT id, preapproval_id FROM wp_cn_miembros\s+WHERE id IN \(3\)/', array( fila_sync( 3, 'PRE_COLA000000000000003' ) ) );
+$r = CN_Sync::sincronizar_lote();
+t( 'la corrida siguiente reintenta la fallida aunque el cursor ya la pasó', 1 === $r['reintentadas'] && 1 === count( updates_de( $w, 3 ) ), json_encode( $r ) );
+t( 'si ahora sale bien, la cola queda vacía', array() === get_option( 'cn_sync_mp_fallidos' ) );
+// Tras 5 corridas fallidas seguidas sale de la cola y queda un aviso (no se pierde en silencio).
+$w = preparar_lote( array( 3 => array( 'PRE_COLA000000000000003', 500, ciclo_row() ) ) );
+cn_http_on( 'GET', '#/preapproval/PRE_COLA000000000000003$#', 500 );
+update_option( 'cn_sync_mp_fallidos', array( 3 => array( 'preapproval_id' => 'PRE_COLA000000000000003', 'intentos' => CN_Sync::MAX_INTENTOS_ITEM - 1, 'desde' => 1 ) ) );
+$w->on( '/SELECT id, preapproval_id FROM wp_cn_miembros\s+WHERE id IN \(3\)/', array( fila_sync( 3, 'PRE_COLA000000000000003' ) ) );
+CN_Sync::sincronizar_lote();
+t( 'a la 5ª corrida fallida sale de la cola y deja aviso en el cartel', array() === get_option( 'cn_sync_mp_fallidos' ) && in_array( CN_Webhook::TIPO_AVISO, $w->log_mp_tipos(), true ) );
+
+seccion( '429: Retry-After, backoff exponencial y topes' );
+$esperas = array();
+CN_MP::$dormir = function ( $seg ) use ( &$esperas ) {
+	$esperas[] = $seg;
+};
+$w = preparar_lote( array( 40 => array( 'PRE_R429000000000040', null, ciclo_row( 'activo', 'basico', '2026-10-20 12:00:00' ) ) ) );
+$n429 = 0;
+cn_http_on( 'GET', '#/preapproval/PRE_R429000000000040$#', function () use ( &$n429 ) {
+	return ++$n429 <= 2 ? array( '__status' => 429, '__headers' => array(), '__body' => array() ) : mp_pre( 'PRE_R429000000000040', 'authorized' );
+} );
+$r = CN_Sync::sincronizar_lote();
+t( '429 sin Retry-After: espera 2 s y 4 s y entonces anda', array( 2, 4 ) === $esperas && 1 === $r['procesadas'] && 0 === $r['fallos'], json_encode( array( $esperas, $r ) ) );
+$esperas = array();
+$w = preparar_lote( array( 41 => array( 'PRE_R429000000000041', null, ciclo_row( 'activo', 'basico', '2026-10-20 12:00:00' ) ) ) );
+$n429 = 0;
+cn_http_on( 'GET', '#/preapproval/PRE_R429000000000041$#', function () use ( &$n429 ) {
+	return ++$n429 <= 1 ? array( '__status' => 429, '__headers' => array( 'retry-after' => '7' ), '__body' => array() ) : mp_pre( 'PRE_R429000000000041', 'authorized' );
+} );
+$r = CN_Sync::sincronizar_lote();
+t( '429 con Retry-After: respeta los 7 s que pide MP', array( 7 ) === $esperas && 1 === $r['procesadas'], json_encode( $esperas ) );
+$esperas = array();
+$w = preparar_lote( array( 42 => array( 'PRE_R429000000000042', null, ciclo_row() ), 43 => array( 'PRE_R429000000000043', 'authorized', ciclo_row( 'activo', 'basico', '2026-10-20 12:00:00' ) ) ) );
+cn_http_on( 'GET', '#/preapproval/PRE_R429000000000042$#', array( '__status' => 429, '__headers' => array(), '__body' => array() ) );
+$r = CN_Sync::sincronizar_lote();
+t( '429 persistente: máx. 3 reintentos (2, 4, 8 s), 4 pedidos en total', array( 2, 4, 8 ) === $esperas && 4 === count( cn_http_calls( '#/preapproval/PRE_R429000000000042#' ) ), json_encode( $esperas ) );
+t( '429 persistente: el ítem queda como sync_item_fallido y en cola, el siguiente se procesa y no se escribe nada de la fallida', 1 === $r['fallos'] && in_array( 'sync_item_fallido', $w->log_mp_tipos(), true ) && isset( get_option( 'cn_sync_mp_fallidos' )[42] ) && ! updates_de( $w, 42 ) && 1 === count( updates_de( $w, 43 ) ) );
+t( 'en las pruebas nunca se espera de verdad (la función de espera es la inyectada)', true );
+t( 'Retry-After gigante se acota a ESPERA_MAX_SEG', 30 === min( CN_MP::segundos_retry_after( '999' ), CN_MP::ESPERA_MAX_SEG ) && null === CN_MP::segundos_retry_after( '' ) && null === CN_MP::segundos_retry_after( 'basura' ) );
+// Tope de espera por corrida: Retry-After de 30 s con tope de 40 s => la 2ª espera ya no entra y se rinde.
+$esperas = array();
+$w = preparar_lote( array( 44 => array( 'PRE_R429000000000044', null, ciclo_row() ), 45 => array( 'PRE_R429000000000045', null, ciclo_row() ) ) );
+cn_http_on( 'GET', '#/preapproval/PRE_R429#', array( '__status' => 429, '__headers' => array( 'retry-after' => '30' ), '__body' => array() ) );
+$r = CN_Sync::sincronizar_lote();
+t( 'tope de espera por corrida: no espera más de TOPE_ESPERA_SEG en total', array_sum( $esperas ) <= CN_Sync::TOPE_ESPERA_SEG && 2 === $r['fallos'] && ! $w->escrituras( 'cn_miembros' ), json_encode( array( $esperas, $r ) ) );
+t( 'tope de espera: ambas quedan en la cola (no se saltean)', array( 44, 45 ) === array_keys( get_option( 'cn_sync_mp_fallidos' ) ) );
+// Tope de pedidos: 20 ítems de la cola que dan 429 gastan los 80 pedidos; el lote que sigue se encola sin pedirse.
+$filas = array();
+for ( $i = 1; $i <= 12; $i++ ) {
+	$filas[ 50 + $i ] = array( sprintf( 'PRE_TOPE%014d', $i ), null, ciclo_row() );
+}
+$w = preparar_lote( $filas );
+$cola_vieja = array();
+$cola_rows  = array();
+for ( $i = 101; $i <= 120; $i++ ) {
+	$cola_vieja[ $i ] = array( 'preapproval_id' => sprintf( 'PRE_COLQ%014d', $i ), 'intentos' => 1, 'desde' => 1 );
+	$cola_rows[]      = fila_sync( $i, sprintf( 'PRE_COLQ%014d', $i ) );
+}
+update_option( 'cn_sync_mp_fallidos', $cola_vieja );
+$w->on( '/SELECT id, preapproval_id FROM wp_cn_miembros\s+WHERE id IN/', $cola_rows );
+cn_http_on( 'GET', '#/preapproval/PRE_#', array( '__status' => 429, '__headers' => array( 'retry-after' => '0' ), '__body' => array() ) );
+$r = CN_Sync::sincronizar_lote();
+t( 'tope de pedidos por corrida: nunca más de TOPE_REQUESTS pedidos', count( cn_http_calls( '#/preapproval/PRE_#' ) ) <= CN_Sync::TOPE_REQUESTS, (string) count( cn_http_calls( '#/preapproval/PRE_#' ) ) );
+t( 'al llegar al tope: abortada=true y los 32 ítems (20 de la cola + 12 del lote) quedan en la cola, ninguno se saltea', $r['abortada'] && 32 === count( get_option( 'cn_sync_mp_fallidos' ) ) && ! $w->escrituras( 'cn_miembros' ), json_encode( $r ) );
+CN_MP::$dormir = function () {
+};
 
 seccion( 'correr(): flag, lock y manejo de errores' );
 $w = preparar_lote( array( 30 => array( 'PRE_FLAG0000000000030', 'authorized', ciclo_row() ) ) );

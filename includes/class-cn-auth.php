@@ -180,10 +180,13 @@ class CN_Auth {
 		 *    "sin suscripción"; el texto '0' cuenta como un valor, o sea que tampoco se cancela: decisión conservadora,
 		 *    nunca se baja a alguien por un valor raro en esa columna).
 		 *  - Sin preapproval_id y con la guarda activa (opción cn_guarda_trial_mp, activada por defecto): antes de
-		 *    cancelar se busca en Mercado Pago si pagó por fuera del trial (CN_Sync::guarda_trial). Si pagó, NO se
-		 *    cancela: se limpia fecha_fin_trial y se avisa por n8n ("pagó por link directo, vincular"). Si MP falla, NO
+		 *    cancelar se consulta en Mercado Pago si tiene una suscripción authorized (CN_Sync::guarda_trial: payer.id del cobro
+		 *    del trial cruzado con /preapproval/search?payer_id). Con cn_guarda_trial_solo_log = '1' (por defecto) solo se REGISTRA
+		 *    la decisión (mp_log trial_guarda_decision) y el cron se comporta como siempre con la guarda fallida: no cancela.
+		 *    Con '0': si hay suscripción, NO se
+		 *    cancela: se limpia fecha_fin_trial y queda un aviso en el cartel "Avisos" ("pagó por link directo, vincular"). Si MP falla, NO
 		 *    se cancela y fecha_fin_trial queda como está, así la próxima corrida lo reintenta.
-		 *  - Si no pagó (o no hay email para verificar) se cancela y se manda el mail de fin de trial, como siempre. La
+		 *  - Si no tiene suscripción (o la guarda está apagada) se cancela y se manda el mail de fin de trial, como siempre. La
 		 *    cancelación vuelve a leer la fila con FOR UPDATE: si en el medio se vinculó una suscripción, no se toca.
 		 */
 		public static function revocar_trials_vencidos() {
@@ -209,12 +212,30 @@ class CN_Auth {
 					continue;
 				}
 				if ( $guarda_activa ) {
-					$g = class_exists( 'CN_Sync' )
-						? CN_Sync::guarda_trial( $miembro )
-						: array( 'resultado' => 'error', 'detalle' => 'CN_Sync no está cargada' );
-					if ( 'error' === $g['resultado'] ) {
-						// MP falló: no se cancela a nadie; fecha_fin_trial sigue vencida y la próxima corrida lo reintenta.
-						CN_Webhook::registrar_log_mp( 'trial_guarda_error', array( 'miembro_id' => (int) $miembro->id, 'detalle' => $g['detalle'] ) );
+					$g = array( 'resultado' => 'error', 'detalle' => 'CN_Sync no está cargada' );
+					try {
+						if ( class_exists( 'CN_Sync' ) ) {
+							$g = CN_Sync::guarda_trial( $miembro );
+						}
+					} catch ( Throwable $e ) {
+						$g = array( 'resultado' => 'error', 'detalle' => mb_substr( $e->getMessage(), 0, 200 ) );
+					}
+					$solo_log = class_exists( 'CN_Sync' ) ? CN_Sync::guarda_trial_solo_log() : true;
+					CN_Webhook::registrar_log_mp( 'trial_guarda_decision', array(
+						'miembro_id' => (int) $miembro->id,
+						'resultado'  => $g['resultado'],
+						'motivo'     => isset( $g['motivo'] ) && '' !== $g['motivo'] ? $g['motivo'] : ( isset( $g['detalle'] ) ? $g['detalle'] : '' ),
+						'solo_log'   => $solo_log,
+					) );
+					if ( $solo_log ) {
+						// MODO SOLO-LOG: la decisión quedó registrada y NADA más cambia. Esto es lo que hacía el cron cuando la
+						// guarda fallaba (siempre, por el 400 de MP): no cancelar, dejar fecha_fin_trial vencida y reintentar en la próxima corrida.
+						CN_Webhook::registrar_log_mp( 'trial_guarda_error', array( 'miembro_id' => (int) $miembro->id, 'detalle' => 'modo solo-log: la guarda no actúa (decisión: ' . $g['resultado'] . ')' ) );
+						continue;
+					}
+					if ( 'error' === $g['resultado'] || 'indeterminado' === $g['resultado'] ) {
+						// MP falló o no hay forma confiable de decidir: no se cancela a nadie; fecha_fin_trial sigue vencida y la próxima corrida lo reintenta.
+						CN_Webhook::registrar_log_mp( 'trial_guarda_error', array( 'miembro_id' => (int) $miembro->id, 'detalle' => isset( $g['detalle'] ) ? $g['detalle'] : '' ) );
 						continue;
 					}
 					if ( 'pago' === $g['resultado'] ) {

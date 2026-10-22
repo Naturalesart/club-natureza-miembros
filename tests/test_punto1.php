@@ -116,7 +116,7 @@ t( 'conflicto, ok=false', ! $r['ok'] && 'conflicto' === $r['accion'] );
 t( 'ROLLBACK y cero escrituras en miembros', ! escrituras_miembros() && in_array( 'ROLLBACK', $w->transaccion(), true ) && ! in_array( 'COMMIT', $w->transaccion(), true ) );
 t( 'log sub_conflicto', in_array( 'sub_conflicto', $w->log_mp_tipos(), true ) );
 $av = cn_http_calls( '#club-trial-alerta#' );
-t( 'alerta a n8n con motivo sub_conflicto', 1 === count( $av ) && false !== strpos( (string) $av[0]['body'], 'sub_conflicto' ) );
+t( 'sub_conflicto: queda en el cartel Avisos (aviso_error) y NO sale a n8n', ! $av && in_array( CN_Webhook::TIPO_AVISO, $w->log_mp_tipos(), true ) );
 
 seccion( 'vincular_suscripcion: rechazos (no escribe nada)' );
 $w = preparar( null );
