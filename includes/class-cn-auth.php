@@ -42,13 +42,13 @@ class CN_Auth {
 					$tabla = CN_DB::tabla( 'miembros' );
 					$candidatos = $wpdb->get_results(
 									$wpdb->prepare(
-													"SELECT id, nombre_apellido, celular_hash, estado, fecha_fin_trial FROM {$tabla} WHERE LOWER(TRIM(nombre_apellido)) = LOWER(TRIM(%s))",
+													"SELECT id, nombre_apellido, celular_hash, estado, fecha_fin_trial, preapproval_id FROM {$tabla} WHERE LOWER(TRIM(nombre_apellido)) = LOWER(TRIM(%s))",
 													$nombre
 												)
 									);
 					foreach ( $candidatos as $candidato ) {
 									if ( CN_Helpers::verificar_celular( $celular_normalizado, $candidato->celular_hash ) ) {
-													if ( self::trial_vencido( $candidato->fecha_fin_trial ) ) {
+													if ( self::trial_vence_el_acceso( $candidato ) ) { // con suscripción (preapproval_id) la fecha del trial no decide: manda el estado.
 																	self::marcar_cancelada_si_hace_falta( (int) $candidato->id, $candidato->estado );
 																	self::limpiar_intentos();
 																	return array( 'ok' => false, 'motivo' => 'vencido' );
@@ -111,7 +111,7 @@ class CN_Auth {
 					$t_miembros = CN_DB::tabla( 'miembros' );
 					$miembro = $wpdb->get_row(
 									$wpdb->prepare(
-													"SELECT m.id, m.nombre_apellido, m.estado, m.fecha_fin_trial
+													"SELECT m.id, m.nombre_apellido, m.estado, m.fecha_fin_trial, m.preapproval_id
 																 FROM {$t_sesiones} s
 																 				 INNER JOIN {$t_miembros} m ON m.id = s.miembro_id
 																 				 				 WHERE s.token = %s AND s.expira > UTC_TIMESTAMP()",
@@ -121,7 +121,7 @@ class CN_Auth {
 					if ( ! $miembro ) {
 									return null;
 					}
-					if ( self::trial_vencido( $miembro->fecha_fin_trial ) ) {
+					if ( self::trial_vence_el_acceso( $miembro ) ) {
 									self::marcar_cancelada_si_hace_falta( (int) $miembro->id, $miembro->estado );
 									self::logout();
 									return null;
@@ -158,21 +158,26 @@ class CN_Auth {
 					}
 					return strtotime( $fecha_fin_trial . ' UTC' ) < time();
 		}
+		/**
+		 * ¿El vencimiento del trial le corta el acceso a esta ficha? Solo si NO tiene suscripción: con preapproval_id (comparación
+		 * ESTRICTA contra '', igual que el cron: NULL y '' son "sin suscripción", '0' cuenta como un valor) la fecha del trial no
+		 * decide nada y el acceso lo manda únicamente `estado` (webhook, sync y modo seguro).
+		 */
+		protected static function trial_vence_el_acceso( $ficha ) {
+					return '' === (string) ( isset( $ficha->preapproval_id ) ? $ficha->preapproval_id : '' )
+									&& self::trial_vencido( isset( $ficha->fecha_fin_trial ) ? $ficha->fecha_fin_trial : null );
+		}
+		/** Cancela por trial vencido SOLO si la ficha no tiene preapproval_id (la condición va también en el UPDATE, por si la fila cambió). */
 		protected static function marcar_cancelada_si_hace_falta( $miembro_id, $estado_actual ) {
 					global $wpdb;
 					if ( 'cancelada' === $estado_actual ) {
 									return;
 					}
-					$wpdb->update(
-									CN_DB::tabla( 'miembros' ),
-									array(
-													'estado'             => 'cancelada',
-													'fecha_modificacion' => current_time( 'mysql', true ),
-												),
-									array( 'id' => $miembro_id ),
-									array( '%s', '%s' ),
-									array( '%d' )
-								);
+					$wpdb->query( $wpdb->prepare(
+									'UPDATE ' . CN_DB::tabla( 'miembros' ) . " SET estado = 'cancelada', fecha_modificacion = %s WHERE id = %d AND (preapproval_id IS NULL OR preapproval_id = '')",
+									current_time( 'mysql', true ),
+									$miembro_id
+								) );
 		}
 		/**
 		 * Cron diario (cn_cron_revocar_trials): da de baja los trials vencidos que NO se convirtieron en suscripción.
