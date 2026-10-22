@@ -60,6 +60,12 @@ class CN_Sync {
 		} catch ( Throwable $e ) {
 			CN_Webhook::registrar_log_mp( 'sub_error', array( 'paso' => 'sync_alerta', 'mensaje' => mb_substr( $e->getMessage(), 0, 300 ) ) );
 		}
+		try {
+			CN_Alta_Mail::correr(); // 'off' por defecto: no hace nada. Solo GET a MP; nunca vincula ni crea socias.
+		} catch ( Throwable $e ) {
+			CN_Webhook::registrar_log_mp( 'sub_error', array( 'paso' => 'alta_mail', 'mensaje' => mb_substr( $e->getMessage(), 0, 300 ) ) );
+			CN_Webhook::avisar_error_n8n( 'alta_mail_error', array( 'mensaje' => mb_substr( $e->getMessage(), 0, 300 ) ) );
+		}
 		delete_transient( 'cn_sync_mp_lock' );
 	}
 	/**

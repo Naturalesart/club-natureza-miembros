@@ -172,6 +172,12 @@ function wp_remote_retrieve_response_code( $r ) {
 function wp_remote_retrieve_body( $r ) {
 	return $r['body'];
 }
+function wp_salt( $s = 'auth' ) {
+	return 'sal-de-prueba-' . $s;
+}
+function get_permalink( $id ) {
+	return 'https://naturalesart.com/?p=' . (int) $id;
+}
 function wp_remote_retrieve_header( $r, $h ) {
 	return $r['headers'][ strtolower( $h ) ] ?? '';
 }
@@ -220,6 +226,7 @@ function cn_http_calls( $patron ) {
 // ---------------------------------------------------------------- $wpdb falso
 class CN_Fake_Wpdb {
 	public $prefix      = 'wp_';
+	public $posts       = 'wp_posts';
 	public $last_error  = '';
 	public $insert_id   = 0;
 	public $log         = array(); // escrituras y transacciones, en orden
@@ -324,6 +331,7 @@ require_once $cn_raiz . 'includes/class-cn-webhook.php';
 require_once $cn_raiz . 'includes/class-cn-vinculo.php';
 require_once $cn_raiz . 'includes/class-cn-vinculo-manual.php';
 require_once $cn_raiz . 'includes/class-cn-retorno.php';
+require_once $cn_raiz . 'includes/class-cn-alta-mail.php';
 require_once $cn_raiz . 'includes/class-cn-vinculo-lote.php';
 if ( file_exists( $cn_raiz . 'includes/class-cn-sync.php' ) ) {
 	require_once $cn_raiz . 'includes/class-cn-sync.php';
