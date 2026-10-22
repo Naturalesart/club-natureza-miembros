@@ -108,16 +108,7 @@ class CN_Meta_Capi {
 			array( '%s', '%s', '%s' )
 		);
 		if ( is_wp_error( $respuesta ) || $codigo >= 300 ) {
-			wp_remote_post( CN_Webhook::N8N_ALERTA_URL, array(
-				'timeout'  => 5,
-				'blocking' => false,
-				'headers'  => array( 'Content-Type' => 'application/json' ),
-				'body'     => wp_json_encode( array(
-					'motivo'  => 'capi_purchase_fallo',
-					'detalle' => array( 'event_id' => $event_id, 'http_code' => $codigo, 'error' => substr( (string) $body_raw, 0, 500 ) ),
-					'fecha'   => current_time( 'mysql', true ),
-				) ),
-			) );
+			CN_Webhook::avisar_error_n8n( 'capi_purchase_fallo', array( 'event_id' => $event_id, 'http_code' => $codigo, 'error' => substr( (string) $body_raw, 0, 500 ) ) );
 		}
 	}
 	/**
@@ -194,16 +185,7 @@ class CN_Meta_Capi {
 			array( '%s', '%s', '%s' )
 		);
 		if ( is_wp_error( $respuesta ) || $codigo >= 300 ) {
-			wp_remote_post( CN_Webhook::N8N_ALERTA_URL, array(
-				'timeout'  => 5,
-				'blocking' => false,
-				'headers'  => array( 'Content-Type' => 'application/json' ),
-				'body'     => wp_json_encode( array(
-					'motivo'  => 'capi_subscribe_fallo',
-					'detalle' => array( 'event_id' => $event_id_meta, 'http_code' => $codigo, 'error' => substr( (string) $body_raw, 0, 500 ) ),
-					'fecha'   => current_time( 'mysql', true ),
-				) ),
-			) );
+			CN_Webhook::avisar_error_n8n( 'capi_subscribe_fallo', array( 'event_id' => $event_id_meta, 'http_code' => $codigo, 'error' => substr( (string) $body_raw, 0, 500 ) ) );
 		}
 	}
 }

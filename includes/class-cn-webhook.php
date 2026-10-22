@@ -538,13 +538,8 @@ class CN_Webhook {
 		}
 		return gmdate( 'Y-m-d H:i:s', $ts );
 	}
-	/** Aviso a n8n con tope de 1 por hora por motivo + referencia. */
+	/** Antes: aviso a n8n con tope de 1 por hora. Ahora: queda en el cartel "Avisos" del panel (deduplicado, con contador); no manda nada afuera. */
 	public static function sub_avisar_una_vez_por_hora( $motivo, $external_reference, $detalle ) {
-		$clave = 'cn_sub_av_' . md5( $motivo . '|' . $external_reference );
-		if ( get_transient( $clave ) ) {
-			return;
-		}
-		set_transient( $clave, 1, HOUR_IN_SECONDS );
 		self::avisar_error_n8n( $motivo, $detalle );
 	}
 	/**
@@ -1356,11 +1351,39 @@ class CN_Webhook {
 			array( '%s', '%s', '%s' )
 		);
 	}
+	/** Tipo de fila de mp_log con que se registran los avisos técnicos (los lee el cartel "Avisos" de Club Natureza → Socias). */
+	const TIPO_AVISO = 'aviso_error';
+	/** Motivos de "una socia pagó y no pudo recibir acceso": los únicos que además siguen avisando por n8n (máx. 1 por hora). */
+	const MOTIVOS_PAGO_SIN_ACCESO = array( 'excepcion_trial_alta', 'metadata_incompleta', 'preapproval_sin_match' );
 	/**
-	 * Aviso fire-and-forget a n8n. Nunca bloquea ni hace fallar el alta —
-	 * timeout corto y sin esperar respuesta (regla #2 del proyecto).
+	 * Aviso técnico: NO manda mail ni webhook. Deja una fila en mp_log (tipo aviso_error) que el cartel "Avisos" muestra
+	 * agrupada: mismo motivo + mismo detalle = una línea con contador. Nunca lanza ni bloquea (es accesorio).
+	 * El nombre se mantiene porque lo llaman muchos lugares; ya no habla con n8n (salvo avisar_pago_sin_acceso()).
 	 */
 	public static function avisar_error_n8n( $motivo, $detalle ) {
+		try {
+			self::registrar_log_mp( self::TIPO_AVISO, array(
+				'motivo'  => (string) $motivo,
+				'detalle' => $detalle,
+				'clave'   => md5( $motivo . '|' . wp_json_encode( $detalle ) ),
+			) );
+			if ( in_array( $motivo, self::MOTIVOS_PAGO_SIN_ACCESO, true ) ) {
+				self::avisar_pago_sin_acceso( $motivo, $detalle );
+			}
+		} catch ( Throwable $e ) {
+			// Accesorio: si el registro falla, no debe afectar el flujo que lo llamó.
+		}
+	}
+	/**
+	 * Única salida a n8n que queda: "una socia pagó y no pudo recibir acceso". Fire-and-forget, máx. 1 por hora por
+	 * motivo.
+	 */
+	protected static function avisar_pago_sin_acceso( $motivo, $detalle ) {
+		$clave = 'cn_pago_sin_acceso_' . md5( $motivo );
+		if ( get_transient( $clave ) ) {
+			return;
+		}
+		set_transient( $clave, 1, HOUR_IN_SECONDS );
 		wp_remote_post( self::N8N_ALERTA_URL, array(
 			'timeout'  => 5,
 			'blocking' => false,
@@ -1371,6 +1394,38 @@ class CN_Webhook {
 				'fecha'   => current_time( 'mysql', true ),
 			) ),
 		) );
+	}
+	/**
+	 * Avisos para el cartel: últimos $max_filas registros de tipo aviso_error, agrupados por clave (motivo + detalle).
+	 *
+	 * @return array{total:int,distintos:int,lineas:array<int,array{motivo:string,detalle:string,veces:int,ultima:string}>}
+	 */
+	public static function listar_avisos( $max_lineas = 50, $max_filas = 1000 ) {
+		global $wpdb;
+		$filas = $wpdb->get_results( $wpdb->prepare(
+			"SELECT payload, fecha FROM " . CN_DB::tabla( 'mp_log' ) . " WHERE tipo = %s ORDER BY id DESC LIMIT %d",
+			self::TIPO_AVISO,
+			(int) $max_filas
+		) );
+		$filas  = is_array( $filas ) ? $filas : array();
+		$grupos = array();
+		foreach ( $filas as $f ) {
+			$p = json_decode( (string) $f->payload, true );
+			if ( ! is_array( $p ) ) {
+				continue;
+			}
+			$clave = isset( $p['clave'] ) ? (string) $p['clave'] : md5( (string) $f->payload );
+			if ( ! isset( $grupos[ $clave ] ) ) {
+				$det = isset( $p['detalle'] ) ? ( is_scalar( $p['detalle'] ) ? (string) $p['detalle'] : (string) wp_json_encode( $p['detalle'], JSON_UNESCAPED_UNICODE ) ) : '';
+				$grupos[ $clave ] = array( 'motivo' => (string) ( $p['motivo'] ?? '' ), 'detalle' => mb_substr( $det, 0, 400 ), 'veces' => 0, 'ultima' => (string) $f->fecha );
+			}
+			$grupos[ $clave ]['veces']++; // las filas vienen de la más nueva a la más vieja: la primera de cada grupo es la última vez.
+		}
+		return array(
+			'total'     => count( $filas ),
+			'distintos' => count( $grupos ),
+			'lineas'    => array_slice( array_values( $grupos ), 0, (int) $max_lineas ),
+		);
 	}
 	/**
 	 * Aviso fire-and-forget a n8n con cada evento de suscripción de Mercado Pago, para verlo
