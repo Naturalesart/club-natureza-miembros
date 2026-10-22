@@ -131,7 +131,7 @@ function user_can( $u, $c ) {
 	return in_array( $c, $u->caps ?? array(), true );
 }
 function check_admin_referer( $a = '', $b = '' ) {
-	return true;
+	return false !== ( $GLOBALS['cn_nonce_ok'] ?? true );
 }
 function sanitize_textarea_field( $s ) {
 	return trim( strip_tags( (string) $s ) );
@@ -331,6 +331,7 @@ if ( file_exists( $cn_raiz . 'includes/class-cn-sync.php' ) ) {
 require_once $cn_raiz . 'includes/class-cn-auth.php';
 require_once $cn_raiz . 'includes/class-cn-admin.php';
 require_once $cn_raiz . 'includes/class-cn-colaboradora.php';
+require_once $cn_raiz . 'includes/class-cn-diag-pagador.php';
 CN_MP::$dormir = function () { // los tests nunca esperan de verdad (el 429 del sync pide esperas de segundos).
 };
 // ---------------------------------------------------------------- mini framework de tests
