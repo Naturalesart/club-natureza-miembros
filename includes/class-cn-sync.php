@@ -49,22 +49,30 @@ class CN_Sync {
 			return; // la corrida anterior sigue en curso.
 		}
 		set_transient( 'cn_sync_mp_lock', 1, self::LOCK_SEG );
+		CN_Alertas::chequear_sync(); // heartbeat: alerta GRAVE si hace más de 24 hs que no hay una corrida completa y exitosa.
+		$ok = true;
 		try {
 			self::sincronizar_lote();
 		} catch ( Throwable $e ) {
+			$ok = false;
 			CN_Webhook::registrar_log_mp( 'sub_error', array( 'paso' => 'sync_lote', 'mensaje' => mb_substr( $e->getMessage(), 0, 300 ) ) );
 			CN_Webhook::sub_avisar_una_vez_por_hora( 'sub_error', 'sync_lote', array( 'paso' => 'sync_lote', 'mensaje' => mb_substr( $e->getMessage(), 0, 300 ) ) );
 		}
 		try {
 			self::alertar_sin_vincular();
 		} catch ( Throwable $e ) {
+			$ok = false;
 			CN_Webhook::registrar_log_mp( 'sub_error', array( 'paso' => 'sync_alerta', 'mensaje' => mb_substr( $e->getMessage(), 0, 300 ) ) );
 		}
 		try {
 			CN_Alta_Mail::correr(); // 'off' por defecto: no hace nada. Solo GET a MP; nunca vincula ni crea socias.
 		} catch ( Throwable $e ) {
+			$ok = false;
 			CN_Webhook::registrar_log_mp( 'sub_error', array( 'paso' => 'alta_mail', 'mensaje' => mb_substr( $e->getMessage(), 0, 300 ) ) );
 			CN_Webhook::avisar_error_n8n( 'alta_mail_error', array( 'mensaje' => mb_substr( $e->getMessage(), 0, 300 ) ) );
+		}
+		if ( $ok ) {
+			CN_Alertas::sync_ok(); // corrida completa y sin excepciones: late el heartbeat.
 		}
 		delete_transient( 'cn_sync_mp_lock' );
 	}

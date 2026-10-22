@@ -33,24 +33,20 @@ t( 'cada uno queda en mp_log como aviso_error', 6 === count( avisos_insertados( 
 CN_Webhook::sub_avisar_una_vez_por_hora( 'sub_error', 'ref1', array( 'mensaje' => 'boom' ) );
 t( 'sub_avisar_una_vez_por_hora: también va solo al cartel', ! $GLOBALS['cn_http_log'] && 7 === count( avisos_insertados( $wpdb ) ) );
 
-seccion( 'excepción: "una socia pagó y no pudo recibir acceso" sigue avisando, máx. 1 por hora' );
+seccion( '"pagó y no tiene acceso": ya NO manda mail inmediato; se anota como caso para el resumen diario (CN_Alertas)' );
 foreach ( CN_Webhook::MOTIVOS_PAGO_SIN_ACCESO as $motivo ) {
 	cn_test_reset();
 	cn_http_on( 'POST', '#club-trial-alerta#', array() );
-	CN_Webhook::avisar_error_n8n( $motivo, array( 'payment_id' => '1' ) );
-	CN_Webhook::avisar_error_n8n( $motivo, array( 'payment_id' => '2' ) );
-	t( "{$motivo}: 1 sola llamada a n8n por hora (la 2ª queda solo en el cartel)", 1 === count( n8n_calls() ) && 2 === count( avisos_insertados( $GLOBALS['wpdb'] ) ) && ! $GLOBALS['cn_mails'] );
-	delete_transient( 'cn_pago_sin_acceso_' . md5( $motivo ) ); // pasó la hora
-	CN_Webhook::avisar_error_n8n( $motivo, array( 'payment_id' => '3' ) );
-	t( "{$motivo}: pasada la hora vuelve a avisar", 2 === count( n8n_calls() ) );
+	$campo = CN_Alertas::MOTIVOS_CASO[ $motivo ];
+	CN_Webhook::avisar_error_n8n( $motivo, array( $campo => '12345678901234567890123456789012' ) );
+	CN_Webhook::avisar_error_n8n( $motivo, array( $campo => '12345678901234567890123456789012' ) );
+	t( "{$motivo}: cero llamadas a n8n, queda en el cartel y como UN caso anotado", ! n8n_calls() && 2 === count( avisos_insertados( $GLOBALS['wpdb'] ) ) && ! $GLOBALS['cn_mails'] && 1 === count( get_option( CN_Alertas::OPT_CASOS ) ) );
 }
-t( 'sub_sin_vincular ya NO llama a n8n (solo cartel + mp_log)', ( function () {
-	cn_test_reset();
-	cn_http_on( 'POST', '#club-trial-alerta#', array() );
-	CN_Webhook::avisar_error_n8n( 'sub_sin_vincular', array( 'cantidad' => 1 ) );
-	return ! n8n_calls() && 1 === count( avisos_insertados( $GLOBALS['wpdb'] ) ) && ! in_array( 'sub_sin_vincular', CN_Webhook::MOTIVOS_PAGO_SIN_ACCESO, true );
-} )() );
-t( 'son exactamente los 3 motivos de pago sin acceso, y ningún error técnico está en la lista', array( 'excepcion_trial_alta', 'metadata_incompleta', 'preapproval_sin_match' ) === CN_Webhook::MOTIVOS_PAGO_SIN_ACCESO );
+t( 'son exactamente los 3 motivos de pago sin acceso, y ningún error técnico (ni alta_mail_sin_email) está en la lista', array( 'excepcion_trial_alta', 'metadata_incompleta', 'preapproval_sin_match' ) === CN_Webhook::MOTIVOS_PAGO_SIN_ACCESO && array_keys( CN_Alertas::MOTIVOS_CASO ) === array( 'preapproval_sin_match', 'excepcion_trial_alta', 'metadata_incompleta' ) );
+cn_test_reset();
+cn_http_on( 'POST', '#club-trial-alerta#', array() );
+CN_Webhook::avisar_error_n8n( 'sub_sin_vincular', array( 'cantidad' => 1 ) );
+t( 'sub_sin_vincular: solo cartel + mp_log, ni n8n ni caso', ! n8n_calls() && 1 === count( avisos_insertados( $GLOBALS['wpdb'] ) ) && array() === get_option( CN_Alertas::OPT_CASOS, array() ) );
 
 seccion( 'cartel Avisos: deduplicado, con contador, últimos 50' );
 cn_test_reset();
@@ -111,13 +107,15 @@ $raiz = dirname( __DIR__ ) . '/includes/';
 $hallazgos = array();
 foreach ( glob( $raiz . '*.php' ) as $f ) {
 	$src = file_get_contents( $f );
-	if ( false !== strpos( $src, 'N8N_ALERTA_URL' ) && 'class-cn-webhook.php' !== basename( $f ) ) {
+	if ( false !== strpos( $src, 'N8N_ALERTA_URL' ) && ! in_array( basename( $f ), array( 'class-cn-webhook.php', 'class-cn-alertas.php' ), true ) ) {
 		$hallazgos[] = basename( $f ) . ' usa N8N_ALERTA_URL';
 	}
 }
-t( 'N8N_ALERTA_URL solo se usa en CN_Webhook', ! $hallazgos, implode( ', ', $hallazgos ) );
+t( 'N8N_ALERTA_URL solo se usa en CN_Webhook (la define) y CN_Alertas (la usa)', ! $hallazgos, implode( ', ', $hallazgos ) );
 $web = file_get_contents( $raiz . 'class-cn-webhook.php' );
-t( 'dentro de CN_Webhook, N8N_ALERTA_URL solo en avisar_pago_sin_acceso()', 2 === substr_count( $web, 'N8N_ALERTA_URL' ) && preg_match( '/function avisar_pago_sin_acceso.*?N8N_ALERTA_URL/s', $web ) === 1 ); // definición de la constante + un único uso
+t( 'CN_Webhook solo DEFINE la constante: ya no manda nada a n8n', 1 === substr_count( $web, 'N8N_ALERTA_URL' ) );
+$ale = file_get_contents( $raiz . 'class-cn-alertas.php' );
+t( 'en CN_Alertas la única salida a n8n es enviar()', 1 === substr_count( $ale, 'N8N_ALERTA_URL' ) && 1 === substr_count( $ale, 'wp_remote_post' ) && preg_match( '/function enviar\(.*?wp_remote_post/s', $ale ) === 1 );
 $mails = array();
 foreach ( glob( $raiz . '*.php' ) as $f ) {
 	if ( preg_match_all( '/wp_mail\(/', file_get_contents( $f ), $m ) ) {

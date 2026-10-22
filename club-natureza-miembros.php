@@ -21,6 +21,7 @@ require_once CN_PATH . 'includes/class-cn-drive.php';
 require_once CN_PATH . 'includes/class-cn-mp.php';
 require_once CN_PATH . 'includes/class-cn-meta-capi.php';
 require_once CN_PATH . 'includes/class-cn-webhook.php';
+require_once CN_PATH . 'includes/class-cn-alertas.php';
 require_once CN_PATH . 'includes/class-cn-vinculo.php';
 require_once CN_PATH . 'includes/class-cn-vinculo-manual.php';
 require_once CN_PATH . 'includes/class-cn-retorno.php';
@@ -91,6 +92,12 @@ add_action( 'cn_cron_revocar_trials', array( 'CN_Auth', 'revocar_trials_vencidos
 add_action( 'init', function () {
 	if ( ! wp_next_scheduled( 'cn_cron_revocar_trials' ) ) {
 		wp_schedule_event( time(), 'daily', 'cn_cron_revocar_trials' );
+	}
+} );
+add_action( 'cn_cron_alertas_graves', array( 'CN_Alertas', 'chequeo_diario' ) );
+add_action( 'init', function () {
+	if ( ! wp_next_scheduled( 'cn_cron_alertas_graves' ) ) {
+		wp_schedule_event( time() + 600, 'daily', 'cn_cron_alertas_graves' );
 	}
 } );
 add_action( 'cn_cron_revocar_bajas_sub', array( 'CN_Webhook', 'revocar_bajas_sub_vencidas' ) );
