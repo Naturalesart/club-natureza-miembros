@@ -32,6 +32,7 @@ require_once CN_PATH . 'includes/class-cn-admin.php';
 require_once CN_PATH . 'includes/class-cn-colaboradora.php';
 require_once CN_PATH . 'includes/class-cn-clarity.php';
 require_once CN_PATH . 'includes/class-cn-planes-mp.php';
+require_once CN_PATH . 'includes/class-cn-socias-revisar.php'; // pantalla "Socias a revisar" (se engancha sola).
 require_once CN_PATH . 'includes/class-cn-diag-pagador.php'; // TEMPORAL (diagnóstico, solo lectura): borrar esta línea y el archivo para quitarla.
 register_activation_hook( __FILE__, array( 'CN_Activator', 'activar' ) );
 add_action( 'init', array( 'CN_Shortcodes', 'registrar' ) );

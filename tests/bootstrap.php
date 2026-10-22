@@ -341,6 +341,7 @@ require_once $cn_raiz . 'includes/class-cn-auth.php';
 require_once $cn_raiz . 'includes/class-cn-admin.php';
 require_once $cn_raiz . 'includes/class-cn-colaboradora.php';
 require_once $cn_raiz . 'includes/class-cn-diag-pagador.php';
+require_once $cn_raiz . 'includes/class-cn-socias-revisar.php';
 CN_MP::$dormir = function () { // los tests nunca esperan de verdad (el 429 del sync pide esperas de segundos).
 };
 // ---------------------------------------------------------------- mini framework de tests
