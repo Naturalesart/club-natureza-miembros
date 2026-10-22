@@ -1408,6 +1408,15 @@ class CN_Admin {
 			update_option( 'cn_guarda_trial_mp', isset( $_POST['cn_guarda_trial_mp'] ) ? '1' : '0' );
 			// Guarda de trials en modo solo-log: tildado por defecto. Tildado = registra su decisión y no cambia nada.
 			update_option( 'cn_guarda_trial_solo_log', isset( $_POST['cn_guarda_trial_solo_log'] ) ? '1' : '0' );
+			// Alta por mail (CN_Alta_Mail): modo off|log|on. Al salir de 'off' se fija el corte (solo suscripciones nuevas desde ahora).
+			if ( isset( $_POST['cn_alta_mail_modo'] ) ) {
+				$cn_modo_ant   = CN_Alta_Mail::modo();
+				$cn_modo_nuevo = sanitize_key( wp_unslash( $_POST['cn_alta_mail_modo'] ) );
+				$cn_modo_nuevo = in_array( $cn_modo_nuevo, array( 'log', 'on' ), true ) ? $cn_modo_nuevo : 'off';
+				update_option( CN_Alta_Mail::OPT_MODO, $cn_modo_nuevo );
+				CN_Alta_Mail::al_guardar_modo( $cn_modo_ant, $cn_modo_nuevo );
+				update_option( CN_Alta_Mail::OPT_URL, esc_url_raw( wp_unslash( $_POST['cn_alta_mail_url'] ?? '' ) ) );
+			}
 			// Página de retorno de suscripciones por link directo ([cn_retorno_suscripcion]). Apagada por defecto.
 			update_option( 'cn_retorno_activo', isset( $_POST['cn_retorno_activo'] ) ? '1' : '0' );
 			update_option( CN_Retorno::OPT_WHATSAPP, preg_replace( '/\D+/', '', sanitize_text_field( wp_unslash( $_POST['cn_retorno_whatsapp'] ?? '' ) ) ) ); // solo dígitos
@@ -1430,6 +1439,9 @@ class CN_Admin {
 		$guarda_trial_mp  = '1' === (string) get_option( 'cn_guarda_trial_mp', '1' );
 		$guarda_solo_log  = '1' === (string) get_option( 'cn_guarda_trial_solo_log', '1' );
 		$retorno_activo   = '1' === (string) get_option( 'cn_retorno_activo', '0' );
+		$alta_modo        = CN_Alta_Mail::modo();
+		$alta_url         = (string) get_option( CN_Alta_Mail::OPT_URL, '' );
+		$alta_desde       = (int) get_option( CN_Alta_Mail::OPT_DESDE, 0 );
 		$retorno_wa       = (string) get_option( CN_Retorno::OPT_WHATSAPP, '' );
 		$capi_token   = CN_Meta_Capi::get_token();
 		$drive_key    = CN_Drive::get_api_key();
@@ -1507,6 +1519,19 @@ class CN_Admin {
 							<p class="description">Apagado por defecto. Apagado, esa página solo muestra un mensaje de agradecimiento (sin formulario ni consulta a Mercado Pago). Prendido, la clienta que paga por el link directo del plan deja su celular y queda activa sola.</p>
 							<p style="margin-top:10px;"><label>WhatsApp para clientas que no logran activarse: <input type="text" name="cn_retorno_whatsapp" value="<?php echo esc_attr( $retorno_wa ); ?>" class="regular-text" placeholder="5491122334455" autocomplete="off"></label></p>
 							<p class="description">Número con código de país, solo dígitos (ej. 5491122334455). Después de 3 intentos fallidos la página muestra un botón que abre este WhatsApp con el código de la suscripción. Vacío: no se muestra el botón.</p>
+						</td>
+					</tr>
+					<tr>
+						<th><label>Alta por mail (suscripción sin ficha)</label></th>
+						<td>
+							<select name="cn_alta_mail_modo">
+								<option value="off" <?php selected( $alta_modo, 'off' ); ?>>Apagado (no hace nada)</option>
+								<option value="log" <?php selected( $alta_modo, 'log' ); ?>>Solo registrar (simula, NO manda mails)</option>
+								<option value="on" <?php selected( $alta_modo, 'on' ); ?>>Activo (manda el mail)</option>
+							</select>
+							<p class="description">Apagado por defecto. Cuando alguien paga por el link directo del plan y no tiene ficha, el sistema toma el email del pago y le manda un link para completar celular y nombre en la página de retorno (que tiene que estar activa, más abajo). <strong>Solo cuentan las suscripciones creadas desde que sale de "Apagado"</strong><?php echo $alta_desde > 0 ? ' (corte actual: ' . esc_html( gmdate( 'd/m/Y H:i', $alta_desde ) ) . ' UTC)' : ''; ?>; las anteriores no se tocan. "Solo registrar" deja en el registro (<code>alta_mail_simulado</code>, con el email enmascarado) lo que haría.</p>
+							<p style="margin-top:8px;"><label>URL de la página con <code>[cn_retorno_suscripcion]</code>: <input type="url" name="cn_alta_mail_url" class="regular-text" value="<?php echo esc_attr( $alta_url ); ?>" placeholder="https://naturalesart.com/..."></label></p>
+							<p class="description">Si la dejás vacía se busca sola la página publicada que tenga ese shortcode.</p>
 						</td>
 					</tr>
 					<tr>

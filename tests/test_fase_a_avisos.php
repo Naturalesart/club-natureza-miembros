@@ -124,5 +124,5 @@ foreach ( glob( $raiz . '*.php' ) as $f ) {
 		$mails[ basename( $f ) ] = count( $m[0] );
 	}
 }
-t( 'wp_mail solo en class-cn-webhook.php (bienvenida, fin de trial, día 5 y otro de socias): 4 lugares, ninguno de errores', array( 'class-cn-webhook.php' => 4 ) === $mails, json_encode( $mails ) );
+t( 'wp_mail solo en mails buenos: class-cn-webhook.php (bienvenidas, fin de trial, día 5) y el mail de alta por mail a la clienta; ninguno de errores', array( 'class-cn-alta-mail.php' => 1, 'class-cn-webhook.php' => 4 ) === $mails, json_encode( $mails ) );
 t( 'cn_admin_alerta_email se lee solo para el aviso de día 5', 1 === substr_count( $web, "get_option( 'cn_admin_alerta_email'" ) );

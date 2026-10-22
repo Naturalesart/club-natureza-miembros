@@ -34,6 +34,7 @@ function cn_test_reset() {
 	$GLOBALS['cn_http']       = array();
 	$GLOBALS['cn_http_log']   = array();
 	$GLOBALS['cn_mails']      = array();
+	$GLOBALS['cn_mail_falla'] = false;
 	$GLOBALS['cn_capi']       = array();
 	$GLOBALS['wpdb']         = new CN_Fake_Wpdb();
 }
@@ -83,7 +84,7 @@ function home_url( $p = '' ) {
 }
 function wp_mail( $to, $asunto, $cuerpo, $headers = array() ) {
 	$GLOBALS['cn_mails'][] = array( 'to' => $to, 'asunto' => $asunto, 'cuerpo' => $cuerpo, 'headers' => $headers );
-	return true;
+	return empty( $GLOBALS['cn_mail_falla'] ); // $GLOBALS['cn_mail_falla'] = true simula que wp_mail no puede enviar (el intento igual queda registrado).
 }
 function esc_html( $s ) {
 	return htmlspecialchars( (string) $s, ENT_QUOTES );
@@ -172,6 +173,12 @@ function wp_remote_retrieve_response_code( $r ) {
 function wp_remote_retrieve_body( $r ) {
 	return $r['body'];
 }
+function wp_salt( $s = 'auth' ) {
+	return 'sal-de-prueba-' . $s;
+}
+function get_permalink( $id ) {
+	return 'https://naturalesart.com/?p=' . (int) $id;
+}
 function wp_remote_retrieve_header( $r, $h ) {
 	return $r['headers'][ strtolower( $h ) ] ?? '';
 }
@@ -220,6 +227,7 @@ function cn_http_calls( $patron ) {
 // ---------------------------------------------------------------- $wpdb falso
 class CN_Fake_Wpdb {
 	public $prefix      = 'wp_';
+	public $posts       = 'wp_posts';
 	public $last_error  = '';
 	public $insert_id   = 0;
 	public $log         = array(); // escrituras y transacciones, en orden
@@ -324,6 +332,7 @@ require_once $cn_raiz . 'includes/class-cn-webhook.php';
 require_once $cn_raiz . 'includes/class-cn-vinculo.php';
 require_once $cn_raiz . 'includes/class-cn-vinculo-manual.php';
 require_once $cn_raiz . 'includes/class-cn-retorno.php';
+require_once $cn_raiz . 'includes/class-cn-alta-mail.php';
 require_once $cn_raiz . 'includes/class-cn-vinculo-lote.php';
 if ( file_exists( $cn_raiz . 'includes/class-cn-sync.php' ) ) {
 	require_once $cn_raiz . 'includes/class-cn-sync.php';
