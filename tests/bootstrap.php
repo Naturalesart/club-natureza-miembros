@@ -211,6 +211,39 @@ function cn_http_calls( $patron ) {
 		return preg_match( $patron, $c['url'] );
 	} ) );
 }
+// Stubs del panel de contenido (punto 12).
+$GLOBALS['cn_logged'] = true;
+function is_user_logged_in() {
+	return false !== ( $GLOBALS['cn_logged'] ?? true );
+}
+function is_singular() {
+	return true;
+}
+function get_post() {
+	return $GLOBALS['cn_post'] ?? (object) array( 'ID' => 50, 'post_content' => '[cn_panel_contenido]' );
+}
+function has_shortcode( $contenido, $tag ) {
+	return false !== strpos( (string) $contenido, '[' . $tag );
+}
+function get_permalink( $p = 0 ) {
+	return 'https://naturalesart.com/panel-contenido/';
+}
+function wp_login_form( $a = array() ) {
+	echo '<form id="loginform" data-redirect="' . htmlspecialchars( (string) ( $a['redirect'] ?? '' ) ) . '" data-remember="' . ( empty( $a['value_remember'] ) ? '0' : '1' ) . '"></form>';
+}
+function wp_lostpassword_url( $r = '' ) {
+	return 'https://naturalesart.com/wp-login.php?action=lostpassword';
+}
+function wp_logout_url( $r = '' ) {
+	return 'https://naturalesart.com/wp-login.php?action=logout';
+}
+function wp_safe_redirect( $u ) {
+	$GLOBALS['cn_redirect'] = $u;
+}
+function nocache_headers() {
+}
+function add_filter( $h, $cb, $p = 10, $n = 1 ) {
+}
 // ---------------------------------------------------------------- $wpdb falso
 class CN_Fake_Wpdb {
 	public $prefix      = 'wp_';
@@ -325,6 +358,8 @@ if ( file_exists( $cn_raiz . 'includes/class-cn-sync.php' ) ) {
 require_once $cn_raiz . 'includes/class-cn-auth.php';
 require_once $cn_raiz . 'includes/class-cn-admin.php';
 require_once $cn_raiz . 'includes/class-cn-colaboradora.php';
+require_once $cn_raiz . 'includes/class-cn-drive.php';
+require_once $cn_raiz . 'includes/class-cn-panel-contenido.php';
 // ---------------------------------------------------------------- mini framework de tests
 $GLOBALS['cn_t_ok']   = 0;
 $GLOBALS['cn_t_fail'] = array();
