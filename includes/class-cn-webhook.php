@@ -1354,7 +1354,7 @@ class CN_Webhook {
 	/** Tipo de fila de mp_log con que se registran los avisos técnicos (los lee el cartel "Avisos" de Club Natureza → Socias). */
 	const TIPO_AVISO = 'aviso_error';
 	/** Motivos de "una socia pagó y no pudo recibir acceso": los únicos que además siguen avisando por n8n (máx. 1 por hora). */
-	const MOTIVOS_PAGO_SIN_ACCESO = array( 'excepcion_trial_alta', 'metadata_incompleta', 'preapproval_sin_match', 'sub_sin_vincular' );
+	const MOTIVOS_PAGO_SIN_ACCESO = array( 'excepcion_trial_alta', 'metadata_incompleta', 'preapproval_sin_match' );
 	/**
 	 * Aviso técnico: NO manda mail ni webhook. Deja una fila en mp_log (tipo aviso_error) que el cartel "Avisos" muestra
 	 * agrupada: mismo motivo + mismo detalle = una línea con contador. Nunca lanza ni bloquea (es accesorio).
@@ -1376,7 +1376,7 @@ class CN_Webhook {
 	}
 	/**
 	 * Única salida a n8n que queda: "una socia pagó y no pudo recibir acceso". Fire-and-forget, máx. 1 por hora por
-	 * motivo (los avisos de sub_sin_vincular ya vienen agrupados por corrida).
+	 * motivo.
 	 */
 	protected static function avisar_pago_sin_acceso( $motivo, $detalle ) {
 		$clave = 'cn_pago_sin_acceso_' . md5( $motivo );

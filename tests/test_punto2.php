@@ -244,6 +244,16 @@ try {
 t( 'error de base: no lanza, deja rastro y libera el lock', $ok && in_array( 'sub_error', $w->log_mp_tipos(), true ) && false === get_transient( 'cn_sync_mp_lock' ) );
 
 seccion( 'aviso a n8n de suscripciones authorized sin vincular hace más de 1 hora' );
+/** Payloads (texto) de los avisos sub_sin_vincular guardados en el cartel (mp_log aviso_error). */
+function avisos_sv( $w ) {
+	$o = array();
+	foreach ( $w->log as $l ) {
+		if ( 'insert' === $l[0] && false !== strpos( $l[1], 'mp_log' ) && 'aviso_error' === $l[2]['tipo'] && false !== strpos( $l[2]['payload'], '"motivo":"sub_sin_vincular"' ) ) {
+			$o[] = $l[2]['payload'];
+		}
+	}
+	return $o;
+}
 function hace( $seg ) {
 	return gmdate( 'Y-m-d\TH:i:s.000\Z', time() - $seg );
 }
@@ -266,30 +276,29 @@ $socias = array(
 );
 $w = preparar_alerta( array( $vieja, $nueva, $vinc ), $socias );
 $r = CN_Sync::alertar_sin_vincular();
-$av = cn_http_calls( '#club-trial-alerta#' );
+$av = avisos_sv( $w );
+t( 'sin vincular: ya NO sale a n8n (solo cartel + mp_log)', ! cn_http_calls( '#club-trial-alerta#' ) );
 t( 'avisa solo la que lleva más de 1 hora y no está vinculada', 1 === count( $av ) && 1 === $r['avisadas'] );
-$cuerpo = (string) ( $av[0]['body'] ?? '' );
+$cuerpo = (string) ( $av[0] ?? '' );
 t( 'el aviso trae motivo, ID completo, plan, socia propuesta y confianza', false !== strpos( $cuerpo, 'sub_sin_vincular' ) && false !== strpos( $cuerpo, 'SUBVIEJA00000000000A' ) && false !== strpos( $cuerpo, 'basico' ) && false !== strpos( $cuerpo, 'email_exacto' ) && false !== strpos( $cuerpo, '"socia_id":1' ) );
 t( 'no incluye a la nueva (<1 h) ni a la ya vinculada', false === strpos( $cuerpo, 'SUBNUEVA' ) && false === strpos( $cuerpo, 'SUBVINCULADA' ) );
 t( 'NO auto-vincula: cero escrituras en miembros', ! $w->escrituras( 'cn_miembros' ) );
 $r = CN_Sync::alertar_sin_vincular();
-t( 'no repite el aviso de la misma suscripción dentro de las 24 h', 1 === count( cn_http_calls( '#club-trial-alerta#' ) ) && 0 === $r['avisadas'] );
+t( 'no repite el aviso de la misma suscripción dentro de las 24 h', 1 === count( avisos_sv( $w ) ) && 0 === $r['avisadas'] );
 $w = preparar_alerta( array( $nueva ), $socias );
 CN_Sync::alertar_sin_vincular();
-t( 'solo suscripciones nuevas: no avisa', ! cn_http_calls( '#club-trial-alerta#' ) );
+t( 'solo suscripciones nuevas: no avisa', ! avisos_sv( $w ) );
 $w = preparar_alerta( array( $vieja ), $socias );
 $GLOBALS['cn_http'] = array_values( array_filter( $GLOBALS['cn_http'], function ( $r ) {
 	return false === strpos( $r['patron'], 'preapproval/search' );
 } ) ); // MP no responde la lista.
 $r = CN_Sync::alertar_sin_vincular();
-t( 'MP caído: no concluye nada ni avisa de sin vincular (solo el mp_api_error de siempre)', null === $r && ! array_filter( cn_http_calls( '#club-trial-alerta#' ), function ( $c ) {
-	return false !== strpos( (string) $c['body'], 'sub_sin_vincular' );
-} ) );
+t( 'MP caído: no concluye nada ni avisa de sin vincular (solo el mp_api_error de siempre)', null === $r && ! avisos_sv( $w ) );
 $w = preparar_alerta( array( $vieja ), array() );
 update_option( 'cn_mp_access_token', '' );
-t( 'sin token: no hace nada', null === CN_Sync::alertar_sin_vincular() && ! cn_http_calls( '#club-trial-alerta#' ) );
+t( 'sin token: no hace nada', null === CN_Sync::alertar_sin_vincular() && ! avisos_sv( $w ) && ! cn_http_calls( '#club-trial-alerta#' ) );
 $w = preparar_alerta( array( array( 'id' => 'SUBSINEMAIL000000000D', 'date_created' => hace( 7200 ), 'auto_recurring' => array( 'transaction_amount' => 15500 ) ) ), $socias );
 cn_http_on( 'GET', '#authorized_payments/search#', array( 'results' => array() ) );
 CN_Sync::alertar_sin_vincular();
-$c = (string) ( cn_http_calls( '#club-trial-alerta#' )[0]['body'] ?? '' );
+$c = (string) ( avisos_sv( $w )[0] ?? '' );
 t( 'sin email y sin cobros: se avisa igual como sin_email', false !== strpos( $c, 'sin_email' ) );

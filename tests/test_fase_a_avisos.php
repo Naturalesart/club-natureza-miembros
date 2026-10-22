@@ -44,7 +44,13 @@ foreach ( CN_Webhook::MOTIVOS_PAGO_SIN_ACCESO as $motivo ) {
 	CN_Webhook::avisar_error_n8n( $motivo, array( 'payment_id' => '3' ) );
 	t( "{$motivo}: pasada la hora vuelve a avisar", 2 === count( n8n_calls() ) );
 }
-t( 'son exactamente los motivos de pago sin acceso, y ningún error técnico está en la lista', array( 'excepcion_trial_alta', 'metadata_incompleta', 'preapproval_sin_match', 'sub_sin_vincular' ) === CN_Webhook::MOTIVOS_PAGO_SIN_ACCESO );
+t( 'sub_sin_vincular ya NO llama a n8n (solo cartel + mp_log)', ( function () {
+	cn_test_reset();
+	cn_http_on( 'POST', '#club-trial-alerta#', array() );
+	CN_Webhook::avisar_error_n8n( 'sub_sin_vincular', array( 'cantidad' => 1 ) );
+	return ! n8n_calls() && 1 === count( avisos_insertados( $GLOBALS['wpdb'] ) ) && ! in_array( 'sub_sin_vincular', CN_Webhook::MOTIVOS_PAGO_SIN_ACCESO, true );
+} )() );
+t( 'son exactamente los 3 motivos de pago sin acceso, y ningún error técnico está en la lista', array( 'excepcion_trial_alta', 'metadata_incompleta', 'preapproval_sin_match' ) === CN_Webhook::MOTIVOS_PAGO_SIN_ACCESO );
 
 seccion( 'cartel Avisos: deduplicado, con contador, últimos 50' );
 cn_test_reset();
