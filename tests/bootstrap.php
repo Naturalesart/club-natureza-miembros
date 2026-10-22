@@ -34,6 +34,7 @@ function cn_test_reset() {
 	$GLOBALS['cn_http']       = array();
 	$GLOBALS['cn_http_log']   = array();
 	$GLOBALS['cn_mails']      = array();
+	$GLOBALS['cn_mail_falla'] = false;
 	$GLOBALS['cn_capi']       = array();
 	$GLOBALS['wpdb']         = new CN_Fake_Wpdb();
 }
@@ -83,7 +84,7 @@ function home_url( $p = '' ) {
 }
 function wp_mail( $to, $asunto, $cuerpo, $headers = array() ) {
 	$GLOBALS['cn_mails'][] = array( 'to' => $to, 'asunto' => $asunto, 'cuerpo' => $cuerpo, 'headers' => $headers );
-	return true;
+	return empty( $GLOBALS['cn_mail_falla'] ); // $GLOBALS['cn_mail_falla'] = true simula que wp_mail no puede enviar (el intento igual queda registrado).
 }
 function esc_html( $s ) {
 	return htmlspecialchars( (string) $s, ENT_QUOTES );

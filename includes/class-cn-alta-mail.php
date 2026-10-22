@@ -23,8 +23,13 @@ class CN_Alta_Mail {
 	const OPT_ENVIADOS  = 'cn_alta_mail_enviados'; // preapproval_id => timestamp (mail mandado)
 	const OPT_SIMULADOS = 'cn_alta_mail_simulados'; // ídem para el modo 'log' (no cuenta como enviado)
 	const OPT_AVISADOS  = 'cn_alta_mail_avisados'; // 'motivo|id' => timestamp (una sola línea en el cartel por caso)
+	const OPT_CHEQUEOS  = 'cn_alta_mail_chequeos'; // preapproval_id => timestamp del último chequeo de cobro de una suscripción vieja sin cobro aprobado
+	const OPT_INTENTOS  = 'cn_alta_mail_intentos'; // preapproval_id => intentos de envío del mail
 	const MAX_ACCIONES  = 3;    // suscripciones por corrida a las que se les manda (o simula) el mail
-	const MAX_CONSULTAS = 10;   // suscripciones por corrida a las que se les consulta el cobro (acota los pedidos)
+	const MAX_CONSULTAS = 10;   // suscripciones NUEVAS (<= 72 hs) por corrida a las que se les consulta el cobro (acota los pedidos)
+	const EDAD_MIN_SEG  = 2700; // 45 min: antes de eso no se manda ni se simula (la clienta puede estar completando sus datos en la página de retorno)
+	const RECHEQUEO_SEG = 21600; // 6 hs: una vieja (> 72 hs) sin cobro aprobado se re-chequea como máximo 1 vez cada tanto
+	const MAX_ENVIOS    = 3;    // intentos de envío por suscripción; después solo queda el aviso en el cartel
 	const MAX_PAGOS_POR_SUB = 3;
 	const TOKEN_DIAS    = 14;
 	const SIN_EMAIL_SEG = 259200; // 72 hs
@@ -172,14 +177,34 @@ class CN_Alta_Mail {
 			$candidatas[ $id ] = array( 'item' => $it, 'creada' => $creada );
 		}
 		$candidatas = self::sacar_vinculadas( $candidatas );
-		uasort( $candidatas, function ( $a, $b ) {
-			return $a['creada'] <=> $b['creada'];
+		// Las nuevas (<= 72 hs) primero, de la más antigua a la más nueva; las viejas sin cobro al final: nunca traban a las nuevas.
+		$ahora = time();
+		uasort( $candidatas, function ( $a, $b ) use ( $ahora ) {
+			$va = $ahora - $a['creada'] > self::SIN_EMAIL_SEG ? 1 : 0;
+			$vb = $ahora - $b['creada'] > self::SIN_EMAIL_SEG ? 1 : 0;
+			return $va <=> $vb ?: $a['creada'] <=> $b['creada'];
 		} );
+		$chequeos = self::mapa( self::OPT_CHEQUEOS );
+		$intentos = self::mapa( self::OPT_INTENTOS );
 		$res['candidatas'] = count( $candidatas );
 
 		foreach ( $candidatas as $id => $c ) {
-			if ( $res['acciones'] >= self::MAX_ACCIONES || $res['consultadas'] >= self::MAX_CONSULTAS ) {
+			if ( $res['acciones'] >= self::MAX_ACCIONES ) {
 				break;
+			}
+			$edad  = time() - $c['creada'];
+			$vieja = $edad > self::SIN_EMAIL_SEG;
+			if ( ! $vieja && $res['consultadas'] >= self::MAX_CONSULTAS ) {
+				continue; // tope de consultas de las nuevas; las viejas no entran en esta cuenta.
+			}
+			if ( $edad < self::EDAD_MIN_SEG ) {
+				continue; // muy reciente: todavía no se manda ni se simula.
+			}
+			if ( isset( $intentos[ $id ] ) && (int) $intentos[ $id ] >= self::MAX_ENVIOS ) {
+				continue; // 3 envíos fallidos: no hay más intentos ni alertas (queda el aviso en el cartel).
+			}
+			if ( $vieja && isset( $chequeos[ $id ] ) && time() - (int) $chequeos[ $id ] < self::RECHEQUEO_SEG ) {
+				continue; // vieja sin cobro: se re-chequea como máximo 1 vez cada 6 hs.
 			}
 			$monto = isset( $c['item']['auto_recurring']['transaction_amount'] ) ? $c['item']['auto_recurring']['transaction_amount'] : null;
 			if ( ! is_numeric( $monto ) || ! isset( self::MONTOS[ (int) round( (float) $monto ) ] ) || abs( (float) $monto - round( (float) $monto ) ) > 0.001 ) {
@@ -187,13 +212,17 @@ class CN_Alta_Mail {
 				continue;
 			}
 			$plan = self::MONTOS[ (int) round( (float) $monto ) ];
-			$res['consultadas']++;
+			if ( ! $vieja ) {
+				$res['consultadas']++;
+			}
 			$email = self::email_del_pagador( $id, $token, $pres );
 			if ( null === $email ) {
-				if ( time() - $c['creada'] > self::SIN_EMAIL_SEG ) {
-					self::avisar_una_vez( 'alta_mail_sin_email', $id, array( 'horas' => (int) floor( ( time() - $c['creada'] ) / 3600 ) ) );
+				if ( $vieja ) {
+					$chequeos[ $id ] = time();
+					self::mapa_set( self::OPT_CHEQUEOS, $chequeos );
+					self::avisar_una_vez( 'alta_mail_sin_email', $id, array( 'horas' => (int) floor( $edad / 3600 ) ) );
 				}
-				continue; // sin cobro aprobado con email todavía: se reintenta en la próxima corrida.
+				continue; // sin cobro aprobado con email todavía: se reintenta en la próxima corrida (las viejas, cada 6 hs).
 			}
 			if ( self::accionar( $modo, $id, $email, $plan, $monto ) ) {
 				$res['acciones']++;
@@ -288,6 +317,13 @@ class CN_Alta_Mail {
 			self::avisar_una_vez( 'alta_mail_retorno_apagado', $id, array( 'detalle' => 'La página de retorno está apagada (Config): no se mandó el mail.' ) );
 			return false;
 		}
+		// Máx. MAX_ENVIOS intentos de envío por suscripción (cuenta cada intento, antes de mandar).
+		$n = self::mapa( self::OPT_INTENTOS );
+		if ( isset( $n[ $id ] ) && (int) $n[ $id ] >= self::MAX_ENVIOS ) {
+			return false;
+		}
+		$n[ $id ] = ( isset( $n[ $id ] ) ? (int) $n[ $id ] : 0 ) + 1;
+		self::mapa_set( self::OPT_INTENTOS, $n );
 		// Idempotencia: se marca ANTES de mandar (máx. 1 mail por suscripción); si el envío falla se desmarca.
 		$e        = self::mapa( self::OPT_ENVIADOS );
 		$e[ $id ] = time();
@@ -297,7 +333,7 @@ class CN_Alta_Mail {
 			$e = self::mapa( self::OPT_ENVIADOS );
 			unset( $e[ $id ] );
 			self::mapa_set( self::OPT_ENVIADOS, $e );
-			CN_Webhook::avisar_error_n8n( 'alta_mail_fallo_envio', array( 'preapproval_id' => $id ) );
+			self::avisar_una_vez( 'alta_mail_fallo_envio', $id, array( 'detalle' => 'wp_mail no pudo enviar el mail (máx. ' . self::MAX_ENVIOS . ' intentos por suscripción).' ) );
 			return false;
 		}
 		CN_Webhook::registrar_log_mp( 'alta_mail_enviado', $base );

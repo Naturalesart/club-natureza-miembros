@@ -9,7 +9,7 @@ if ( ! defined( 'CN_WA_SOPORTE' ) ) {
 function am_id( $n ) {
 	return md5( 'sub' . $n );
 }
-function am_item( $n, $monto = 15500, $hace = 600, $status = 'authorized' ) {
+function am_item( $n, $monto = 15500, $hace = 3600, $status = 'authorized' ) {
 	return array( 'id' => am_id( $n ), 'status' => $status, 'date_created' => gmdate( 'Y-m-d\TH:i:s.000\Z', time() - $hace ), 'auto_recurring' => array( 'transaction_amount' => $monto ) );
 }
 /** Prepara: modo, corte hace 2 días, retorno activo, URL de la página, MP con las suscripciones y (por n) su cobro con payer.email. */
@@ -65,9 +65,9 @@ $r = CN_Alta_Mail::correr();
 t( 'off: ni una consulta a MP, ni mails, ni log, ni options', ! $GLOBALS['cn_http_log'] && ! $GLOBALS['cn_mails'] && ! $w->log && 'off' === $r['modo'] );
 update_option( CN_Alta_Mail::OPT_MODO, 'cualquier-cosa' );
 t( 'un valor raro cuenta como off', 'off' === CN_Alta_Mail::modo() );
-$w = am_preparar( 'off', array( am_item( 1 ) ), array( 1 => 'sandra@gmail.com' ) );
+$w = am_preparar( 'off', array( am_item( 1, 15500, 600 ) ), array( 1 => 'sandra@gmail.com' ) ); // < 1 h: el aviso de "sin vincular" del sync (que ya existía) tampoco la mira.
 CN_Sync::correr();
-t( 'CN_Sync::correr() con off: el alta por mail no consulta cobros', ! cn_http_calls( '#authorized_payments/search#' ) && ! cn_http_calls( '#/v1/payments/#' ) && ! $GLOBALS['cn_mails'] );
+t( 'CN_Sync::correr() con off: el alta por mail no consulta cobros', ! cn_http_calls( '#authorized_payments/search#' ) && ! cn_http_calls( '#/v1/payments/\d+$#' ) && ! $GLOBALS['cn_mails'] );
 
 seccion( 'modo log: registra lo que haría, SIN mandar mail' );
 $w = am_preparar( 'log', array( am_item( 1 ) ), array( 1 => 'sandra@gmail.com' ) );
@@ -97,7 +97,7 @@ CN_Alta_Mail::correr();
 t( 'on: idempotente, máx. 1 mail por suscripción aunque corra varias veces', 1 === count( $GLOBALS['cn_mails'] ) && isset( get_option( CN_Alta_Mail::OPT_ENVIADOS )[ am_id( 1 ) ] ) );
 
 seccion( 'corte (cn_alta_mail_desde): el backlog no se toca' );
-$w = am_preparar( 'on', array( am_item( 1, 15500, 3 * 86400 ), am_item( 2, 15500, 600 ) ), array( 1 => 'vieja@gmail.com', 2 => 'nueva@gmail.com' ) );
+$w = am_preparar( 'on', array( am_item( 1, 15500, 3 * 86400 ), am_item( 2, 15500, 3600 ) ), array( 1 => 'vieja@gmail.com', 2 => 'nueva@gmail.com' ) );
 CN_Alta_Mail::correr();
 t( 'una suscripción creada ANTES del corte no recibe nada ni se consulta', 1 === count( $GLOBALS['cn_mails'] ) && 'nueva@gmail.com' === $GLOBALS['cn_mails'][0]['to'] && ! cn_http_calls( '#preapproval_id=' . am_id( 1 ) . '#' ) );
 $w = am_preparar( 'log', array( am_item( 1 ) ), array( 1 => 'x@gmail.com' ) );
@@ -126,7 +126,7 @@ t( 'el plan se deduce del monto (full para $32.000)', false !== strpos( am_paylo
 $w = am_preparar( 'on', array( am_item( 1 ) ), array( 1 => 'a@gmail.com' ), array( 1 ) );
 CN_Alta_Mail::correr();
 t( 'ya vinculada a una ficha: no manda nada ni consulta el cobro', ! $GLOBALS['cn_mails'] && ! cn_http_calls( '#authorized_payments#' ) );
-$w = am_preparar( 'on', array( am_item( 1, 15500, 600, 'paused' ), am_item( 2, 15500, 600, 'cancelled' ) ), array( 1 => 'a@gmail.com', 2 => 'b@gmail.com' ) );
+$w = am_preparar( 'on', array( am_item( 1, 15500, 3600, 'paused' ), am_item( 2, 15500, 3600, 'cancelled' ) ), array( 1 => 'a@gmail.com', 2 => 'b@gmail.com' ) );
 CN_Alta_Mail::correr();
 t( 'no authorized: nada', ! $GLOBALS['cn_mails'] );
 
@@ -160,7 +160,7 @@ seccion( 'límites por corrida y 429' );
 $items = array();
 $emails = array();
 for ( $i = 1; $i <= 5; $i++ ) {
-	$items[]       = am_item( $i, 15500, 3000 - $i * 100 );
+	$items[]       = am_item( $i, 15500, 5000 - $i * 100 );
 	$emails[ $i ] = "socia{$i}@gmail.com";
 }
 $w = am_preparar( 'on', $items, $emails );
@@ -186,6 +186,103 @@ $r = CN_Alta_Mail::correr();
 t( '429 persistente: máx. 3 reintentos (2, 4, 8 s), no concluye nada y reintenta en la próxima corrida', array( 2, 4, 8 ) === $esperas && 'mp_lista' === $r['motivo'] && ! $GLOBALS['cn_mails'] && ! in_array( 'alta_mail_simulado', $w->log_mp_tipos(), true ) );
 CN_MP::$dormir = function () {
 };
+
+seccion( 'las viejas sin cobro no traban a las nuevas; re-chequeo cada 6 hs' );
+$items  = array();
+$emails = array();
+for ( $i = 1; $i <= 12; $i++ ) { // 12 viejas (4 días), con cobro sin email: no se puede mandar
+	$items[]       = am_item( $i, 15500, 4 * 86400 );
+	$emails[ $i ] = null;
+}
+$items[]       = am_item( 20, 15500, 4000 ); // una nueva con todo
+$emails[ 20 ] = 'nueva@gmail.com';
+$w = am_preparar( 'on', $items, $emails, array(), 10 * 86400 );
+$r = CN_Alta_Mail::correr();
+t( 'con 12 viejas trabadas, la nueva igual recibe el mail en la primera corrida', 1 === count( $GLOBALS['cn_mails'] ) && 'nueva@gmail.com' === $GLOBALS['cn_mails'][0]['to'] );
+t( 'las viejas no consumen cupo de MAX_CONSULTAS (solo cuenta la nueva)', 1 === $r['consultadas'] && 12 === count( array_filter( array_keys( get_option( CN_Alta_Mail::OPT_CHEQUEOS, array() ) ) ) ), json_encode( $r ) );
+t( 'las nuevas se procesan primero (su cobro se consulta antes que el de cualquier vieja)', ( function () {
+	foreach ( $GLOBALS['cn_http_log'] as $c ) {
+		if ( false !== strpos( $c['url'], 'authorized_payments' ) ) {
+			return false !== strpos( $c['url'], am_id( 20 ) );
+		}
+	}
+	return false;
+} )() );
+t( 'cada vieja queda con una sola línea en el cartel', 12 === count( array_keys( am_avisos( $w ), 'alta_mail_sin_email', true ) ) );
+$antes = count( cn_http_calls( '#authorized_payments/search#' ) );
+CN_Alta_Mail::correr();
+CN_Alta_Mail::correr();
+t( 'corridas siguientes dentro de las 6 hs: las viejas se saltean (cero consultas nuevas)', count( cn_http_calls( '#authorized_payments/search#' ) ) === $antes && 1 === count( $GLOBALS['cn_mails'] ) );
+$ch = get_option( CN_Alta_Mail::OPT_CHEQUEOS );
+foreach ( $ch as $k => $v ) {
+	$ch[ $k ] = time() - 7 * 3600;
+}
+update_option( CN_Alta_Mail::OPT_CHEQUEOS, $ch );
+CN_Alta_Mail::correr();
+t( 'pasadas las 6 hs se re-chequean (una vez cada una) y la nueva ya enviada no se repite', count( cn_http_calls( '#authorized_payments/search#' ) ) === $antes + 12 && 1 === count( $GLOBALS['cn_mails'] ) );
+t( 'el re-chequeo no repite el cartel', 12 === count( array_keys( am_avisos( $w ), 'alta_mail_sin_email', true ) ) );
+// Una vieja a la que por fin le aparece el email, a las 6 hs, recibe el mail.
+$w = am_preparar( 'on', array( am_item( 1, 15500, 4 * 86400 ) ), array( 1 => null ), array(), 10 * 86400 );
+CN_Alta_Mail::correr();
+cn_http_on( 'GET', '#/v1/payments/5000001$#', array( 'id' => 5000001, 'status' => 'approved', 'payer' => array( 'email' => 'tarde@gmail.com' ) ) );
+CN_Alta_Mail::correr();
+t( 'vieja dentro de las 6 hs: no se re-chequea todavía', ! $GLOBALS['cn_mails'] );
+update_option( CN_Alta_Mail::OPT_CHEQUEOS, array( am_id( 1 ) => time() - 7 * 3600 ) );
+CN_Alta_Mail::correr();
+t( 'a las 6 hs se re-chequea y, si ya hay email, se manda', 1 === count( $GLOBALS['cn_mails'] ) && 'tarde@gmail.com' === $GLOBALS['cn_mails'][0]['to'] );
+// Más de MAX_CONSULTAS nuevas: el tope sigue valiendo para las nuevas.
+$items  = array();
+$emails = array();
+for ( $i = 1; $i <= 12; $i++ ) {
+	$items[]       = am_item( $i, 15500, 5000 - $i * 10 );
+	$emails[ $i ] = null;
+}
+$w = am_preparar( 'on', $items, $emails );
+$r = CN_Alta_Mail::correr();
+t( 'el tope de consultas sigue valiendo para las nuevas (máx. 10)', CN_Alta_Mail::MAX_CONSULTAS === $r['consultadas'] );
+
+seccion( 'edad mínima: 45 minutos desde date_created' );
+foreach ( array( 'log', 'on' ) as $modo ) {
+	$w = am_preparar( $modo, array( am_item( 1, 15500, 1200 ), am_item( 2, 15500, 2699 ) ), array( 1 => 'a@gmail.com', 2 => 'b@gmail.com' ) );
+	CN_Alta_Mail::correr();
+	t( "{$modo}: con menos de 45 min no manda ni simula, y ni siquiera consulta el cobro", ! $GLOBALS['cn_mails'] && ! in_array( 'alta_mail_simulado', $w->log_mp_tipos(), true ) && ! cn_http_calls( '#authorized_payments/search#' ) && array() === get_option( CN_Alta_Mail::OPT_ENVIADOS, array() ) );
+}
+$w = am_preparar( 'on', array( am_item( 1, 15500, 1200 ) ), array( 1 => 'a@gmail.com' ) );
+CN_Alta_Mail::correr();
+$w2 = $w;
+$items = array( am_item( 1, 15500, 2705 ) );
+cn_http_on( 'GET', '#/preapproval/search\?status=authorized#', array( 'results' => $items, 'paging' => array( 'total' => 1 ) ) );
+CN_Alta_Mail::correr();
+t( 'cumplidos los 45 min (2705 s) en una corrida posterior sí se manda', 1 === count( $GLOBALS['cn_mails'] ) && 'a@gmail.com' === $GLOBALS['cn_mails'][0]['to'] );
+t( 'la edad mínima son 45 minutos', 2700 === CN_Alta_Mail::EDAD_MIN_SEG );
+
+seccion( 'fallo de envío: máx. 3 intentos y solo cartel' );
+$w = am_preparar( 'on', array( am_item( 1 ) ), array( 1 => 'sandra@gmail.com' ) );
+$GLOBALS['cn_mail_falla'] = true;
+CN_Alta_Mail::correr();
+t( '1.er fallo: no queda marcada como enviada, aviso en el cartel (sin n8n)', 1 === count( $GLOBALS['cn_mails'] ) && array() === get_option( CN_Alta_Mail::OPT_ENVIADOS, array() ) && 1 === count( array_keys( am_avisos( $w ), 'alta_mail_fallo_envio', true ) ) && ! cn_http_calls( '#club-trial-alerta#' ) );
+CN_Alta_Mail::correr();
+CN_Alta_Mail::correr();
+t( 'hasta 3 intentos de envío', 3 === count( $GLOBALS['cn_mails'] ) );
+t( 'el aviso del cartel es UNO solo aunque falle 3 veces (avisar_una_vez)', 1 === count( array_keys( am_avisos( $w ), 'alta_mail_fallo_envio', true ) ) );
+$consultas = count( cn_http_calls( '#authorized_payments/search#' ) );
+CN_Alta_Mail::correr();
+CN_Alta_Mail::correr();
+t( 'después de 3: ni más intentos, ni más alertas, ni más pedidos a MP por esa suscripción', 3 === count( $GLOBALS['cn_mails'] ) && 1 === count( array_keys( am_avisos( $w ), 'alta_mail_fallo_envio', true ) ) && count( cn_http_calls( '#authorized_payments/search#' ) ) === $consultas && ! cn_http_calls( '#club-trial-alerta#' ) );
+$GLOBALS['cn_mail_falla'] = false;
+CN_Alta_Mail::correr();
+t( 'aunque wp_mail vuelva a andar, con 3 intentos agotados no se manda más', 3 === count( $GLOBALS['cn_mails'] ) && 3 === (int) get_option( CN_Alta_Mail::OPT_INTENTOS )[ am_id( 1 ) ] );
+$w = am_preparar( 'on', array( am_item( 1 ) ), array( 1 => 'sandra@gmail.com' ) );
+$GLOBALS['cn_mail_falla'] = true;
+CN_Alta_Mail::correr();
+CN_Alta_Mail::correr();
+$GLOBALS['cn_mail_falla'] = false;
+CN_Alta_Mail::correr();
+t( 'si falla 2 veces y a la 3.ª anda: el mail sale y queda marcada como enviada', 3 === count( $GLOBALS['cn_mails'] ) && isset( get_option( CN_Alta_Mail::OPT_ENVIADOS )[ am_id( 1 ) ] ) );
+CN_Alta_Mail::correr();
+t( '...y después no se repite', 3 === count( $GLOBALS['cn_mails'] ) );
+$src = file_get_contents( dirname( __DIR__ ) . '/includes/class-cn-alta-mail.php' );
+t( 'el fallo de envío ya no llama a avisar_error_n8n directo', false === strpos( $src, "avisar_error_n8n( 'alta_mail_fallo_envio'" ) && false !== strpos( $src, "avisar_una_vez( 'alta_mail_fallo_envio'" ) );
 
 seccion( 'modo on: requisitos (página y retorno activo)' );
 $w = am_preparar( 'on', array( am_item( 1 ) ), array( 1 => 'a@gmail.com' ) );
