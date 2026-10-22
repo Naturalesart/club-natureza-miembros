@@ -379,6 +379,7 @@ class CN_MP {
 			self::registrar_error_api( $path, $codigo, wp_remote_retrieve_body( $respuesta ) );
 			return array( 'ok' => false, 'http' => $codigo, 'data' => null );
 		}
+		CN_Alertas::token_ok();
 		$data = json_decode( wp_remote_retrieve_body( $respuesta ), true );
 		if ( ! is_array( $data ) ) {
 			self::registrar_error_api( $path, $codigo, 'respuesta no JSON' );
@@ -440,6 +441,7 @@ class CN_MP {
 			}
 			$codigo = (int) wp_remote_retrieve_response_code( $respuesta );
 			if ( $codigo >= 200 && $codigo < 300 ) {
+				CN_Alertas::token_ok();
 				$data = json_decode( wp_remote_retrieve_body( $respuesta ), true );
 				if ( ! is_array( $data ) ) {
 					self::registrar_error_api( $path, $codigo, 'respuesta no JSON' );
@@ -488,6 +490,7 @@ class CN_MP {
 			self::registrar_error_api( $path, $codigo, wp_remote_retrieve_body( $respuesta ) );
 			return null;
 		}
+		CN_Alertas::token_ok();
 		return json_decode( wp_remote_retrieve_body( $respuesta ), true );
 	}
 	/**
@@ -499,6 +502,9 @@ class CN_MP {
 			$ruta   = (string) strtok( (string) $path, '?' );
 			$cuerpo = mb_substr( preg_replace( '/APP_USR-[A-Za-z0-9\-]+/', '[oculto]', (string) $cuerpo ), 0, 300 );
 			CN_Webhook::registrar_log_mp( 'mp_api_error', array( 'ruta' => $ruta, 'http' => $http, 'cuerpo' => $cuerpo ) );
+			if ( is_numeric( $http ) && in_array( (int) $http, array( 401, 403 ), true ) ) {
+				CN_Alertas::token_invalido( $ruta, (int) $http ); // alerta GRAVE (mail), máx. 1 por día mientras siga.
+			}
 			// Solo avisa (cartel Avisos) por errores de acceso/servicio; 404 y otros 4xx quedan solo en el log.
 			$avisar = ( 'wp_error' === $http )
 				|| ( is_numeric( $http ) && ( in_array( (int) $http, array( 401, 403, 429 ), true ) || (int) $http >= 500 ) );

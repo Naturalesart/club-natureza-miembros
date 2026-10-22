@@ -1353,12 +1353,12 @@ class CN_Webhook {
 	}
 	/** Tipo de fila de mp_log con que se registran los avisos técnicos (los lee el cartel "Avisos" de Club Natureza → Socias). */
 	const TIPO_AVISO = 'aviso_error';
-	/** Motivos de "una socia pagó y no pudo recibir acceso": los únicos que además siguen avisando por n8n (máx. 1 por hora). */
-	const MOTIVOS_PAGO_SIN_ACCESO = array( 'excepcion_trial_alta', 'metadata_incompleta', 'preapproval_sin_match' );
+	/** Motivos de "una socia pagó y no pudo recibir acceso": se anotan como caso (CN_Alertas) y, si pasan 72 hs sin resolverse, entran en el resumen diario. Ya no mandan mail inmediato. */
+	const MOTIVOS_PAGO_SIN_ACCESO = array( 'excepcion_trial_alta', 'metadata_incompleta', 'preapproval_sin_match', 'alta_mail_sin_email' );
 	/**
 	 * Aviso técnico: NO manda mail ni webhook. Deja una fila en mp_log (tipo aviso_error) que el cartel "Avisos" muestra
 	 * agrupada: mismo motivo + mismo detalle = una línea con contador. Nunca lanza ni bloquea (es accesorio).
-	 * El nombre se mantiene porque lo llaman muchos lugares; ya no habla con n8n (salvo avisar_pago_sin_acceso()).
+	 * El nombre se mantiene porque lo llaman muchos lugares; ya no habla con n8n. Las únicas tres alertas con mail viven en CN_Alertas.
 	 */
 	public static function avisar_error_n8n( $motivo, $detalle ) {
 		try {
@@ -1368,32 +1368,11 @@ class CN_Webhook {
 				'clave'   => md5( $motivo . '|' . wp_json_encode( $detalle ) ),
 			) );
 			if ( in_array( $motivo, self::MOTIVOS_PAGO_SIN_ACCESO, true ) ) {
-				self::avisar_pago_sin_acceso( $motivo, $detalle );
+				CN_Alertas::registrar_caso( $motivo, $detalle ); // solo anota; el mail (si corresponde) sale del resumen diario a las 72 hs.
 			}
 		} catch ( Throwable $e ) {
 			// Accesorio: si el registro falla, no debe afectar el flujo que lo llamó.
 		}
-	}
-	/**
-	 * Única salida a n8n que queda: "una socia pagó y no pudo recibir acceso". Fire-and-forget, máx. 1 por hora por
-	 * motivo.
-	 */
-	protected static function avisar_pago_sin_acceso( $motivo, $detalle ) {
-		$clave = 'cn_pago_sin_acceso_' . md5( $motivo );
-		if ( get_transient( $clave ) ) {
-			return;
-		}
-		set_transient( $clave, 1, HOUR_IN_SECONDS );
-		wp_remote_post( self::N8N_ALERTA_URL, array(
-			'timeout'  => 5,
-			'blocking' => false,
-			'headers'  => array( 'Content-Type' => 'application/json' ),
-			'body'     => wp_json_encode( array(
-				'motivo'  => $motivo,
-				'detalle' => $detalle,
-				'fecha'   => current_time( 'mysql', true ),
-			) ),
-		) );
 	}
 	/**
 	 * Avisos para el cartel: últimos $max_filas registros de tipo aviso_error, agrupados por clave (motivo + detalle).
