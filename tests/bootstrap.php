@@ -352,7 +352,6 @@ if ( file_exists( $cn_raiz . 'includes/class-cn-sync.php' ) ) {
 require_once $cn_raiz . 'includes/class-cn-auth.php';
 require_once $cn_raiz . 'includes/class-cn-admin.php';
 require_once $cn_raiz . 'includes/class-cn-colaboradora.php';
-require_once $cn_raiz . 'includes/class-cn-diag-pagador.php';
 require_once $cn_raiz . 'includes/class-cn-socias-revisar.php';
 require_once $cn_raiz . 'includes/class-cn-sin-vincular.php';
 require_once $cn_raiz . 'includes/class-cn-reemplazo.php';
