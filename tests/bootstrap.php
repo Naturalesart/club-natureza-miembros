@@ -142,6 +142,7 @@ function wp_enqueue_style( $h ) {
 function add_shortcode( $t, $cb ) {
 }
 function add_action( $h, $cb ) {
+	$GLOBALS['cn_hooks'][ $h ][] = $cb;
 }
 function wp_verify_nonce( $n, $a ) {
 	return false !== ( $GLOBALS['cn_nonce_ok'] ?? true );
@@ -183,6 +184,9 @@ function wp_salt( $s = 'auth' ) {
 }
 function get_permalink( $id ) {
 	return 'https://naturalesart.com/?p=' . (int) $id;
+}
+function nocache_headers() {
+	$GLOBALS['cn_nocache'] = ( $GLOBALS['cn_nocache'] ?? 0 ) + 1;
 }
 function wp_remote_retrieve_header( $r, $h ) {
 	return $r['headers'][ strtolower( $h ) ] ?? '';
@@ -348,6 +352,7 @@ require_once $cn_raiz . 'includes/class-cn-admin.php';
 require_once $cn_raiz . 'includes/class-cn-colaboradora.php';
 require_once $cn_raiz . 'includes/class-cn-diag-pagador.php';
 require_once $cn_raiz . 'includes/class-cn-socias-revisar.php';
+require_once $cn_raiz . 'includes/class-cn-sin-vincular.php';
 CN_MP::$dormir = function () { // los tests nunca esperan de verdad (el 429 del sync pide esperas de segundos).
 };
 // ---------------------------------------------------------------- mini framework de tests
