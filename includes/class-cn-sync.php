@@ -65,6 +65,11 @@ class CN_Sync {
 			CN_Webhook::registrar_log_mp( 'sub_error', array( 'paso' => 'sync_alerta', 'mensaje' => mb_substr( $e->getMessage(), 0, 300 ) ) );
 		}
 		try {
+			CN_Reemplazo_Auto::correr(); // modo 'log' por defecto: solo registra en mp_log. Solo GET a MP; nunca lanza (y no afecta el heartbeat).
+		} catch ( Throwable $e ) {
+			CN_Webhook::registrar_log_mp( 'sub_error', array( 'paso' => 'reemplazo_auto', 'mensaje' => mb_substr( $e->getMessage(), 0, 300 ) ) );
+		}
+		try {
 			CN_Alta_Mail::correr(); // 'off' por defecto: no hace nada. Solo GET a MP; nunca vincula ni crea socias.
 		} catch ( Throwable $e ) {
 			$ok = false;
