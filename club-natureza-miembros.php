@@ -38,6 +38,7 @@ require_once CN_PATH . 'includes/class-cn-planes-mp.php';
 require_once CN_PATH . 'includes/class-cn-socias-revisar.php';
 require_once CN_PATH . 'includes/class-cn-sin-vincular.php'; // pantalla "Suscripciones sin vincular" (solo lectura; se engancha sola). // pantalla "Socias a revisar" (se engancha sola).
 require_once CN_PATH . 'includes/class-cn-reemplazo.php'; // pantalla "Reemplazar suscripción" (se engancha sola; solo GET a MP).
+require_once CN_PATH . 'includes/class-cn-reemplazo-auto.php'; // reemplazo automático (re-suscripción): lo llama el sync; modo 'log' por defecto.
 require_once CN_PATH . 'includes/class-cn-extender-acceso.php'; // pantalla "Extender acceso" (se engancha sola; sin MP).
 require_once CN_PATH . 'includes/class-cn-corregir-vinculo.php'; // pantalla "Corregir vínculo" (se engancha sola; solo GET a MP).
 require_once CN_PATH . 'includes/class-cn-diag-pagador.php'; // TEMPORAL (diagnóstico, solo lectura): borrar esta línea y el archivo para quitarla.

@@ -228,12 +228,15 @@ class CN_Reemplazo extends CN_Vinculo_Manual {
 	}
 
 	/** Confirma el reemplazo. Revalida todo del lado del servidor (MP en vivo incluido). */
-	public static function confirmar_reemplazo( $d ) {
+	public static function confirmar_reemplazo( $d, $origen = 'manual' ) {
 		global $wpdb;
 		$id = $d['id'];
 		$ev = self::evaluar( $id, (int) $d['socia'] );
 		if ( ! $ev['ok'] ) {
 			return self::rechazo( implode( ' ', $ev['bloqueos'] ) );
+		}
+		if ( 'auto' === $origen && ! $ev['ya_hecho'] && ( 'cancelled' !== $ev['vieja']['status'] || $ev['cambio_plan'] ) ) { // el reemplazo automático es más estricto: vieja CANCELADA (no pausada) y mismo plan/monto.
+			return self::rechazo( 'Automático: la suscripción vieja tiene que estar cancelada y el plan/monto no puede cambiar.' );
 		}
 		$ficha = $ev['ficha'];
 		if ( $ev['ya_hecho'] ) {
@@ -306,6 +309,7 @@ class CN_Reemplazo extends CN_Vinculo_Manual {
 				'plan_anterior'    => (string) $f->plan,
 				'plan'             => $nueva['plan'],
 				'cambio_plan'      => (bool) $ev['cambio_plan'],
+				'origen'           => $origen,
 				'usuario_id'       => (int) get_current_user_id(),
 				'usuario'          => ( $usuario && ! empty( $usuario->user_login ) ) ? (string) $usuario->user_login : '',
 			) );
