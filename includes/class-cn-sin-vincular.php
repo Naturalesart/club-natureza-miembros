@@ -439,7 +439,13 @@ class CN_Sin_Vincular {
 			}
 			echo '<small>' . esc_html( $f['motivo'] ) . '</small></td>';
 			echo '<td>' . esc_html( $etiq[ $f['nivel'] ] ) . '</td>';
-			echo '<td><a class="button button-small" href="' . esc_url( self::url_vincular( $f ) ) . '">Vincular</a></td></tr>';
+			echo '<td><a class="button button-small" href="' . esc_url( self::url_vincular( $f ) ) . '">Vincular</a>';
+			foreach ( $f['candidatas'] as $c ) { // ficha que ya tiene OTRA suscripción vinculada: la socia pudo volver a suscribirse.
+				if ( '' !== (string) $c->preapproval_id && (string) $c->preapproval_id !== (string) $f['id'] ) {
+					echo '<br><a class="button button-small" href="' . esc_url( CN_Reemplazo::url( $f['id'], (int) $c->id ) ) . '">Reemplazar (#' . (int) $c->id . ')</a>';
+				}
+			}
+			echo '</td></tr>';
 		}
 		echo '</tbody></table></div>';
 	}
