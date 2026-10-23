@@ -42,6 +42,17 @@ function sv_pagina( $post ) {
 	$_POST = array();
 	return $h;
 }
+/** Simula el hook admin_init en la página con el POST del botón CSV; devuelve lo emitido. */
+function sv_csv( $post = array( 'cn_sv_accion' => 'csv', 'cn_sv_nonce' => 'x' ), $page = 'cn-sin-vincular' ) {
+	$_GET  = array( 'page' => $page );
+	$_POST = $post;
+	$GLOBALS['cn_nocache'] = 0;
+	ob_start();
+	$ret = CN_Sin_Vincular::descargar_csv();
+	$h = ob_get_clean();
+	$_POST = $_GET = array();
+	return array( $h, $ret );
+}
 function sv_por_id( $r ) {
 	$m = array();
 	foreach ( $r['filas'] as $f ) {
@@ -145,27 +156,63 @@ t( 'sin match: solo el id', false === strpos( CN_Sin_Vincular::url_vincular( $m[
 $h = sv_pagina( array( 'cn_sv_accion' => 'consultar', 'cn_sv_nonce' => 'x' ) );
 t( 'la pantalla no tiene ningún formulario de vinculación (ni en lote): solo enlaces', 8 === substr_count( $h, '#cn-vincular-mp' ) && false === strpos( $h, 'cn_vm_accion' ) && false === strpos( $h, 'cn_vl_' ) && false === strpos( $h, 'cn_vm2_' ) );
 
-seccion( 'CSV: datos completos, BOM, solo manage_options + nonce' );
+seccion( 'CSV: hook admin_init, datos completos, BOM, solo manage_options + nonce' );
+t( 'el hook admin_init -> descargar_csv está registrado (y admin_menu -> menu)', in_array( array( 'CN_Sin_Vincular', 'descargar_csv' ), $GLOBALS['cn_hooks']['admin_init'] ?? array(), true ) && in_array( array( 'CN_Sin_Vincular', 'menu' ), $GLOBALS['cn_hooks']['admin_menu'] ?? array(), true ) );
 $w = sv_preparar( $subs, $fichas );
-$csv = sv_pagina( array( 'cn_sv_accion' => 'csv', 'cn_sv_nonce' => 'x' ) );
+list( $csv, $ret ) = sv_csv();
+t( 'con permisos y nonce: emite, llama a nocache_headers y devuelve true', true === $ret && 1 === $GLOBALS['cn_nocache'] && '' !== $csv );
 t( 'empieza con BOM UTF-8 y la cabecera', 0 === strpos( $csv, "\xEF\xBB\xBF" . 'preapproval_id,email_pagador,plan,monto,proximo_cobro,alta_mp,nivel,motivo,candidata_id,candidata_nombre,candidata_estado' ) );
 t( 'trae el preapproval_id y el email del pagador COMPLETOS', false !== strpos( $csv, sv_id( 1 ) . ',ana@example.com,basico,15500,2026-11-10,' ) && false !== strpos( $csv, sv_id( 6 ) . ',nadie@example.com,' ) );
 t( 'candidata con id, nombre y estado; varias separadas con |', false !== strpos( $csv, ',fuerte,' ) && false !== strpos( $csv, ',1,"Ana Lopez",activo' ) && false !== strpos( $csv, '"5 | 6","Dani Ruiz | Dani Ruiz Otra","activo | activo"' ) );
 t( 'sin celular (ni completo ni hint)', false === strpos( $csv, '1155510001' ) && false === strpos( $csv, '****' ) );
 t( 'una fila por suscripción sin vincular (8) + cabecera', 9 === count( array_filter( explode( "\n", trim( $csv ) ) ) ) );
 t( 'el CSV no escribe nada ni hace POST', ! $w->log && array( 'GET' ) === array_values( array_unique( array_column( $GLOBALS['cn_http_log'], 'metodo' ) ) ) );
+t( 'el CSV sale del transient si ya se consultó (sin llamadas nuevas)', ( function () use ( $subs, $fichas ) {
+	$w = sv_preparar( $subs, $fichas );
+	CN_Sin_Vincular::consultar( true );
+	$n = count( $GLOBALS['cn_http_log'] );
+	list( $csv ) = sv_csv();
+	return count( $GLOBALS['cn_http_log'] ) === $n && false !== strpos( $csv, sv_id( 1 ) );
+} )() );
+// Dónde NO actúa.
+$w = sv_preparar( $subs, $fichas );
+list( $h, $ret ) = sv_csv( array( 'cn_sv_accion' => 'csv', 'cn_sv_nonce' => 'x' ), 'cn-socias' );
+t( 'en otra página de wp-admin no hace nada (ni consulta)', '' === $h && false === $ret && ! $GLOBALS['cn_http_log'] && 0 === $GLOBALS['cn_nocache'] );
+list( $h, $ret ) = sv_csv( array( 'cn_sv_accion' => 'consultar', 'cn_sv_nonce' => 'x' ) );
+t( 'con el botón Consultar (no csv) no emite nada', '' === $h && false === $ret && ! $GLOBALS['cn_http_log'] );
+list( $h, $ret ) = sv_csv( array() );
+t( 'sin POST no hace nada', '' === $h && false === $ret );
 $w = sv_preparar( $subs, $fichas );
 $GLOBALS['cn_caps'] = array( 'edit_posts' );
-$h = sv_pagina( array( 'cn_sv_accion' => 'csv', 'cn_sv_nonce' => 'x' ) );
-t( 'sin manage_options: ni CSV ni consulta', '' === $h && ! $GLOBALS['cn_http_log'] );
+list( $h, $ret ) = sv_csv();
+t( 'sin manage_options: no emite nada, no consulta, no toca headers', '' === $h && false === $ret && ! $GLOBALS['cn_http_log'] && 0 === $GLOBALS['cn_nocache'] );
 $h = sv_pagina( array( 'cn_sv_accion' => 'consultar', 'cn_sv_nonce' => 'x' ) );
 t( 'sin manage_options: tampoco la pantalla', '' === $h && ! $GLOBALS['cn_http_log'] );
 $w = sv_preparar( $subs, $fichas );
 $GLOBALS['cn_nonce_ok'] = false;
-$h = sv_pagina( array( 'cn_sv_accion' => 'csv', 'cn_sv_nonce' => 'x' ) );
-t( 'nonce inválido: no exporta ni consulta', false === strpos( $h, 'preapproval_id,email_pagador' ) && ! $GLOBALS['cn_http_log'] );
+list( $h, $ret ) = sv_csv();
+t( 'nonce inválido: no emite nada ni consulta', '' === $h && false === $ret && ! $GLOBALS['cn_http_log'] && 0 === $GLOBALS['cn_nocache'] );
 $h = sv_pagina( array( 'cn_sv_accion' => 'consultar', 'cn_sv_nonce' => 'x' ) );
 t( 'nonce inválido: no consulta', ! $GLOBALS['cn_http_log'] && false === strpos( $h, '<table' ) );
+$w = sv_preparar( $subs, $fichas );
+cn_http_on( 'GET', '#/preapproval/search\?status=authorized#', 500 );
+list( $h, $ret ) = sv_csv();
+t( 'MP caído: no emite CSV ni headers; pagina() muestra el error', '' === $h && false === $ret && 0 === $GLOBALS['cn_nocache'] && false !== strpos( sv_pagina( array( 'cn_sv_accion' => 'csv', 'cn_sv_nonce' => 'x' ) ), 'No se cambió nada' ) );
+cn_test_reset();
+list( $h, $ret ) = sv_csv();
+t( 'sin token: no emite nada', '' === $h && false === $ret );
+t( 'pagina() ya no contiene código de CSV (ni csv(), ni headers, ni BOM): todo vive en descargar_csv()', ( function () use ( $src ) {
+	$src = file_get_contents( dirname( __DIR__ ) . '/includes/class-cn-sin-vincular.php' );
+	preg_match( '/public static function pagina\(\).*$/s', $src, $m );
+	$pag = $m[0] ?? '';
+	return '' !== $pag && false === strpos( $pag, 'self::csv(' ) && false === strpos( $pag, 'header(' ) && false === strpos( $pag, 'nocache_headers' ) && false === strpos( $pag, 'Content-Disposition' ) && false === strpos( $pag, 'cn_csv' )
+		&& 1 === substr_count( $src, 'echo self::csv(' ) && 1 === preg_match( '/function descargar_csv\(.*?echo self::csv\(/s', $src );
+} )() );
+t( 'el formulario de la pantalla sigue teniendo el botón CSV como POST con nonce', ( function () use ( $subs, $fichas ) {
+	sv_preparar( $subs, $fichas );
+	$h = sv_pagina( array() );
+	return false !== strpos( $h, 'name="cn_sv_accion" value="csv"' ) && false !== strpos( $h, 'cn_sv_nonce' ) && false !== strpos( $h, '<form method="post"' );
+} )() );
 t( 'el submenú exige manage_options', 1 === preg_match( "/add_submenu_page\( 'cn-socias', 'Suscripciones sin vincular', 'Suscripciones sin vincular', 'manage_options'/", $src ) );
 t( 'una sola línea de require en el archivo principal', 1 === substr_count( file_get_contents( dirname( __DIR__ ) . '/club-natureza-miembros.php' ), 'class-cn-sin-vincular.php' ) );
 
@@ -173,7 +220,7 @@ seccion( 'el cartel sub_sin_vincular (CN_Sync) no cambia' );
 $w = sv_preparar( array( sv_sub( 6, 'nadie@example.com', 15500, 2 * 3600 ) ), $fichas );
 $w->on( '/SELECT id, nombre_apellido, estado, email, celular_hint, preapproval_id, fecha_fin_trial FROM wp_cn_miembros/', $fichas );
 CN_Sin_Vincular::consultar( true );
-sv_pagina( array( 'cn_sv_accion' => 'csv', 'cn_sv_nonce' => 'x' ) );
+sv_csv();
 t( 'usar la pantalla y el CSV no toca cn_sync_alertados ni deja sub_sin_vincular en mp_log', false === get_option( 'cn_sync_alertados' ) && ! $w->log );
 $r = CN_Sync::alertar_sin_vincular();
 $tipos = $w->log_mp_tipos();

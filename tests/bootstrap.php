@@ -142,6 +142,7 @@ function wp_enqueue_style( $h ) {
 function add_shortcode( $t, $cb ) {
 }
 function add_action( $h, $cb ) {
+	$GLOBALS['cn_hooks'][ $h ][] = $cb;
 }
 function wp_verify_nonce( $n, $a ) {
 	return false !== ( $GLOBALS['cn_nonce_ok'] ?? true );
@@ -185,6 +186,7 @@ function get_permalink( $id ) {
 	return 'https://naturalesart.com/?p=' . (int) $id;
 }
 function nocache_headers() {
+	$GLOBALS['cn_nocache'] = ( $GLOBALS['cn_nocache'] ?? 0 ) + 1;
 }
 function wp_remote_retrieve_header( $r, $h ) {
 	return $r['headers'][ strtolower( $h ) ] ?? '';

@@ -16,9 +16,10 @@ if ( ! defined( 'ABSPATH' ) ) exit;
  * Mercado Pago: únicamente GET (los mismos que hace el Cruce). El resultado se guarda 10 min en un transient para no repetir
  * las consultas entre la vista y el CSV. Sin opciones ni migraciones.
  *
- * CSV (POST con nonce, cn_csv=1, solo manage_options): trae el preapproval_id y el email del pagador COMPLETOS (hacen falta
- * para ubicar a la persona en el panel de MP), plan, monto, próximo cobro, alta, nivel, motivo y la candidata (id, nombre,
- * estado), sin celular. Con BOM UTF-8 para que Excel lea bien las tildes.
+ * CSV (POST con nonce, solo manage_options): se emite en el hook admin_init (descargar_csv), ANTES de cualquier salida de
+ * wp-admin (si se hiciera dentro de pagina(), admin-header.php ya mandó HTML y el CSV quedaría pegado en la página). Trae el
+ * preapproval_id y el email del pagador COMPLETOS (hacen falta para ubicar a la persona en el panel de MP), plan, monto,
+ * próximo cobro, alta, nivel, motivo y la candidata (id, nombre, estado), sin celular. Con BOM UTF-8 para que Excel lea bien las tildes.
  */
 class CN_Sin_Vincular {
 	const NONCE     = 'cn_sin_vincular';
@@ -34,6 +35,7 @@ class CN_Sin_Vincular {
 
 	public static function registrar() {
 		add_action( 'admin_menu', array( __CLASS__, 'menu' ), 20 );
+		add_action( 'admin_init', array( __CLASS__, 'descargar_csv' ) );
 	}
 
 	public static function menu() {
@@ -190,6 +192,33 @@ class CN_Sin_Vincular {
 		return $csv;
 	}
 
+	/**
+	 * Hook admin_init: descarga del CSV antes de que wp-admin emita nada. Solo actúa en esta página, con POST cn_sv_accion=csv,
+	 * manage_options y nonce válido; si consultar() falla no emite nada (pagina() muestra el error de siempre).
+	 */
+	public static function descargar_csv() {
+		if ( ! isset( $_GET['page'], $_POST['cn_sv_accion'] ) || 'cn-sin-vincular' !== (string) $_GET['page'] || 'csv' !== sanitize_key( wp_unslash( $_POST['cn_sv_accion'] ) ) ) {
+			return false;
+		}
+		if ( ! current_user_can( 'manage_options' ) || ! check_admin_referer( self::NONCE, 'cn_sv_nonce' ) ) {
+			return false;
+		}
+		$r = self::consultar();
+		if ( empty( $r['ok'] ) ) {
+			return false;
+		}
+		nocache_headers();
+		if ( ! headers_sent() ) {
+			header( 'Content-Type: text/csv; charset=UTF-8' );
+			header( 'Content-Disposition: attachment; filename="suscripciones-sin-vincular-' . gmdate( 'Ymd-Hi' ) . '.csv"' );
+		}
+		echo self::csv( $r['filas'] );
+		if ( self::$terminar ) {
+			exit;
+		}
+		return true;
+	}
+
 	// ---------------------------------------------------------------- página
 	public static function pagina() {
 		if ( ! current_user_can( 'manage_options' ) ) return;
@@ -197,33 +226,17 @@ class CN_Sin_Vincular {
 		if ( isset( $_POST['cn_sv_accion'] ) && check_admin_referer( self::NONCE, 'cn_sv_nonce' ) ) {
 			$accion = sanitize_key( wp_unslash( $_POST['cn_sv_accion'] ) );
 		}
-		if ( 'csv' === $accion || ( '' !== $accion && ! empty( $_POST['cn_csv'] ) ) ) {
-			$r = self::consultar();
-			if ( ! $r['ok'] ) {
-				echo '<div class="wrap"><h1>Suscripciones sin vincular</h1><p style="color:#b32d2e;">' . esc_html( $r['error'] ) . '</p></div>';
-				return;
-			}
-			$nombre = 'suscripciones-sin-vincular-' . gmdate( 'Ymd-Hi' ) . '.csv';
-			if ( ! headers_sent() ) {
-				nocache_headers();
-				header( 'Content-Type: text/csv; charset=UTF-8' );
-				header( 'Content-Disposition: attachment; filename="' . $nombre . '"' );
-			}
-			echo self::csv( $r['filas'] );
-			if ( self::$terminar ) {
-				exit;
-			}
-			return;
-		}
 		echo '<div class="wrap"><h1>Suscripciones sin vincular</h1>';
 		echo '<p style="max-width:860px;">Suscripciones <strong>autorizadas</strong> en Mercado Pago que ninguna ficha tiene vinculadas, con la ficha candidata según el <strong>email del pagador</strong> (las mismas reglas del Cruce y de "Vincular en lote"). Solo lectura: acá no se vincula nada. <strong>Vincular</strong> lleva al bloque de siempre en Socias, de a una, donde se verifica y se confirma. El resultado se guarda 10 minutos.</p>';
 		echo '<form method="post" style="margin-bottom:12px;">';
 		wp_nonce_field( self::NONCE, 'cn_sv_nonce' );
 		echo '<button type="submit" name="cn_sv_accion" value="consultar" class="button button-primary">Consultar Mercado Pago</button> ';
 		echo '<button type="submit" name="cn_sv_accion" value="csv" class="button">Descargar CSV (datos completos)</button>';
-		echo '<input type="hidden" name="cn_csv" value="0">';
 		echo '</form>';
-		if ( 'consultar' !== $accion ) {
+		if ( 'csv' === $accion ) {
+			// Si se llegó acá con "csv" es porque descargar_csv() (admin_init) no pudo emitir el archivo: se muestra el error de la consulta.
+			$r = self::consultar();
+		} elseif ( 'consultar' !== $accion ) {
 			$c = get_transient( self::TRANSIENT );
 			if ( ! is_array( $c ) || empty( $c['ok'] ) ) {
 				echo '</div>';
