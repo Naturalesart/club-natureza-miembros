@@ -160,11 +160,16 @@ function is_wp_error( $x ) {
 }
 class WP_Error {
 	public $msg;
-	public function __construct( $code = '', $msg = '' ) {
-		$this->msg = $msg;
+	public $data;
+	public function __construct( $code = '', $msg = '', $data = null ) {
+		$this->msg  = $msg;
+		$this->data = $data;
 	}
 	public function get_error_message() {
 		return $this->msg;
+	}
+	public function get_error_data() {
+		return $this->data;
 	}
 }
 function wp_remote_retrieve_response_code( $r ) {
