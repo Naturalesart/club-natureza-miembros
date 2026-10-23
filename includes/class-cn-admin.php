@@ -550,6 +550,7 @@ class CN_Admin {
 			<h1>Socias</h1>
 			<?php echo CN_Retorno::cartel_pendientes(); // vacío si no hay clientas esperando acceso. ?>
 			<?php echo self::cartel_avisos(); // errores técnicos registrados (sin mails ni n8n). ?>
+			<?php echo CN_Espejo_MP::cartel(); // contador del espejo de Mercado Pago (vacío si está apagado). ?>
 			<?php if ( $socia_editar ) : ?>
 				<h2>Editar socia</h2>
 				<form method="post" style="max-width:480px;">
@@ -1417,6 +1418,11 @@ class CN_Admin {
 				CN_Alta_Mail::al_guardar_modo( $cn_modo_ant, $cn_modo_nuevo );
 				update_option( CN_Alta_Mail::OPT_URL, esc_url_raw( wp_unslash( $_POST['cn_alta_mail_url'] ?? '' ) ) );
 			}
+			// Espejo de pausas/cancelaciones de MP (CN_Espejo_MP): off|log|on. Apagado por defecto.
+			if ( isset( $_POST['cn_espejo_mp_modo'] ) ) {
+				$cn_espejo_nuevo = sanitize_key( wp_unslash( $_POST['cn_espejo_mp_modo'] ) );
+				update_option( CN_Espejo_MP::OPT_MODO, in_array( $cn_espejo_nuevo, array( 'log', 'on' ), true ) ? $cn_espejo_nuevo : 'off' );
+			}
 			// Página de retorno de suscripciones por link directo ([cn_retorno_suscripcion]). Apagada por defecto.
 			update_option( 'cn_retorno_activo', isset( $_POST['cn_retorno_activo'] ) ? '1' : '0' );
 			update_option( CN_Retorno::OPT_WHATSAPP, preg_replace( '/\D+/', '', sanitize_text_field( wp_unslash( $_POST['cn_retorno_whatsapp'] ?? '' ) ) ) ); // solo dígitos
@@ -1440,6 +1446,7 @@ class CN_Admin {
 		$guarda_solo_log  = '1' === (string) get_option( 'cn_guarda_trial_solo_log', '1' );
 		$retorno_activo   = '1' === (string) get_option( 'cn_retorno_activo', '0' );
 		$alta_modo        = CN_Alta_Mail::modo();
+		$espejo_modo      = CN_Espejo_MP::modo();
 		$alta_url         = (string) get_option( CN_Alta_Mail::OPT_URL, '' );
 		$alta_desde       = (int) get_option( CN_Alta_Mail::OPT_DESDE, 0 );
 		$retorno_wa       = (string) get_option( CN_Retorno::OPT_WHATSAPP, '' );
@@ -1519,6 +1526,17 @@ class CN_Admin {
 							<p class="description">Apagado por defecto. Apagado, esa página solo muestra un mensaje de agradecimiento (sin formulario ni consulta a Mercado Pago). Prendido, la clienta que paga por el link directo del plan deja su celular y queda activa sola.</p>
 							<p style="margin-top:10px;"><label>WhatsApp para clientas que no logran activarse: <input type="text" name="cn_retorno_whatsapp" value="<?php echo esc_attr( $retorno_wa ); ?>" class="regular-text" placeholder="5491122334455" autocomplete="off"></label></p>
 							<p class="description">Número con código de país, solo dígitos (ej. 5491122334455). Después de 3 intentos fallidos la página muestra un botón que abre este WhatsApp con el código de la suscripción. Vacío: no se muestra el botón.</p>
+						</td>
+					</tr>
+					<tr>
+						<th><label>Espejo de Mercado Pago (pausas y cancelaciones)</label></th>
+						<td>
+							<select name="cn_espejo_mp_modo">
+								<option value="off" <?php selected( $espejo_modo, 'off' ); ?>>Apagado (no hace nada)</option>
+								<option value="log" <?php selected( $espejo_modo, 'log' ); ?>>Solo registrar (NO cambia ninguna ficha)</option>
+								<option value="on" <?php selected( $espejo_modo, 'on' ); ?>>Activo (programa bajas con gracia)</option>
+							</select>
+							<p class="description">Apagado por defecto. Solo fichas ya vinculadas a una suscripción. "Solo registrar" anota en el registro (<code>espejo_mp_simulado</code>) qué haría y lo cuenta en el cartel de Socias. En "Activo", una pausa o cancelación en Mercado Pago programa la baja para el fin del período pagado + 7 días (nadie pierde el acceso antes), y se cancela sola si Mercado Pago vuelve a autorizar. No manda mails.</p>
 						</td>
 					</tr>
 					<tr>

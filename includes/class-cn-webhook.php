@@ -663,7 +663,7 @@ class CN_Webhook {
 		global $wpdb;
 		try {
 			$t_miembros = CN_DB::tabla( 'miembros' );
-			$donde = "baja_en IS NOT NULL AND acceso_hasta IS NOT NULL AND acceso_hasta < UTC_TIMESTAMP() AND preapproval_id IS NOT NULL AND preapproval_id <> '' AND plan IS NOT NULL AND estado <> 'cancelada'";
+			$donde = "baja_en IS NOT NULL AND baja_en <= UTC_TIMESTAMP() AND acceso_hasta IS NOT NULL AND acceso_hasta < UTC_TIMESTAMP() AND preapproval_id IS NOT NULL AND preapproval_id <> '' AND plan IS NOT NULL AND estado <> 'cancelada'";
 			$filas = $wpdb->get_results( "SELECT id FROM {$t_miembros} WHERE {$donde}" );
 			if ( '' !== (string) $wpdb->last_error ) {
 				throw new RuntimeException( 'error buscando bajas vencidas: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
