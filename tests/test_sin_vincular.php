@@ -131,7 +131,7 @@ $h = sv_pagina( array( 'cn_sv_accion' => 'consultar', 'cn_sv_nonce' => 'x' ) );
 t( 'ids enmascarados (6 + ...) en la tabla; el id completo solo va dentro del enlace Vincular', false !== strpos( $h, '<code>' . substr( sv_id( 1 ), 0, 6 ) . '...</code>' ) && 1 === substr_count( $h, sv_id( 1 ) ) && 1 === preg_match( '#cn_vincular_id=' . sv_id( 1 ) . '#', $h ) && 0 === preg_match( '#<code>[a-f0-9]{32}</code>#', $h ) );
 t( 'email del pagador enmascarado (2 letras + ***@dominio), nunca completo', false !== strpos( $h, 'an***@example.com' ) && false === strpos( $h, 'ana@example.com' ) && false === strpos( $h, 'nadie@example.com' ) );
 t( 'candidata con id, nombre, estado y celular enmascarado (****hint)', false !== strpos( $h, '#1 Ana Lopez · activo · ****0001' ) && false === strpos( $h, '1155510001' ) );
-t( 'contador por nivel y etiquetas', false !== strpos( $h, 'fuerte: 1' ) && false !== strpos( $h, 'medio: 4' ) && false !== strpos( $h, 'sin match: 3' ) && false !== strpos( $h, 'Medio (elegir ficha)' ) );
+t( 'contador por nivel y etiquetas', false !== strpos( $h, 'fuerte: 1' ) && false !== strpos( $h, 'medio: 4' ) && false !== strpos( $h, 'medio (por nombre): 0' ) && false !== strpos( $h, 'sin match: 3' ) && false !== strpos( $h, 'Medio (elegir ficha)' ) );
 t( 'escapa el HTML del nombre', ( function () use ( $subs ) {
 	$w = sv_preparar( array( sv_sub( 1, 'ana@example.com' ) ), array( sv_ficha( 1, '<b>Ana</b>', 'ana@example.com', '1155510001' ) ) );
 	$h = sv_pagina( array( 'cn_sv_accion' => 'consultar', 'cn_sv_nonce' => 'x' ) );
@@ -161,10 +161,10 @@ t( 'el hook admin_init -> descargar_csv está registrado (y admin_menu -> menu)'
 $w = sv_preparar( $subs, $fichas );
 list( $csv, $ret ) = sv_csv();
 t( 'con permisos y nonce: emite, llama a nocache_headers y devuelve true', true === $ret && 1 === $GLOBALS['cn_nocache'] && '' !== $csv );
-t( 'empieza con BOM UTF-8 y la cabecera', 0 === strpos( $csv, "\xEF\xBB\xBF" . 'preapproval_id,email_pagador,plan,monto,proximo_cobro,alta_mp,nivel,motivo,candidata_id,candidata_nombre,candidata_estado' ) );
+t( 'empieza con BOM UTF-8 y la cabecera', 0 === strpos( $csv, "\xEF\xBB\xBF" . 'preapproval_id,email_pagador,plan,monto,proximo_cobro,alta_mp,nivel,motivo,candidata_id,candidata_nombre,candidata_estado,titular_tarjeta,candidata_celular_ultimos4' ) );
 t( 'trae el preapproval_id y el email del pagador COMPLETOS', false !== strpos( $csv, sv_id( 1 ) . ',ana@example.com,basico,15500,2026-11-10,' ) && false !== strpos( $csv, sv_id( 6 ) . ',nadie@example.com,' ) );
 t( 'candidata con id, nombre y estado; varias separadas con |', false !== strpos( $csv, ',fuerte,' ) && false !== strpos( $csv, ',1,"Ana Lopez",activo' ) && false !== strpos( $csv, '"5 | 6","Dani Ruiz | Dani Ruiz Otra","activo | activo"' ) );
-t( 'sin celular (ni completo ni hint)', false === strpos( $csv, '1155510001' ) && false === strpos( $csv, '****' ) );
+t( 'sin celular completo (solo últimos 4 en su columna)', false === strpos( $csv, '1155510001' ) && false === strpos( $csv, '****' ) );
 t( 'una fila por suscripción sin vincular (8) + cabecera', 9 === count( array_filter( explode( "\n", trim( $csv ) ) ) ) );
 t( 'el CSV no escribe nada ni hace POST', ! $w->log && array( 'GET' ) === array_values( array_unique( array_column( $GLOBALS['cn_http_log'], 'metodo' ) ) ) );
 t( 'el CSV sale del transient si ya se consultó (sin llamadas nuevas)', ( function () use ( $subs, $fichas ) {

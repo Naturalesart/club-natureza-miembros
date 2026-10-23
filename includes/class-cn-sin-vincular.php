@@ -9,6 +9,9 @@ if ( ! defined( 'ABSPATH' ) ) exit;
  *               no la excluyó (ficha sin otra suscripción, plan conocido, celular válido, sin ficha parecida, sin repetir socia).
  *  - medio:     hay ficha/s por email pero hace falta que una persona elija: ficha parecida/gemela, varias fichas con ese email,
  *               la ficha ya tiene OTRA suscripción, sin celular válido, o la misma socia aparece en dos suscripciones.
+ *  - medio (por nombre): sin candidata por email, pero el nombre del titular de la tarjeta (card.cardholder.name del primer
+ *    cobro aprobado) coincide con el de una o varias fichas sin suscripción (tokens normalizados: todos los de la ficha están en
+ *    los del titular, o al revés, con 2 o más en común). NUNCA es fuerte: siempre decide una persona.
  *  - sin match: no hay email, o ninguna ficha tiene ese email, o el monto no corresponde a un plan.
  *
  * El botón "Vincular" NO escribe nada: enlaza al bloque existente "Vincular suscripción de Mercado Pago" (Socias) con el id
@@ -28,6 +31,13 @@ class CN_Sin_Vincular {
 	const FUERTE    = 'fuerte';
 	const MEDIO     = 'medio';
 	const SIN_MATCH = 'sin_match';
+	const MEDIO_NOMBRE = 'medio_nombre';
+	const TRANSIENT_TITULARES = 'cn_sin_vincular_titulares'; // preapproval_id => array( nombre, estado ); 6 hs
+	const TITULARES_SEG       = 21600;
+	const TITULAR_REQUESTS    = 90; // pedidos a MP por consulta para buscar titulares (2 por suscripción)
+	const TITULAR_ESPERA_SEG  = 20;
+	const TITULAR_TIEMPO_SEG  = 60;
+	const MOTIVO_NOMBRE       = 'nombre del titular coincide';
 	/** Motivos de exclusión de candidatas_seguras que dejan la suscripción en nivel "medio" (hay ficha, decide una persona). */
 	const MOTIVOS_MEDIO = array( 'ficha parecida #', 'la socia ya tiene otra suscripción', 'más de una socia', 'misma socia en más de una suscripción', 'sin celular válido' );
 	/** En tests se pone en false para que el CSV no corte la ejecución. */
@@ -93,10 +103,17 @@ class CN_Sin_Vincular {
 				'nivel'         => $nivel,
 				'motivo'        => $motivo,
 				'candidatas'    => array_values( $cands ),
+				'titular'       => '',
+				'titular_estado' => '',
 			);
 		}
+		return self::ordenar( $out );
+	}
+
+	/** Orden: fuerte, medio, medio (por nombre), sin match; dentro de cada nivel por alta. */
+	public static function ordenar( $out ) {
 		usort( $out, function ( $a, $b ) {
-			$orden = array( self::FUERTE => 0, self::MEDIO => 1, self::SIN_MATCH => 2 );
+			$orden = array( self::FUERTE => 0, self::MEDIO => 1, self::MEDIO_NOMBRE => 2, self::SIN_MATCH => 3 );
 			return ( $orden[ $a['nivel'] ] <=> $orden[ $b['nivel'] ] ) ?: strcmp( $a['alta'], $b['alta'] );
 		} );
 		return $out;
@@ -143,11 +160,143 @@ class CN_Sin_Vincular {
 		$prop  = CN_Vinculo::proponer( $l['items'], $socias, $pagos );
 		$cand  = CN_Vinculo_Lote::candidatas_seguras( $l['items'], $socias, $pagos );
 		$r['ok']       = true;
-		$r['filas']    = self::clasificar( $prop['filas'], $cand );
+		$r['filas']    = self::agregar_titulares( self::clasificar( $prop['filas'], $cand ), $socias );
 		$r['truncada'] = ! empty( $l['truncada'] );
 		$r['tope']     = ! empty( $prop['tope_alcanzado'] ) || ! empty( $cand['tope_alcanzado'] );
 		set_transient( self::TRANSIENT, $r, self::CACHE_SEG );
 		return $r;
+	}
+
+	// ---------------------------------------------------------------- titular de la tarjeta y match por nombre (SOLO LECTURA)
+	/** Tokens del nombre: minúsculas, sin tildes, solo letras, de 2 o más letras. */
+	public static function tokens_nombre( $nombre ) {
+		$n = (string) $nombre;
+		if ( function_exists( 'remove_accents' ) ) {
+			$n = remove_accents( $n );
+		}
+		$n = strtolower( $n );
+		$n = preg_replace( '/[^a-z]+/', ' ', $n );
+		$t = array();
+		foreach ( preg_split( '/\s+/', trim( (string) $n ), -1, PREG_SPLIT_NO_EMPTY ) as $tok ) {
+			if ( strlen( $tok ) >= 2 ) {
+				$t[ $tok ] = true;
+			}
+		}
+		return array_keys( $t );
+	}
+
+	/** ¿Coinciden titular y ficha? Todos los tokens de la ficha en los del titular, o al revés, con 2 o más en común. */
+	public static function coincide_nombre( $titular, $ficha ) {
+		$a = self::tokens_nombre( $titular );
+		$b = self::tokens_nombre( $ficha );
+		if ( count( $a ) < 2 || count( $b ) < 2 ) {
+			return false;
+		}
+		$comunes = count( array_intersect( $a, $b ) );
+		if ( $comunes < 2 ) {
+			return false;
+		}
+		return ! array_diff( $b, $a ) || ! array_diff( $a, $b );
+	}
+
+	/**
+	 * Titular de la tarjeta de una suscripción (solo GET): primer cobro aprobado de /authorized_payments/search y, de ese pago,
+	 * card.cardholder.name. $pres es el presupuesto compartido de la consulta.
+	 *
+	 * @return array{nombre:string,estado:string} estado: ok | sin_cobro | sin_titular | error | tope
+	 */
+	public static function titular_mp( $id, $token, &$pres ) {
+		$r = CN_MP::get_con_reintentos( '/authorized_payments/search?preapproval_id=' . rawurlencode( $id ), $token, $pres );
+		if ( ! $r['ok'] ) {
+			return array( 'nombre' => '', 'estado' => 'tope' === $r['http'] ? 'tope' : 'error' );
+		}
+		$pid = '';
+		foreach ( ( isset( $r['data']['results'] ) && is_array( $r['data']['results'] ) ) ? $r['data']['results'] : array() as $it ) {
+			$cand = isset( $it['payment']['id'] ) ? (string) $it['payment']['id'] : '';
+			if ( '' !== $cand && ctype_digit( $cand ) && ( ! isset( $it['payment']['status'] ) || 'approved' === $it['payment']['status'] ) ) {
+				$pid = $cand;
+				break;
+			}
+		}
+		if ( '' === $pid ) {
+			return array( 'nombre' => '', 'estado' => 'sin_cobro' );
+		}
+		$p = CN_MP::get_con_reintentos( '/v1/payments/' . rawurlencode( $pid ), $token, $pres );
+		if ( ! $p['ok'] ) {
+			return array( 'nombre' => '', 'estado' => 'tope' === $p['http'] ? 'tope' : 'error' );
+		}
+		$nombre = isset( $p['data']['card']['cardholder']['name'] ) && is_scalar( $p['data']['card']['cardholder']['name'] ) ? trim( sanitize_text_field( (string) $p['data']['card']['cardholder']['name'] ) ) : '';
+		return array( 'nombre' => $nombre, 'estado' => '' !== $nombre ? 'ok' : 'sin_titular' );
+	}
+
+	/**
+	 * Para cada fila SIN candidata por email (y con plan conocido): busca el titular (con cache de 6 hs por preapproval_id) y
+	 * propone fichas sin suscripción cuyo nombre coincide. Nunca sube a "fuerte". Solo GET; cero escrituras.
+	 */
+	public static function agregar_titulares( $filas, $socias ) {
+		$cache = get_transient( self::TRANSIENT_TITULARES );
+		$cache = is_array( $cache ) ? $cache : array();
+		$token = CN_MP::get_access_token();
+		$pres  = array( 'requests' => self::TITULAR_REQUESTS, 'espera' => self::TITULAR_ESPERA_SEG, 'hasta' => time() + self::TITULAR_TIEMPO_SEG );
+		$nuevo = false;
+		foreach ( $filas as &$f ) {
+			if ( $f['candidatas'] ) {
+				continue; // ya hay ficha por email: el titular no se consulta.
+			}
+			$id = (string) $f['id'];
+			if ( isset( $cache[ $id ] ) ) {
+				$t = $cache[ $id ];
+			} else {
+				$t = self::titular_mp( $id, $token, $pres );
+				if ( in_array( $t['estado'], array( 'ok', 'sin_cobro', 'sin_titular' ), true ) ) {
+					$cache[ $id ] = $t; // respuestas de MP se recuerdan 6 hs; errores y tope se reintentan en la próxima consulta.
+					$nuevo        = true;
+				}
+			}
+			$f['titular']        = (string) $t['nombre'];
+			$f['titular_estado'] = (string) $t['estado'];
+			if ( '' === $f['titular'] || null === $f['plan'] ) {
+				continue;
+			}
+			$cands = array();
+			foreach ( (array) $socias as $so ) {
+				if ( '' !== (string) ( isset( $so->preapproval_id ) ? $so->preapproval_id : '' ) ) {
+					continue; // con suscripción: nunca candidata por nombre.
+				}
+				if ( self::coincide_nombre( $f['titular'], isset( $so->nombre_apellido ) ? $so->nombre_apellido : '' ) ) {
+					$cands[] = $so;
+				}
+			}
+			if ( $cands ) {
+				$f['nivel']      = self::MEDIO_NOMBRE;
+				$f['motivo']     = self::MOTIVO_NOMBRE;
+				$f['candidatas'] = $cands;
+			}
+		}
+		unset( $f );
+		if ( $nuevo ) {
+			set_transient( self::TRANSIENT_TITULARES, $cache, self::TITULARES_SEG );
+		}
+		return self::ordenar( $filas );
+	}
+
+	/** Texto de la columna "Titular (MP)". */
+	public static function titular_texto( $f ) {
+		if ( '' !== (string) $f['titular'] ) {
+			return (string) $f['titular'];
+		}
+		switch ( (string) $f['titular_estado'] ) {
+			case 'sin_cobro':
+				return 'sin titular (sin cobro aprobado)';
+			case 'sin_titular':
+				return 'sin titular (el cobro no lo trae)';
+			case 'error':
+				return 'sin titular (MP no respondió)';
+			case 'tope':
+				return 'sin titular (tope de pedidos; volvé a consultar)';
+			default:
+				return '—';
+		}
 	}
 
 	// ---------------------------------------------------------------- enlaces y CSV
@@ -164,13 +313,14 @@ class CN_Sin_Vincular {
 	public static function csv( $filas ) {
 		$h = fopen( 'php://temp', 'r+' );
 		fwrite( $h, "\xEF\xBB\xBF" );
-		fputcsv( $h, array( 'preapproval_id', 'email_pagador', 'plan', 'monto', 'proximo_cobro', 'alta_mp', 'nivel', 'motivo', 'candidata_id', 'candidata_nombre', 'candidata_estado' ), ',', '"', '' );
+		fputcsv( $h, array( 'preapproval_id', 'email_pagador', 'plan', 'monto', 'proximo_cobro', 'alta_mp', 'nivel', 'motivo', 'candidata_id', 'candidata_nombre', 'candidata_estado', 'titular_tarjeta', 'candidata_celular_ultimos4' ), ',', '"', '' );
 		foreach ( (array) $filas as $f ) {
-			$ids = $noms = $ests = array();
+			$ids = $noms = $ests = $hints = array();
 			foreach ( $f['candidatas'] as $c ) {
-				$ids[]  = (int) $c->id;
-				$noms[] = (string) $c->nombre_apellido;
-				$ests[] = (string) $c->estado;
+				$ids[]   = (int) $c->id;
+				$noms[]  = (string) $c->nombre_apellido;
+				$ests[]  = (string) $c->estado;
+				$hints[] = substr( (string) ( isset( $c->celular_hint ) ? $c->celular_hint : '' ), -4 ); // solo los últimos 4 dígitos
 			}
 			fputcsv( $h, array(
 				(string) $f['id'],
@@ -184,6 +334,8 @@ class CN_Sin_Vincular {
 				implode( ' | ', $ids ),
 				implode( ' | ', $noms ),
 				implode( ' | ', $ests ),
+				(string) ( isset( $f['titular'] ) ? $f['titular'] : '' ),
+				implode( ' | ', $hints ),
 			), ',', '"', '' );
 		}
 		rewind( $h );
@@ -227,7 +379,7 @@ class CN_Sin_Vincular {
 			$accion = sanitize_key( wp_unslash( $_POST['cn_sv_accion'] ) );
 		}
 		echo '<div class="wrap"><h1>Suscripciones sin vincular</h1>';
-		echo '<p style="max-width:860px;">Suscripciones <strong>autorizadas</strong> en Mercado Pago que ninguna ficha tiene vinculadas, con la ficha candidata según el <strong>email del pagador</strong> (las mismas reglas del Cruce y de "Vincular en lote"). Solo lectura: acá no se vincula nada. <strong>Vincular</strong> lleva al bloque de siempre en Socias, de a una, donde se verifica y se confirma. El resultado se guarda 10 minutos.</p>';
+		echo '<p style="max-width:860px;">Suscripciones <strong>autorizadas</strong> en Mercado Pago que ninguna ficha tiene vinculadas, con la ficha candidata según el <strong>email del pagador</strong> (las mismas reglas del Cruce y de "Vincular en lote") y, si por email no hay ninguna, según el <strong>nombre del titular de la tarjeta</strong> (nunca pasa de "medio": siempre decide una persona). Solo lectura: acá no se vincula nada. <strong>Vincular</strong> lleva al bloque de siempre en Socias, de a una, donde se verifica y se confirma. El resultado se guarda 10 minutos.</p>';
 		echo '<form method="post" style="margin-bottom:12px;">';
 		wp_nonce_field( self::NONCE, 'cn_sv_nonce' );
 		echo '<button type="submit" name="cn_sv_accion" value="consultar" class="button button-primary">Consultar Mercado Pago</button> ';
@@ -257,17 +409,17 @@ class CN_Sin_Vincular {
 		if ( $r['tope'] ) {
 			echo '<div class="notice notice-warning inline"><p>Se llegó al tope de consultas extra a Mercado Pago para buscar emails: algunas quedaron como "sin email" por eso.</p></div>';
 		}
-		$n = array( self::FUERTE => 0, self::MEDIO => 0, self::SIN_MATCH => 0 );
+		$n = array( self::FUERTE => 0, self::MEDIO => 0, self::MEDIO_NOMBRE => 0, self::SIN_MATCH => 0 );
 		foreach ( $r['filas'] as $f ) {
 			$n[ $f['nivel'] ]++;
 		}
-		echo '<p><strong>' . (int) count( $r['filas'] ) . ' sin vincular</strong> · fuerte: ' . (int) $n[ self::FUERTE ] . ' · medio: ' . (int) $n[ self::MEDIO ] . ' · sin match: ' . (int) $n[ self::SIN_MATCH ] . '</p>';
+		echo '<p><strong>' . (int) count( $r['filas'] ) . ' sin vincular</strong> · fuerte: ' . (int) $n[ self::FUERTE ] . ' · medio: ' . (int) $n[ self::MEDIO ] . ' · medio (por nombre): ' . (int) $n[ self::MEDIO_NOMBRE ] . ' · sin match: ' . (int) $n[ self::SIN_MATCH ] . '</p>';
 		if ( ! $r['filas'] ) {
 			echo '<p><em>No hay suscripciones autorizadas sin vincular.</em></p></div>';
 			return;
 		}
-		$etiq = array( self::FUERTE => 'Fuerte', self::MEDIO => 'Medio (elegir ficha)', self::SIN_MATCH => 'Sin match' );
-		echo '<table class="widefat striped"><thead><tr><th>Suscripción</th><th>Plan</th><th>Monto</th><th>Próximo cobro</th><th>Alta en MP</th><th>Email del pagador</th><th>Ficha candidata</th><th>Nivel</th><th></th></tr></thead><tbody>';
+		$etiq = array( self::FUERTE => 'Fuerte', self::MEDIO => 'Medio (elegir ficha)', self::MEDIO_NOMBRE => 'Medio (por nombre)', self::SIN_MATCH => 'Sin match' );
+		echo '<table class="widefat striped"><thead><tr><th>Suscripción</th><th>Plan</th><th>Monto</th><th>Próximo cobro</th><th>Alta en MP</th><th>Email del pagador</th><th>Titular (MP)</th><th>Ficha candidata</th><th>Nivel</th><th></th></tr></thead><tbody>';
 		foreach ( $r['filas'] as $f ) {
 			echo '<tr><td><code>' . esc_html( self::mascara_id( $f['id'] ) ) . '</code></td>';
 			echo '<td>' . esc_html( null !== $f['plan'] ? (string) $f['plan'] : '?' ) . '</td>';
@@ -275,6 +427,7 @@ class CN_Sin_Vincular {
 			echo '<td>' . esc_html( '' !== $f['proximo_cobro'] ? $f['proximo_cobro'] : '—' ) . '</td>';
 			echo '<td>' . esc_html( '' !== $f['alta'] ? $f['alta'] : '—' ) . '</td>';
 			echo '<td>' . esc_html( CN_Vinculo_Manual::mascara_email( $f['email'] ) ) . '</td>';
+			echo '<td>' . esc_html( self::titular_texto( $f ) ) . '</td>';
 			echo '<td>';
 			if ( ! $f['candidatas'] ) {
 				echo '—';
