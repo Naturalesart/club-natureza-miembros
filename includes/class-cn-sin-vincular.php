@@ -99,6 +99,7 @@ class CN_Sin_Vincular {
 				'monto'         => $f['monto'],
 				'proximo_cobro' => (string) $f['proximo_cobro'],
 				'alta'          => substr( (string) $f['date_created'], 0, 10 ),
+				'alta_iso'      => (string) $f['date_created'], // fecha y hora completas (la usa "Para contactar" para medir antigüedad).
 				'email'         => (string) $f['email'],
 				'nivel'         => $nivel,
 				'motivo'        => $motivo,
@@ -161,6 +162,7 @@ class CN_Sin_Vincular {
 		$cand  = CN_Vinculo_Lote::candidatas_seguras( $l['items'], $socias, $pagos );
 		$r['ok']       = true;
 		$r['filas']    = self::agregar_titulares( self::clasificar( $prop['filas'], $cand ), $socias );
+		$r['autorizadas'] = CN_Para_Contactar::resumir( $l['items'] ); // para "Para contactar" (detección de doble pago): sin pedir nada más a MP.
 		$r['truncada'] = ! empty( $l['truncada'] );
 		$r['tope']     = ! empty( $prop['tope_alcanzado'] ) || ! empty( $cand['tope_alcanzado'] );
 		set_transient( self::TRANSIENT, $r, self::CACHE_SEG );
