@@ -38,6 +38,7 @@ require_once CN_PATH . 'includes/class-cn-planes-mp.php';
 require_once CN_PATH . 'includes/class-cn-socias-revisar.php';
 require_once CN_PATH . 'includes/class-cn-sin-vincular.php'; // pantalla "Suscripciones sin vincular" (solo lectura; se engancha sola). // pantalla "Socias a revisar" (se engancha sola).
 require_once CN_PATH . 'includes/class-cn-reemplazo.php'; // pantalla "Reemplazar suscripción" (se engancha sola; solo GET a MP).
+require_once CN_PATH . 'includes/class-cn-extender-acceso.php'; // pantalla "Extender acceso" (se engancha sola; sin MP).
 require_once CN_PATH . 'includes/class-cn-diag-pagador.php'; // TEMPORAL (diagnóstico, solo lectura): borrar esta línea y el archivo para quitarla.
 register_activation_hook( __FILE__, array( 'CN_Activator', 'activar' ) );
 add_action( 'init', array( 'CN_Shortcodes', 'registrar' ) );
