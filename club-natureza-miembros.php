@@ -95,6 +95,7 @@ add_action( 'init', function () {
 	}
 } );
 add_action( 'cn_cron_alertas_graves', array( 'CN_Alertas', 'chequeo_diario' ) );
+add_action( 'wp_mail_failed', array( 'CN_Alertas', 'wp_mail_fallo' ) ); // alerta GRAVE si WordPress no puede enviar mails (3+ fallos en 6 hs).
 add_action( 'init', function () {
 	if ( ! wp_next_scheduled( 'cn_cron_alertas_graves' ) ) {
 		wp_schedule_event( time() + 600, 'daily', 'cn_cron_alertas_graves' );

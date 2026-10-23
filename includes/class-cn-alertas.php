@@ -14,6 +14,9 @@ if ( ! defined( 'ABSPATH' ) ) exit;
  *     chequeo diario manda UN mail resumen con los que llevan más de 72 hs sin resolverse (resuelto = ya hay ficha con
  *     ese preapproval_id o ese pago). Máx. 1 mail por día; ids enmascarados (6 caracteres + ...), nunca emails ni nombres.
  *
+ *  4. WordPress no puede enviar mails: 3 o más fallos de wp_mail (hook wp_mail_failed, de cualquier plugin) en 6 hs;
+ *     máx. 1 mail cada 24 hs. Sin limpieza: la ventana de 6 hs lo resuelve sola.
+ *
  * Solo lectura sobre la base (SELECT) y cero llamadas a Mercado Pago. Sin migraciones: options + mp_log.
  */
 class CN_Alertas {
@@ -254,6 +257,77 @@ class CN_Alertas {
 			self::chequear_casos();
 		} catch ( Throwable $e ) {
 			CN_Webhook::registrar_log_mp( 'sub_error', array( 'paso' => 'alertas_graves', 'mensaje' => mb_substr( $e->getMessage(), 0, 300 ) ) );
+		}
+	}
+	// ======================================================================
+	// 4. WORDPRESS NO PUEDE ENVIAR MAILS (hook wp_mail_failed)
+	// ======================================================================
+	const OPT_WPMAIL_FALLOS  = 'cn_wp_mail_fallos';            // lista acotada: array( array( 'ts' => int, 'mensaje' => string ) )
+	const OPT_MAIL_WPMAIL    = 'cn_alerta_wpmail_ultimo_mail';
+	const WPMAIL_MIN_FALLOS  = 3;      // fallos en la ventana para alertar
+	const WPMAIL_VENTANA_SEG = 21600;  // 6 hs
+	const MAX_WPMAIL_FALLOS  = 50;
+	const ASUNTO_WPMAIL      = '[Club Natureza] GRAVE: WordPress no puede enviar mails';
+	/** Guarda contra re-entrada (por si algo dentro del registro dispara otro wp_mail_failed). */
+	protected static $en_wpmail_fallo = false;
+
+	/** Email enmascarado: 2 letras + ***@dominio. */
+	public static function mascara_email( $email ) {
+		$email = trim( (string) $email );
+		$p     = strpos( $email, '@' );
+		return ( false === $p || $p < 1 ) ? '***' : substr( $email, 0, min( 2, $p ) ) . '***' . substr( $email, $p );
+	}
+
+	/**
+	 * Hook 'wp_mail_failed' (recibe el WP_Error de wp_mail, de este plugin o de cualquier otro). Deja mp_log 'wp_mail_fallo'
+	 * (mensaje truncado a 200, destinatario enmascarado), guarda el fallo en una lista acotada y, con WPMAIL_MIN_FALLOS o más
+	 * en las últimas 6 hs, manda la alerta (máx. 1 cada 24 hs). Nunca lanza. No hace falta "limpiar": la ventana lo resuelve.
+	 */
+	public static function wp_mail_fallo( $error ) {
+		if ( self::$en_wpmail_fallo ) {
+			return;
+		}
+		self::$en_wpmail_fallo = true;
+		try {
+			$mensaje = is_object( $error ) && method_exists( $error, 'get_error_message' ) ? (string) $error->get_error_message() : (string) $error;
+			$mensaje = mb_substr( trim( preg_replace( '/\s+/', ' ', $mensaje ) ), 0, 200 );
+			$datos   = is_object( $error ) && method_exists( $error, 'get_error_data' ) ? $error->get_error_data() : null;
+			$para    = array();
+			if ( is_array( $datos ) && isset( $datos['to'] ) ) {
+				foreach ( (array) $datos['to'] as $t ) {
+					$para[] = self::mascara_email( $t );
+				}
+			}
+			CN_Webhook::registrar_log_mp( 'wp_mail_fallo', array( 'mensaje' => $mensaje, 'para' => $para ) );
+			$ahora   = time();
+			$lista   = get_option( self::OPT_WPMAIL_FALLOS, array() );
+			$lista   = is_array( $lista ) ? $lista : array();
+			$lista[] = array( 'ts' => $ahora, 'mensaje' => mb_substr( $mensaje, 0, 120 ) );
+			$lista   = array_slice( $lista, -self::MAX_WPMAIL_FALLOS );
+			update_option( self::OPT_WPMAIL_FALLOS, $lista, false );
+			$recientes = array_values( array_filter( $lista, function ( $f ) use ( $ahora ) {
+				return isset( $f['ts'] ) && $ahora - (int) $f['ts'] <= self::WPMAIL_VENTANA_SEG;
+			} ) );
+			if ( count( $recientes ) < self::WPMAIL_MIN_FALLOS ) {
+				return;
+			}
+			if ( $ahora - (int) get_option( self::OPT_MAIL_WPMAIL, 0 ) < self::REPETIR_SEG ) {
+				return;
+			}
+			update_option( self::OPT_MAIL_WPMAIL, $ahora, false );
+			$primero = (int) $recientes[0]['ts'];
+			self::enviar(
+				'wp_mail_fallo',
+				self::ASUNTO_WPMAIL,
+				'Qué pasó: WordPress no pudo enviar ' . count( $recientes ) . " mails en las últimas 6 hs (el sitio sigue andando, pero no salen bienvenidas, fin de trial ni avisos). Último error: {$mensaje}\n"
+				. 'Desde cuándo: ' . gmdate( 'd/m/Y H:i', $primero ) . ' UTC (hace ' . self::hace( $primero ) . ").\n"
+				. 'Qué hacer: en wp-admin → WP Mail SMTP → Herramientas → Prueba de correo. Si es la contraseña de aplicación de Gmail, crear una nueva en myaccount.google.com/apppasswords y pegarla en WP Mail SMTP. Esta alerta se repite como máximo 1 vez por día mientras sigan fallando.',
+				array( 'fallos_6h' => count( $recientes ), 'ultimo_error' => $mensaje, 'desde' => gmdate( 'Y-m-d H:i:s', $primero ) )
+			);
+		} catch ( Throwable $e ) {
+			// Accesorio: un fallo acá nunca debe afectar a quien llamó a wp_mail.
+		} finally {
+			self::$en_wpmail_fallo = false;
 		}
 	}
 }
