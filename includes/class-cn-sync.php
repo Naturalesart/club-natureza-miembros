@@ -245,6 +245,7 @@ class CN_Sync {
 		if ( '' !== (string) $wpdb->last_error || ! is_array( $socias ) ) {
 			return null;
 		}
+		CN_Para_Contactar::avisar_dobles( $lista['items'], $socias ); // solo detecta y deja un aviso en el cartel (1 por día por caso); no consulta nada.
 		$indice  = CN_Vinculo::indice_socias( $socias );
 		$ahora   = time();
 		$previos = get_option( 'cn_sync_alertados', array() );

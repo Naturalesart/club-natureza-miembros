@@ -27,6 +27,7 @@ require_once CN_PATH . 'includes/class-cn-vinculo-manual.php';
 require_once CN_PATH . 'includes/class-cn-retorno.php';
 require_once CN_PATH . 'includes/class-cn-alta-mail.php';
 require_once CN_PATH . 'includes/class-cn-vinculo-lote.php';
+require_once CN_PATH . 'includes/class-cn-para-contactar.php'; // pantalla "Para contactar" (solo lectura; se engancha sola).
 require_once CN_PATH . 'includes/class-cn-espejo-mp.php';
 require_once CN_PATH . 'includes/class-cn-sync.php';
 require_once CN_PATH . 'includes/class-cn-shortcodes.php';
