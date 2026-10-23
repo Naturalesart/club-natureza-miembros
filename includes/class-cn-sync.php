@@ -124,6 +124,7 @@ class CN_Sync {
 		$modo_seguro = self::flag( 'cn_sub_modo_seguro', '1' );
 		$presupuesto = array( 'requests' => self::TOPE_REQUESTS, 'espera' => self::TOPE_ESPERA_SEG, 'hasta' => time() + self::TOPE_TIEMPO_SEG );
 		$ahora       = time();
+		CN_Espejo_MP::iniciar_corrida(); // 'off' por defecto: no hace nada.
 		// Solo se queda en la cola lo que falle en ESTA corrida (los vigentes que salgan bien se sacan; los que ya no
 		// están vigentes —cancelados, sin suscripción— dejan de reintentarse).
 		$cola_nueva = array();
@@ -156,6 +157,7 @@ class CN_Sync {
 			if ( ! in_array( $status, array( 'authorized', 'cancelled', 'paused' ), true ) ) {
 				continue; // pending u otro estado transitorio: nada que sincronizar.
 			}
+			CN_Espejo_MP::observar( $id, $pid, $data, $presupuesto ); // 'log': solo registra; 'on': baja programada con gracia. Antes de gestionar_ciclo_sub: la baja con gracia va primero.
 			if ( 'authorized' !== $status && $modo_seguro ) {
 				$res['omitidas_modo_seguro']++;
 				$clave = 'cn_sync_ms_' . md5( $pid );
@@ -168,6 +170,7 @@ class CN_Sync {
 			CN_Webhook::gestionar_ciclo_sub( $status, $pid, $data ); // misma lógica que el webhook; los errores los registra ella.
 			$res['procesadas']++;
 		}
+		CN_Espejo_MP::cerrar_corrida();
 		// El cursor avanza SIEMPRE (lote incompleto = se llegó al final: la próxima corrida arranca de nuevo). Lo que falló
 		// no se repite por rotación sino por la cola.
 		update_option( 'cn_sync_mp_cursor', count( $filas ) < self::LOTE ? 0 : (int) end( $filas )->id );
