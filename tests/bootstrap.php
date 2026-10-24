@@ -346,6 +346,7 @@ require_once $cn_raiz . 'includes/class-cn-alta-mail.php';
 require_once $cn_raiz . 'includes/class-cn-vinculo-lote.php';
 require_once $cn_raiz . 'includes/class-cn-para-contactar.php';
 require_once $cn_raiz . 'includes/class-cn-espejo-mp.php';
+require_once $cn_raiz . 'includes/class-cn-espejo-auditoria.php';
 if ( file_exists( $cn_raiz . 'includes/class-cn-sync.php' ) ) {
 	require_once $cn_raiz . 'includes/class-cn-sync.php';
 }
