@@ -73,6 +73,71 @@ class CN_Espejo_MP {
 		}
 		return $total > count( $r['data']['results'] ) ? null : false; // lista incompleta: no se concluye "sin pago reciente".
 	}
+	/**
+	 * Decisión del espejo para UNA ficha con la respuesta de MP ya en mano. SOLO LECTURA: no encola, no escribe y no
+	 * loguea; el único consumo de presupuesto es la consulta de cobros (pago_reciente). La usan observar() y la
+	 * pantalla "Auditoría del espejo": una sola fuente de verdad.
+	 *
+	 * @return array{decision:string,codigo:string,motivo:string,status:string,baja_ts:?int,fin_ts:?int}
+	 *   decision: 'fuera_alcance' (sin sub / otra sub / sin plan / cancelada / trial), 'sin_cambios' (al_dia,
+	 *   baja_ya_programada, ficha_no_activa), 'revertir', 'programar', u 'omitida' (mp_ambiguo, sin_periodo,
+	 *   consulta_pagos_fallo, pago_reciente).
+	 */
+	public static function decidir( $f, $pid, $data, &$presupuesto ) {
+		$pid    = (string) $pid;
+		$status = is_array( $data ) && isset( $data['status'] ) && is_string( $data['status'] ) ? $data['status'] : '';
+		$r      = array( 'decision' => 'sin_cambios', 'codigo' => '', 'motivo' => '', 'status' => $status, 'baja_ts' => null, 'fin_ts' => null );
+		if ( ! in_array( $status, array( 'authorized', 'paused', 'cancelled' ), true ) || ! is_array( $data ) || ! isset( $data['id'] ) || (string) $data['id'] !== $pid ) {
+			return array( 'decision' => 'omitida', 'codigo' => 'mp_ambiguo', 'motivo' => 'respuesta de MP vacía, ambigua, en otro estado o de otra suscripción: no se hace nada' ) + $r;
+		}
+		if ( ! self::en_alcance( $f, $pid ) ) {
+			if ( ! is_object( $f ) || '' === (string) ( $f->preapproval_id ?? '' ) ) {
+				list( $c, $m ) = array( 'sin_sub', 'sin suscripción vinculada' );
+			} elseif ( (string) $f->preapproval_id !== $pid ) {
+				list( $c, $m ) = array( 'otra_sub', 'la ficha tiene vinculada otra suscripción' );
+			} elseif ( '' === (string) ( $f->plan ?? '' ) ) {
+				list( $c, $m ) = array( 'sin_plan', 'ficha sin plan (no la vinculó el sistema)' );
+			} elseif ( 'cancelada' === (string) $f->estado ) {
+				list( $c, $m ) = array( 'cancelada', 'ficha cancelada' );
+			} else {
+				list( $c, $m ) = array( 'trial', 'ficha en trial' );
+			}
+			return array( 'decision' => 'fuera_alcance', 'codigo' => $c, 'motivo' => $m ) + $r;
+		}
+		$baja = '' !== (string) ( $f->baja_en ?? '' );
+		if ( 'authorized' === $status ) {
+			if ( $baja ) {
+				return array( 'decision' => 'revertir', 'codigo' => 'revertir', 'motivo' => 'MP volvió a authorized dentro de la gracia' ) + $r;
+			}
+			return array( 'decision' => 'sin_cambios', 'codigo' => 'al_dia', 'motivo' => 'authorized en MP y sin baja programada' ) + $r;
+		}
+		if ( $baja ) {
+			return array( 'decision' => 'sin_cambios', 'codigo' => 'baja_ya_programada', 'motivo' => 'ya tiene una baja programada (idempotente)' ) + $r;
+		}
+		if ( 'activo' !== (string) $f->estado ) {
+			return array( 'decision' => 'sin_cambios', 'codigo' => 'ficha_no_activa', 'motivo' => 'la ficha no está en estado activo: no hay nada que espejar' ) + $r;
+		}
+		$npd = isset( $data['next_payment_date'] ) && is_string( $data['next_payment_date'] ) ? strtotime( $data['next_payment_date'] ) : false;
+		$fin = max( (int) self::ts_utc( $f->acceso_hasta ), (int) $npd ); // fin del período ya pagado: lo más tarde entre la base y MP.
+		if ( $fin <= 0 ) {
+			return array( 'decision' => 'omitida', 'codigo' => 'sin_periodo', 'motivo' => 'sin fecha de fin del período pagado: lo resuelve una persona' ) + $r;
+		}
+		$reciente = self::pago_reciente( $pid, $presupuesto );
+		if ( null === $reciente ) {
+			return array( 'decision' => 'omitida', 'codigo' => 'consulta_pagos_fallo', 'motivo' => 'no se pudieron consultar los cobros en MP: no se cambia nada, se reintenta' ) + $r;
+		}
+		if ( $reciente ) {
+			return array( 'decision' => 'omitida', 'codigo' => 'pago_reciente', 'motivo' => 'pago acreditado en los últimos ' . self::PAGO_RECIENTE_DIAS . ' días' ) + $r;
+		}
+		$baja_ts = max( $fin + self::GRACIA_DIAS * DAY_IN_SECONDS, time() + self::GRACIA_DIAS * DAY_IN_SECONDS );
+		return array(
+			'decision' => 'programar',
+			'codigo'   => 'programar',
+			'motivo'   => 'MP ' . $status . '; acceso hasta fin del período pagado + ' . self::GRACIA_DIAS . ' días',
+			'baja_ts'  => $baja_ts,
+			'fin_ts'   => $fin,
+		) + $r;
+	}
 	/** Lo llama el sync por cada ficha cuyo GET /preapproval/{id} salió bien (mismo presupuesto de pedidos). Nunca lanza ni escribe en miembros. */
 	public static function observar( $miembro_id, $pid, $data, &$presupuesto ) {
 		if ( 'off' === self::modo() ) {
@@ -83,7 +148,7 @@ class CN_Espejo_MP {
 			$pid    = (string) $pid;
 			$status = is_array( $data ) && isset( $data['status'] ) && is_string( $data['status'] ) ? $data['status'] : '';
 			if ( ! in_array( $status, array( 'authorized', 'paused', 'cancelled' ), true ) || ! isset( $data['id'] ) || (string) $data['id'] !== $pid ) {
-				return; // vacío, ambiguo, otro estado o de otra suscripción: no se hace nada.
+				return; // vacío, ambiguo, otro estado o de otra suscripción: no se hace nada (sin leer la base).
 			}
 			$f = $wpdb->get_row( $wpdb->prepare(
 				'SELECT id, estado, plan, preapproval_id, acceso_hasta, baja_en, fecha_fin_trial FROM ' . CN_DB::tabla( 'miembros' ) . ' WHERE id = %d',
@@ -92,44 +157,23 @@ class CN_Espejo_MP {
 			if ( '' !== (string) $wpdb->last_error ) {
 				throw new RuntimeException( 'error leyendo la ficha: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
 			}
-			if ( ! self::en_alcance( $f, $pid ) ) {
-				return;
+			$d    = self::decidir( $f, $pid, $data, $presupuesto );
+			$base = array( 'miembro_id' => is_object( $f ) ? (int) $f->id : (int) $miembro_id, 'preapproval_id' => $pid, 'status_mp' => $status );
+			if ( 'revertir' === $d['decision'] ) {
+				self::$cola[] = $base + array( 'accion' => 'revertir', 'de' => 'activo, con baja programada', 'a' => 'activo, sin baja', 'motivo' => $d['motivo'], 'baja_en' => (string) $f->baja_en );
+			} elseif ( 'programar' === $d['decision'] ) {
+				self::$cola[] = $base + array(
+					'accion'  => 'programar',
+					'de'      => 'activo, sin baja',
+					'a'       => 'activo, baja programada ' . gmdate( 'Y-m-d H:i', $d['baja_ts'] ) . ' UTC',
+					'motivo'  => $d['motivo'],
+					'baja_ts' => $d['baja_ts'],
+					'fin_ts'  => $d['fin_ts'],
+				);
+			} elseif ( 'omitida' === $d['decision'] && in_array( $d['codigo'], array( 'sin_periodo', 'consulta_pagos_fallo', 'pago_reciente' ), true ) ) {
+				self::omitida( $base, $d['codigo'], $d['motivo'] );
 			}
-			$base = array( 'miembro_id' => (int) $f->id, 'preapproval_id' => $pid, 'status_mp' => $status );
-			$baja = '' !== (string) ( $f->baja_en ?? '' );
-			if ( 'authorized' === $status ) {
-				if ( $baja ) {
-					self::$cola[] = $base + array( 'accion' => 'revertir', 'de' => 'activo, con baja programada', 'a' => 'activo, sin baja', 'motivo' => 'MP volvió a authorized dentro de la gracia', 'baja_en' => (string) $f->baja_en );
-				}
-				return;
-			}
-			if ( $baja || 'activo' !== (string) $f->estado ) {
-				return; // baja ya programada (idempotente) o ficha que no está activa: no hay nada que espejar.
-			}
-			$npd = isset( $data['next_payment_date'] ) && is_string( $data['next_payment_date'] ) ? strtotime( $data['next_payment_date'] ) : false;
-			$fin = max( (int) self::ts_utc( $f->acceso_hasta ), (int) $npd ); // fin del período ya pagado: lo más tarde entre la base y MP.
-			if ( $fin <= 0 ) {
-				self::omitida( $base, 'sin_periodo', 'sin fecha de fin del período pagado: lo resuelve una persona' );
-				return;
-			}
-			$reciente = self::pago_reciente( $pid, $presupuesto );
-			if ( null === $reciente ) {
-				self::omitida( $base, 'consulta_pagos_fallo', 'no se pudieron consultar los cobros en MP: no se cambia nada, se reintenta' );
-				return;
-			}
-			if ( $reciente ) {
-				self::omitida( $base, 'pago_reciente', 'pago acreditado en los últimos ' . self::PAGO_RECIENTE_DIAS . ' días' );
-				return;
-			}
-			$baja_ts      = max( $fin + self::GRACIA_DIAS * DAY_IN_SECONDS, time() + self::GRACIA_DIAS * DAY_IN_SECONDS );
-			self::$cola[] = $base + array(
-				'accion'  => 'programar',
-				'de'      => 'activo, sin baja',
-				'a'       => 'activo, baja programada ' . gmdate( 'Y-m-d H:i', $baja_ts ) . ' UTC',
-				'motivo'  => 'MP ' . $status . '; acceso hasta fin del período pagado + ' . self::GRACIA_DIAS . ' días',
-				'baja_ts' => $baja_ts,
-				'fin_ts'  => $fin,
-			);
+			// fuera_alcance, sin_cambios y mp_ambiguo: igual que siempre, nada que registrar en cada vuelta.
 		} catch ( Throwable $e ) {
 			self::error( 'observar', $e );
 		}
