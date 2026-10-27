@@ -30,6 +30,7 @@ require_once CN_PATH . 'includes/class-cn-vinculo-lote.php';
 require_once CN_PATH . 'includes/class-cn-para-contactar.php'; // pantalla "Para contactar" (solo lectura; se engancha sola).
 require_once CN_PATH . 'includes/class-cn-espejo-mp.php';
 require_once CN_PATH . 'includes/class-cn-espejo-auditoria.php'; // pantalla "Auditoría del espejo" (solo lectura; se engancha sola).
+require_once CN_PATH . 'includes/class-cn-panel-api.php'; // API REST de solo lectura para el panel de socias (n8n); apagada por defecto (cn_panel_api_activo).
 require_once CN_PATH . 'includes/class-cn-sync.php';
 require_once CN_PATH . 'includes/class-cn-shortcodes.php';
 require_once CN_PATH . 'includes/class-cn-admin.php';
