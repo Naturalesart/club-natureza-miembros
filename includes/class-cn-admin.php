@@ -1426,12 +1426,16 @@ class CN_Admin {
 			// Página de retorno de suscripciones por link directo ([cn_retorno_suscripcion]). Apagada por defecto.
 			update_option( 'cn_retorno_activo', isset( $_POST['cn_retorno_activo'] ) ? '1' : '0' );
 			update_option( CN_Retorno::OPT_WHATSAPP, preg_replace( '/\D+/', '', sanitize_text_field( wp_unslash( $_POST['cn_retorno_whatsapp'] ?? '' ) ) ) ); // solo dígitos
+			// API de solo lectura del panel de socias (CN_Panel_API). Apagada por defecto.
+			update_option( CN_Panel_API::OPT_ACTIVO, isset( $_POST['cn_panel_api_activo'] ) ? '1' : '0' );
 			update_option( 'cn_meta_capi_token', sanitize_text_field( wp_unslash( $_POST['cn_meta_capi_token'] ?? '' ) ) );
 			update_option( 'cn_google_drive_api_key', sanitize_text_field( wp_unslash( $_POST['cn_google_drive_api_key'] ?? '' ) ) );
 			update_option( 'cn_clase_especial_link', esc_url_raw( wp_unslash( $_POST['cn_clase_especial_link'] ?? '' ) ) );
 			update_option( 'cn_admin_alerta_email', sanitize_email( wp_unslash( $_POST['cn_admin_alerta_email'] ?? '' ) ) );
 			self::aviso( 'Configuración guardada.' );
 		}
+		$panel_token_nuevo = CN_Panel_API::procesar_generar_token(); // botón "Generar/rotar token": se muestra una sola vez.
+		$panel_activo      = CN_Panel_API::activo();
 		$token        = CN_MP::get_access_token();
 		$token_trial  = CN_MP::get_access_token_trial();
 		$precio       = CN_MP::get_precio_mensual();
@@ -1553,6 +1557,13 @@ class CN_Admin {
 						</td>
 					</tr>
 					<tr>
+						<th><label>Panel de socias (API de solo lectura)</label></th>
+						<td>
+							<label><input type="checkbox" name="cn_panel_api_activo" value="1" <?php checked( $panel_activo ); ?>> Activar <code>/wp-json/cn/v1/panel-datos</code> (requiere token, solo HTTPS)</label>
+							<p class="description">Apagado por defecto. Apagado, la dirección no existe (404). Solo lee datos; el token se genera más abajo.</p>
+						</td>
+					</tr>
+					<tr>
 						<th><label>Guarda del cron de trials (Mercado Pago)</label></th>
 						<td>
 							<label><input type="checkbox" name="cn_guarda_trial_mp" value="1" <?php checked( $guarda_trial_mp ); ?>> Antes de cancelar un trial vencido, mirar en Mercado Pago si ya tiene una suscripción</label>
@@ -1602,6 +1613,7 @@ class CN_Admin {
 				</table>
 				<?php submit_button( 'Guardar configuración', 'primary', 'cn_admin_guardar_config' ); ?>
 			</form>
+			<?php CN_Panel_API::bloque_config( $panel_token_nuevo ); ?>
 			<h2>Webhooks de Mercado Pago</h2>
 			<p>Suscripciones — pegá esta URL en la app de Suscripciones → Webhooks:</p>
 			<input type="text" readonly class="regular-text" style="width:100%;max-width:600px;" onclick="this.select();" value="<?php echo esc_url( CN_MP::webhook_url() ); ?>">

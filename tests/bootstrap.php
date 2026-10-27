@@ -185,6 +185,9 @@ function wp_salt( $s = 'auth' ) {
 function get_permalink( $id ) {
 	return 'https://naturalesart.com/?p=' . (int) $id;
 }
+function is_ssl() { // los tests lo prenden con $GLOBALS['cn_ssl'] = true (por defecto: HTTP).
+	return ! empty( $GLOBALS['cn_ssl'] );
+}
 function nocache_headers() {
 	$GLOBALS['cn_nocache'] = ( $GLOBALS['cn_nocache'] ?? 0 ) + 1;
 }
@@ -356,6 +359,7 @@ require_once $cn_raiz . 'includes/class-cn-colaboradora.php';
 require_once $cn_raiz . 'includes/class-cn-diag-pagador.php';
 require_once $cn_raiz . 'includes/class-cn-socias-revisar.php';
 require_once $cn_raiz . 'includes/class-cn-sin-vincular.php';
+require_once $cn_raiz . 'includes/class-cn-panel-api.php';
 require_once $cn_raiz . 'includes/class-cn-reemplazo.php';
 require_once $cn_raiz . 'includes/class-cn-reemplazo-auto.php';
 require_once $cn_raiz . 'includes/class-cn-extender-acceso.php';
