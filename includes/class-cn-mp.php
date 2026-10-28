@@ -297,7 +297,14 @@ class CN_MP {
 	// (null = "no sé", nunca "no hay resultados": quien llama no debe cambiar estado de nadie ante un null).
 	/** Una página de suscripciones por estado ('authorized', 'paused', 'cancelled'). */
 	public static function listar_preapprovals( $status, $offset = 0, $limit = 100 ) {
-		return self::get( '/preapproval/search?status=' . rawurlencode( (string) $status ) . '&limit=' . (int) $limit . '&offset=' . (int) $offset, self::get_access_token() );
+		$path = '/preapproval/search?status=' . rawurlencode( (string) $status ) . '&limit=' . (int) $limit . '&offset=' . (int) $offset;
+		if ( '1' !== (string) get_option( self::OPT_LISTAR_REINTENTOS, '1' ) ) {
+			return self::get( $path, self::get_access_token() ); // flag apagado: el comportamiento anterior (un solo intento).
+		}
+		// Con reintentos ante 429 (Retry-After o 2/4/8 s) y un presupuesto CHICO por página, porque también lo llaman pantallas del admin.
+		$pres = array( 'requests' => self::LISTAR_MAX_PEDIDOS, 'espera' => self::LISTAR_MAX_ESPERA_SEG, 'hasta' => time() + self::LISTAR_MAX_TIEMPO_SEG );
+		$r    = self::get_con_reintentos( $path, self::get_access_token(), $pres );
+		return ! empty( $r['ok'] ) && is_array( $r['data'] ) ? $r['data'] : null;
 	}
 	/** Suscripciones autorizadas de un email (quien llama igual compara payer_email: no se confía en el filtro). */
 	public static function buscar_preapprovals_por_email( $email ) {
@@ -387,6 +394,11 @@ class CN_MP {
 		}
 		return array( 'ok' => true, 'http' => $codigo, 'data' => $data );
 	}
+	/** Opción: '1' (por defecto) = los listados /preapproval/search reintentan ante 429; '0' = un solo intento, como antes. */
+	const OPT_LISTAR_REINTENTOS    = 'cn_listar_reintentos';
+	const LISTAR_MAX_PEDIDOS       = 4;  // por página: 1 + hasta 3 reintentos
+	const LISTAR_MAX_ESPERA_SEG    = 14; // espera total por página (2 + 4 + 8)
+	const LISTAR_MAX_TIEMPO_SEG    = 30;
 	// ---- Sync de 30 min: GET con reintentos ante 429 (solo lectura) ----
 	/** Reintentos máximos ante 429 por pedido (esperas de 2 s, 4 s, 8 s si MP no manda Retry-After). */
 	const REINTENTOS_429 = 3;
