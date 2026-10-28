@@ -53,6 +53,9 @@ lr_secuencia( array( $e429 ) );
 $l = CN_Vinculo::listar_authorized();
 t( 'listar_authorized: ok=false (quien llama no concluye nada)', false === $l['ok'] && array() === $l['items'] );
 lr_reset();
+lr_secuencia( array( 429 ) ); // 429 sin Retry-After: esperas 2 y 4 agotan el presupuesto de 6 s, el tercer reintento (8 s) ya no entra.
+t( 'sin Retry-After: a lo sumo 3 pedidos y ~6 s de espera por página', null === CN_MP::listar_preapprovals( 'authorized' ) && lr_pedidos() <= 3 && 1 === lr_logs( 'mp_api_error' ) );
+lr_reset();
 lr_secuencia( array( array( '__status' => 429, '__headers' => array( 'retry-after' => '25' ), '__body' => array() ) ) );
 t( 'Retry-After mayor que el presupuesto: no espera ni insiste (1 pedido)', null === CN_MP::listar_preapprovals( 'authorized' ) && 1 === lr_pedidos() );
 

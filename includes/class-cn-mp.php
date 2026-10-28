@@ -397,8 +397,8 @@ class CN_MP {
 	/** Opción: '1' (por defecto) = los listados /preapproval/search reintentan ante 429; '0' = un solo intento, como antes. */
 	const OPT_LISTAR_REINTENTOS    = 'cn_listar_reintentos';
 	const LISTAR_MAX_PEDIDOS       = 4;  // por página: 1 + hasta 3 reintentos
-	const LISTAR_MAX_ESPERA_SEG    = 14; // espera total por página (2 + 4 + 8)
-	const LISTAR_MAX_TIEMPO_SEG    = 30;
+	const LISTAR_MAX_ESPERA_SEG    = 6;  // espera total por página: corto a propósito, porque el sync encadena varias páginas y también lo llaman pantallas del admin.
+	const LISTAR_MAX_TIEMPO_SEG    = 20;
 	// ---- Sync de 30 min: GET con reintentos ante 429 (solo lectura) ----
 	/** Reintentos máximos ante 429 por pedido (esperas de 2 s, 4 s, 8 s si MP no manda Retry-After). */
 	const REINTENTOS_429 = 3;
