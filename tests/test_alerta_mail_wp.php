@@ -119,7 +119,7 @@ $w = $GLOBALS['wpdb'];
 t( 'no escribe nada fuera de mp_log (ni miembros ni sesiones) ni manda mails por wp_mail', ! $w->escrituras( 'cn_miembros' ) && ! $w->escrituras( 'sesiones' ) && ! $w->transaccion() && ! array_filter( $w->log, function ( $l ) {
 	return 'insert' === $l[0] && false === strpos( $l[1], 'mp_log' );
 } ) && ! $GLOBALS['cn_mails'] );
-t( 'solo toca sus dos opciones', array( CN_Alertas::OPT_WPMAIL_FALLOS, CN_Alertas::OPT_MAIL_WPMAIL ) === array_keys( $GLOBALS['cn_opts'] ) );
+t( 'solo toca sus opciones (fallos, último mail y marca global de último envío)', array( CN_Alertas::OPT_WPMAIL_FALLOS, CN_Alertas::OPT_MAIL_WPMAIL, CN_Alertas::OPT_ULTIMO_ENVIO ) === array_keys( $GLOBALS['cn_opts'] ) );
 t( 'no consulta a Mercado Pago ni hace GET alguno', ! array_filter( $GLOBALS['cn_http_log'], function ( $c ) {
 	return 'POST' !== $c['metodo'] || false === strpos( $c['url'], 'club-trial-alerta' );
 } ) );
