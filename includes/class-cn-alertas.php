@@ -276,7 +276,9 @@ class CN_Alertas {
 			CN_Webhook::registrar_log_mp( 'sub_error', array( 'paso' => 'alertas_graves', 'mensaje' => mb_substr( $e->getMessage(), 0, 300 ) ) );
 		}
 		try {
-			CN_Conciliacion::correr(); // D1: modo 'log' por defecto (solo mp_log); solo GET a MP.
+			if ( class_exists( 'CN_Conciliacion' ) ) { // el guard acompaña al file_exists del bootstrap: sin la clase (deploy a medias) no se rompe el cron.
+				CN_Conciliacion::correr(); // D1: modo 'log' por defecto (solo mp_log); solo GET a MP.
+			}
 		} catch ( Throwable $e ) {
 			CN_Webhook::registrar_log_mp( 'sub_error', array( 'paso' => 'conciliacion', 'mensaje' => mb_substr( $e->getMessage(), 0, 300 ) ) );
 		}
