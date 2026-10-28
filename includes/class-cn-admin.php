@@ -1428,6 +1428,7 @@ class CN_Admin {
 			update_option( CN_Retorno::OPT_WHATSAPP, preg_replace( '/\D+/', '', sanitize_text_field( wp_unslash( $_POST['cn_retorno_whatsapp'] ?? '' ) ) ) ); // solo dígitos
 			// API de solo lectura del panel de socias (CN_Panel_API). Apagada por defecto.
 			update_option( CN_Panel_API::OPT_ACTIVO, isset( $_POST['cn_panel_api_activo'] ) ? '1' : '0' );
+			update_option( CN_Panel_API::OPT_USO, isset( $_POST['cn_panel_uso_activo'] ) ? '1' : '0' );
 			update_option( 'cn_meta_capi_token', sanitize_text_field( wp_unslash( $_POST['cn_meta_capi_token'] ?? '' ) ) );
 			update_option( 'cn_google_drive_api_key', sanitize_text_field( wp_unslash( $_POST['cn_google_drive_api_key'] ?? '' ) ) );
 			update_option( 'cn_clase_especial_link', esc_url_raw( wp_unslash( $_POST['cn_clase_especial_link'] ?? '' ) ) );
@@ -1561,6 +1562,8 @@ class CN_Admin {
 						<td>
 							<label><input type="checkbox" name="cn_panel_api_activo" value="1" <?php checked( $panel_activo ); ?>> Activar <code>/wp-json/cn/v1/panel-datos</code> (requiere token, solo HTTPS)</label>
 							<p class="description">Apagado por defecto. Apagado, la dirección no existe (404). Solo lee datos; el token se genera más abajo.</p>
+							<label><input type="checkbox" name="cn_panel_uso_activo" value="1" <?php checked( CN_Panel_API::uso_activo() ); ?>> Incluir email completo y uso del área de socias (último login aproximado, contenidos vistos, última actividad)</label>
+							<p class="description">Apagado por defecto. Solo lectura, uso interno; sin celulares nuevos.</p>
 						</td>
 					</tr>
 					<tr>
