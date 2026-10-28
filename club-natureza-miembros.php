@@ -22,6 +22,7 @@ require_once CN_PATH . 'includes/class-cn-mp.php';
 require_once CN_PATH . 'includes/class-cn-meta-capi.php';
 require_once CN_PATH . 'includes/class-cn-webhook.php';
 require_once CN_PATH . 'includes/class-cn-alertas.php';
+require_once CN_PATH . 'includes/class-cn-conciliacion.php'; // D1: conciliación diaria MP<->fichas; modo 'log' por defecto (flag cn_conciliacion_modo).
 require_once CN_PATH . 'includes/class-cn-vinculo.php';
 require_once CN_PATH . 'includes/class-cn-vinculo-manual.php';
 require_once CN_PATH . 'includes/class-cn-retorno.php';

@@ -342,6 +342,7 @@ require_once $cn_raiz . 'includes/class-cn-db.php';
 require_once $cn_raiz . 'includes/class-cn-mp.php';
 require_once $cn_raiz . 'includes/class-cn-webhook.php';
 require_once $cn_raiz . 'includes/class-cn-alertas.php';
+require_once $cn_raiz . 'includes/class-cn-conciliacion.php';
 require_once $cn_raiz . 'includes/class-cn-vinculo.php';
 require_once $cn_raiz . 'includes/class-cn-vinculo-manual.php';
 require_once $cn_raiz . 'includes/class-cn-retorno.php';

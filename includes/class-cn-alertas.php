@@ -29,6 +29,8 @@ class CN_Alertas {
 	const OPT_MAIL_TOKEN     = 'cn_alerta_token_ultimo_mail';
 	const OPT_CASOS          = 'cn_casos_sin_acceso';        // clave => array( motivo, tipo, id, desde )
 	const OPT_MAIL_CASOS     = 'cn_alerta_casos_ultimo_mail';
+	const OPT_ULTIMO_ENVIO   = 'cn_alertas_ultimo_envio';    // timestamp del último mail de cualquier alerta (tope global de 1 por hora para las alertas nuevas)
+	const ENTRE_MAILS_SEG    = 3600;
 	const MAX_CASOS          = 500;
 	const SYNC_MAX_SEG       = 86400; // 24 hs sin corrida exitosa
 	const CASO_MAX_SEG       = 259200; // 72 hs sin resolverse
@@ -66,7 +68,22 @@ class CN_Alertas {
 				'fecha'   => current_time( 'mysql', true ),
 			) ),
 		) );
+		update_option( self::OPT_ULTIMO_ENVIO, time(), false );
 		CN_Webhook::registrar_log_mp( 'alerta_grave_enviada', array( 'motivo' => $motivo, 'asunto' => $asunto ) );
+	}
+
+	/**
+	 * Como enviar(), pero respeta el tope de 1 mail por hora entre TODAS las alertas y el período propio de la alerta
+	 * ($opt_propia guarda cuándo salió su último mail). Si no corresponde mandar, deja rastro y devuelve false.
+	 */
+	public static function enviar_limitado( $motivo, $asunto, $cuerpo, $detalle, $opt_propia ) {
+		if ( time() - (int) get_option( self::OPT_ULTIMO_ENVIO, 0 ) < self::ENTRE_MAILS_SEG ) {
+			CN_Webhook::registrar_log_mp( 'alerta_grave_demorada', array( 'motivo' => $motivo, 'razon' => 'ya salió otro mail en la última hora' ) );
+			return false;
+		}
+		update_option( $opt_propia, time(), false );
+		self::enviar( $motivo, $asunto, $cuerpo, $detalle );
+		return true;
 	}
 
 	protected static function hace( $ts ) {
@@ -257,6 +274,11 @@ class CN_Alertas {
 			self::chequear_casos();
 		} catch ( Throwable $e ) {
 			CN_Webhook::registrar_log_mp( 'sub_error', array( 'paso' => 'alertas_graves', 'mensaje' => mb_substr( $e->getMessage(), 0, 300 ) ) );
+		}
+		try {
+			CN_Conciliacion::correr(); // D1: modo 'log' por defecto (solo mp_log); solo GET a MP.
+		} catch ( Throwable $e ) {
+			CN_Webhook::registrar_log_mp( 'sub_error', array( 'paso' => 'conciliacion', 'mensaje' => mb_substr( $e->getMessage(), 0, 300 ) ) );
 		}
 	}
 	// ======================================================================
