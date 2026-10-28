@@ -158,3 +158,54 @@ t( 'el token nuevo funciona y el viejo ya no', 403 === CN_Panel_API::manejar( pa
 t( 'el token no queda en mp_log ni en ninguna opción', array() === $w->log && false === strpos( json_encode( $GLOBALS['cn_opts'] ), $tk ) );
 $_POST = array();
 t( 'sin POST no genera nada', null === CN_Panel_API::procesar_generar_token() );
+
+seccion( 'Panel API: campos extendidos (email completo + uso), apagados por defecto' );
+function pa_uso_base( $w ) {
+	$w->on( '/FROM wp_cn_miembros\s+WHERE estado IN/', array(
+		pa_ficha( 1, array( 'preapproval_id' => 'abc123', 'plan' => 'full' ) ),
+		pa_ficha( 2, array( 'email' => 'sinarroba' ) ),
+		pa_ficha( 3, array( 'fecha_fin_trial' => '2026-10-20 00:00:00', 'email' => 'Trial@Gmail.com' ) ),
+	) );
+}
+$w = pa_preparar();
+pa_uso_base( $w );
+$j = json_decode( json_encode( CN_Panel_API::manejar( pa_req( 'tok-bueno' ) )->data ), true );
+t( 'flag de uso apagado: sin email completo ni bloque uso, extendido=false', false === $j['extendido'] && ! isset( $j['socias'][0]['email'] ) && ! isset( $j['socias'][0]['uso'] ) );
+t( 'flag apagado: no consulta sesiones, vistos ni progreso', ! array_filter( $w->consultas, function ( $q ) {
+	return preg_match( '/wp_cn_(sesiones|vistos|progreso)/', $q );
+} ) );
+t( 'flag apagado: ultimo_acceso sigue en null', null === $j['socias'][0]['ultimo_acceso'] );
+
+$w = pa_preparar();
+update_option( 'cn_panel_uso_activo', '1' );
+pa_uso_base( $w );
+$exp = gmdate( 'Y-m-d H:i:s', time() + 100 * 86400 ); // login hace 80 días (sesión de 180)
+$w->on( '/FROM wp_cn_sesiones WHERE miembro_id IN/', array( cn_fila( array( 'miembro_id' => 1, 'expira' => $exp ) ), cn_fila( array( 'miembro_id' => 3, 'expira' => gmdate( 'Y-m-d H:i:s', time() - 86400 ) ) ) ) );
+$w->on( '/FROM wp_cn_vistos WHERE miembro_id IN/', array( cn_fila( array( 'miembro_id' => 1, 'n' => '7', 'ultima' => '2026-10-20 15:00:00' ) ) ) );
+$w->on( '/FROM wp_cn_progreso WHERE miembro_id IN/', array( cn_fila( array( 'miembro_id' => 1, 'curso_id' => 4, 'contenido_id' => 22, 'actualizado' => '2026-10-20 15:00:00' ) ) ) );
+$r = CN_Panel_API::manejar( pa_req( 'tok-bueno' ) );
+$j = json_decode( json_encode( $r->data ), true );
+$u = $j['socias'][0]['uso'];
+t( 'extendido=true y email completo en las fichas con email válido', true === $j['extendido'] && 'juana@gmail.com' === $j['socias'][0]['email'] && 'Trial@Gmail.com' === $j['socias'][2]['email'] );
+t( 'email sin arroba: null', null === $j['socias'][1]['email'] );
+t( 'sigue estando el email enmascarado (compatibilidad)', 'j***@gmail.com' === $j['socias'][0]['email_enmascarado'] );
+t( 'uso: contenidos vistos, último visto y última actividad en ISO', 7 === $u['contenidos_vistos'] && '2026-10-20T15:00:00Z' === $u['ultimo_visto'] && '2026-10-20T15:00:00Z' === $u['ultima_actividad'] && 4 === $u['ultimo_curso_id'] && 22 === $u['ultimo_contenido_id'] );
+t( 'uso: sesión abierta y último login aproximado = expira - 180 días', true === $u['sesion_abierta'] && gmdate( 'Y-m-d\TH:i:s\Z', strtotime( $exp . ' UTC' ) - 180 * 86400 ) === $u['ultimo_login_aprox'] );
+t( 'sesión vencida: sesion_abierta=false (con fecha aproximada)', false === $j['socias'][2]['uso']['sesion_abierta'] && null !== $j['socias'][2]['uso']['ultimo_login_aprox'] );
+t( 'sin sesión, sin vistos y sin progreso (la consulta anduvo): false / 0 / null', false === $j['socias'][1]['uso']['sesion_abierta'] && 0 === $j['socias'][1]['uso']['contenidos_vistos'] && null === $j['socias'][1]['uso']['ultima_actividad'] && null === $j['socias'][1]['uso']['ultimo_login_aprox'] );
+t( 'tres consultas agrupadas en total (no una por socia)', 3 === count( array_filter( $w->consultas, function ( $q ) {
+	return preg_match( '/FROM wp_cn_(sesiones|vistos|progreso) WHERE miembro_id IN/', $q );
+} ) ) );
+t( 'cero escrituras en la base (solo el transient del rate limit)', array() === $w->log );
+$json = json_encode( $j );
+t( 'el bloque uso tiene solo las 7 claves previstas (sin celular ni nombre) y el JSON no lleva el token', array( 'contenidos_vistos', 'sesion_abierta', 'ultima_actividad', 'ultimo_contenido_id', 'ultimo_curso_id', 'ultimo_login_aprox', 'ultimo_visto' ) === ( function ( $k ) { sort( $k ); return $k; } )( array_keys( $u ) ) && false === strpos( $json, 'tok-bueno' ) );
+
+$w = pa_preparar();
+update_option( 'cn_panel_uso_activo', '1' );
+pa_uso_base( $w );
+$w->on( '/FROM wp_cn_vistos WHERE miembro_id IN/', function () use ( $w ) {
+	$w->last_error = 'Table doesn\'t exist';
+	return array();
+} );
+$j = json_decode( json_encode( CN_Panel_API::manejar( pa_req( 'tok-bueno' ) )->data ), true );
+t( 'si falla una consulta: ese campo queda en null (no 0) y el resto sigue', 200 === 200 && null === $j['socias'][0]['uso']['contenidos_vistos'] && false === $j['socias'][0]['uso']['sesion_abierta'] );

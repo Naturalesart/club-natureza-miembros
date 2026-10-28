@@ -11,11 +11,14 @@ if ( ! defined( 'ABSPATH' ) ) exit;
  *   Todo lo demás reutiliza lo que ya existe (CN_Webhook::listar_avisos, CN_Retorno::OPT_PENDIENTES, el caché de CN_Sin_Vincular, CN_Alta_Mail::modo,
  *   CN_Espejo_MP::modo, las opciones del sync). No consulta Mercado Pago, no usa los métodos que escriben (p. ej. pendientes_vigentes y
  *   CN_Sin_Vincular::consultar guardan opciones/transients) y no agrega tracking nuevo: lo que no existe en la base va en null.
+ * - Campos extendidos (opción cn_panel_uso_activo, apagada por defecto): email completo de la ficha y bloque `uso` por socia (último login
+ *   aproximado, contenidos vistos, última actividad). Solo SELECT; con el flag apagado la respuesta no cambia.
  * - Sin migraciones. Quitarlo = borrar el require_once del bootstrap y este archivo.
  */
 class CN_Panel_API {
 	const OPT_ACTIVO     = 'cn_panel_api_activo';
 	const OPT_TOKEN_HASH = 'cn_panel_token_hash';
+	const OPT_USO        = 'cn_panel_uso_activo'; // '0' por defecto: con el flag apagado la respuesta es idéntica a la de antes (sin email completo ni uso).
 	const MAX_SOCIAS     = 600;
 	const MAX_POR_MIN    = 30;
 	const MAX_SIN_FICHA  = 50;
@@ -29,6 +32,11 @@ class CN_Panel_API {
 
 	public static function activo() {
 		return '1' === (string) get_option( self::OPT_ACTIVO, '0' );
+	}
+
+	/** Campos extendidos de solo lectura (email completo y uso del área de socias). Apagado por defecto. */
+	public static function uso_activo() {
+		return '1' === (string) get_option( self::OPT_USO, '0' );
 	}
 
 	/** Con el flag apagado no se registra nada: la ruta no existe (404 de WordPress). */
@@ -99,6 +107,7 @@ class CN_Panel_API {
 		$s     = self::socias();
 		return array(
 			'generado_en'      => gmdate( 'Y-m-d\TH:i:s\Z', $ahora ),
+			'extendido'        => self::uso_activo(),
 			'socias'           => $s['lista'],
 			'socias_truncadas' => $s['truncadas'],
 			'alertas'          => self::alertas( $ahora ),
@@ -160,6 +169,10 @@ class CN_Panel_API {
 		$rows      = is_array( $rows ) ? $rows : array();
 		$truncadas = count( $rows ) > self::MAX_SOCIAS;
 		$lista     = array();
+		$ext       = self::uso_activo();
+		$uso       = $ext ? self::uso( array_map( function ( $f ) {
+			return (int) $f->id;
+		}, array_slice( $rows, 0, self::MAX_SOCIAS ) ) ) : array();
 		foreach ( array_slice( $rows, 0, self::MAX_SOCIAS ) as $f ) {
 			$pid     = trim( (string) $f->preapproval_id );
 			$lista[] = array(
@@ -177,8 +190,85 @@ class CN_Panel_API {
 				'email_enmascarado' => self::email_enmascarado( $f->email ),
 				'ultimo_acceso'     => null, // no existe en la base: wp_cn_sesiones solo guarda la expiración y se borra al cerrar sesión.
 			);
+			if ( $ext ) { // Fase 0, paso 4: para cruzar trial -> suscripción por email y medir el uso del trial. Solo lectura.
+				$i                      = count( $lista ) - 1;
+				$mail                   = trim( (string) $f->email );
+				$lista[ $i ]['email']   = '' !== $mail && false !== strpos( $mail, '@' ) ? $mail : null; // uso interno autorizado por Leandro; solo con token y HTTPS.
+				$lista[ $i ]['uso']     = isset( $uso[ (int) $f->id ] ) ? $uso[ (int) $f->id ] : self::uso_vacio();
+			}
 		}
 		return array( 'lista' => $lista, 'truncadas' => $truncadas );
+	}
+
+	// ---------------------------------------------------------------- uso del área de socias (solo si cn_panel_uso_activo = '1')
+	protected static function uso_vacio() {
+		return array( 'ultimo_login_aprox' => null, 'sesion_abierta' => null, 'contenidos_vistos' => null, 'ultimo_visto' => null, 'ultima_actividad' => null, 'ultimo_curso_id' => null, 'ultimo_contenido_id' => null );
+	}
+
+	/**
+	 * Uso por ficha, con TRES consultas agrupadas (solo SELECT) sobre las tablas que ya llena el área de socias:
+	 *  - wp_cn_sesiones: guarda solo la expiración (login + CN_Auth::SESSION_DIAS) y se borra al cerrar sesión, así que el último login es
+	 *    aproximado (MAX(expira) - SESSION_DIAS) y queda en null si la socia cerró sesión. No es "última visita".
+	 *  - wp_cn_vistos:   contenidos marcados como vistos (cantidad y fecha del último).
+	 *  - wp_cn_progreso: el último contenido abierto (una fila por socia) y cuándo.
+	 * Si una consulta falla, sus campos quedan en null (nunca se inventa un 0). Sin celulares ni nombres.
+	 *
+	 * @return array<int,array> miembro_id => campos de uso
+	 */
+	protected static function uso( $ids ) {
+		global $wpdb;
+		$ids = array_values( array_unique( array_filter( array_map( 'intval', $ids ) ) ) );
+		$out = array();
+		if ( ! $ids ) {
+			return $out;
+		}
+		foreach ( $ids as $id ) {
+			$out[ $id ] = self::uso_vacio();
+		}
+		$in  = implode( ',', array_fill( 0, count( $ids ), '%d' ) );
+		$ahora = time();
+
+		$rows = $wpdb->get_results( $wpdb->prepare( 'SELECT miembro_id, MAX(expira) AS expira FROM ' . CN_DB::tabla( 'sesiones' ) . " WHERE miembro_id IN ({$in}) GROUP BY miembro_id", $ids ) );
+		if ( '' === (string) $wpdb->last_error && is_array( $rows ) ) {
+			foreach ( $out as $id => $_ ) {
+				$out[ $id ]['sesion_abierta'] = false; // la consulta anduvo: sin fila = sin sesión.
+			}
+			foreach ( $rows as $r ) {
+				$ts = strtotime( (string) $r->expira . ' UTC' );
+				if ( isset( $out[ (int) $r->miembro_id ] ) && false !== $ts ) {
+					$out[ (int) $r->miembro_id ]['sesion_abierta']     = $ts > $ahora;
+					$out[ (int) $r->miembro_id ]['ultimo_login_aprox'] = gmdate( 'Y-m-d\TH:i:s\Z', $ts - CN_Auth::SESSION_DIAS * DAY_IN_SECONDS );
+				}
+			}
+		}
+		$wpdb->last_error = '';
+
+		$rows = $wpdb->get_results( $wpdb->prepare( 'SELECT miembro_id, COUNT(*) AS n, MAX(fecha) AS ultima FROM ' . CN_DB::tabla( 'vistos' ) . " WHERE miembro_id IN ({$in}) GROUP BY miembro_id", $ids ) );
+		if ( '' === (string) $wpdb->last_error && is_array( $rows ) ) {
+			foreach ( $out as $id => $_ ) {
+				$out[ $id ]['contenidos_vistos'] = 0;
+			}
+			foreach ( $rows as $r ) {
+				if ( isset( $out[ (int) $r->miembro_id ] ) ) {
+					$out[ (int) $r->miembro_id ]['contenidos_vistos'] = (int) $r->n;
+					$out[ (int) $r->miembro_id ]['ultimo_visto']      = self::iso( $r->ultima );
+				}
+			}
+		}
+		$wpdb->last_error = '';
+
+		$rows = $wpdb->get_results( $wpdb->prepare( 'SELECT miembro_id, curso_id, contenido_id, actualizado FROM ' . CN_DB::tabla( 'progreso' ) . " WHERE miembro_id IN ({$in})", $ids ) );
+		if ( '' === (string) $wpdb->last_error && is_array( $rows ) ) {
+			foreach ( $rows as $r ) {
+				if ( isset( $out[ (int) $r->miembro_id ] ) ) {
+					$out[ (int) $r->miembro_id ]['ultima_actividad']    = self::iso( $r->actualizado );
+					$out[ (int) $r->miembro_id ]['ultimo_curso_id']     = (int) $r->curso_id;
+					$out[ (int) $r->miembro_id ]['ultimo_contenido_id'] = (int) $r->contenido_id;
+				}
+			}
+		}
+		$wpdb->last_error = '';
+		return $out;
 	}
 
 	// ---------------------------------------------------------------- alertas
