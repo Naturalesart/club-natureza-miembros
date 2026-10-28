@@ -13,6 +13,8 @@ if ( ! defined( 'ABSPATH' ) ) exit;
  *   CN_Sin_Vincular::consultar guardan opciones/transients) y no agrega tracking nuevo: lo que no existe en la base va en null.
  * - Campos extendidos (opción cn_panel_uso_activo, apagada por defecto): email completo de la ficha y bloque `uso` por socia (último login
  *   aproximado, contenidos vistos, última actividad). Solo SELECT; con el flag apagado la respuesta no cambia.
+ * - Anti-caché: todas las respuestas (200 y errores) llevan Cache-Control: no-store y X-LiteSpeed-Cache-Control: no-cache. Sin el segundo, LiteSpeed
+ *   (con "Cache REST API" activo) guardaba la respuesta autenticada y la servía a pedidos sin token (incidente del 28/10/2026).
  * - Sin migraciones. Quitarlo = borrar el require_once del bootstrap y este archivo.
  */
 class CN_Panel_API {
@@ -55,6 +57,7 @@ class CN_Panel_API {
 	protected static function responder( $datos, $status = 200, $extra = array() ) {
 		$r = new WP_REST_Response( $datos, $status );
 		$r->header( 'Cache-Control', 'no-store' );
+		$r->header( 'X-LiteSpeed-Cache-Control', 'no-cache' ); // LiteSpeed ignora Cache-Control en la REST API: sin esto guarda la respuesta y se la sirve a cualquiera sin token.
 		foreach ( $extra as $k => $v ) {
 			$r->header( $k, $v );
 		}

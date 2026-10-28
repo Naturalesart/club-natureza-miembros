@@ -209,3 +209,25 @@ $w->on( '/FROM wp_cn_vistos WHERE miembro_id IN/', function () use ( $w ) {
 } );
 $j = json_decode( json_encode( CN_Panel_API::manejar( pa_req( 'tok-bueno' ) )->data ), true );
 t( 'si falla una consulta: ese campo queda en null (no 0) y el resto sigue', 200 === 200 && null === $j['socias'][0]['uso']['contenidos_vistos'] && false === $j['socias'][0]['uso']['sesion_abierta'] );
+
+seccion( 'Panel API: nunca se guarda en caché (LiteSpeed)' );
+$w = pa_preparar();
+$w->on( '/FROM wp_cn_miembros\s+WHERE estado IN/', array( pa_ficha( 1 ) ) );
+$nc = function ( $r ) {
+	return 'no-cache' === ( $r->headers['X-LiteSpeed-Cache-Control'] ?? '' ) && 'no-store' === ( $r->headers['Cache-Control'] ?? '' );
+};
+t( '200 con token: X-LiteSpeed-Cache-Control no-cache y no-store', $nc( CN_Panel_API::manejar( pa_req( 'tok-bueno' ) ) ) );
+t( '401 sin token: también no-cache', $nc( CN_Panel_API::manejar( pa_req() ) ) );
+t( '403 token malo: también no-cache', $nc( CN_Panel_API::manejar( pa_req( 'otro' ) ) ) );
+$GLOBALS['cn_ssl'] = false;
+t( '403 sin HTTPS: también no-cache', $nc( CN_Panel_API::manejar( pa_req( 'tok-bueno' ) ) ) );
+$GLOBALS['cn_ssl'] = true;
+$w = pa_preparar();
+$w->on( '/FROM wp_cn_miembros\s+WHERE estado IN/', function () {
+	throw new RuntimeException( 'boom' );
+} );
+t( '500 interno: también no-cache', $nc( CN_Panel_API::manejar( pa_req( 'tok-bueno' ) ) ) );
+for ( $i = 0; $i < 31; $i++ ) {
+	$r = CN_Panel_API::manejar( pa_req( 'tok-bueno' ) );
+}
+t( '429 rate limit: también no-cache', 429 === $r->status && $nc( $r ) );
