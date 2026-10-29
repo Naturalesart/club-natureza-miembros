@@ -26,6 +26,7 @@ class CN_Mail_Carta {
 	const TINTA     = '#33302A'; // cuerpo (alto contraste sobre crema)
 	const TERRACOTA = '#A9502E'; // botón (texto blanco)
 	const LINEA_SIN_CARGO = 'Nunca se te cobra nada de forma automática.';
+	const LINEA_SUSCRIPCION = 'Se cobra mes a mes en Mercado Pago. Cancelás cuando quieras.';
 	// Baja en un clic: mailto con asunto ya cargado (no hay página de baja todavía).
 	const BAJA_MAILTO = 'mailto:naturalesartcursos@gmail.com?subject=BAJA%20de%20mails';
 
@@ -40,6 +41,9 @@ class CN_Mail_Carta {
 	 *  - boton       (array( 'texto' => ..., 'url' => ... )) — en primera persona; la flecha se agrega sola
 	 *  - posdata     (opcional, string) — párrafo corto después del botón
 	 *  - preheader   (opcional, string) — texto de vista previa del cliente de mail
+	 *  - cobro       (opcional: 'trial' | 'suscripcion', por defecto 'suscripcion') — línea fija bajo el botón.
+	 *                'trial' = "Nunca se te cobra…" (solo mails del trial, que no cobran);
+	 *                'suscripcion' = "Se cobra mes a mes…" (mails que venden la suscripción, que sí se cobra).
 	 */
 	public static function armar( $args ) {
 		$titulo    = isset( $args['titulo'] ) ? (string) $args['titulo'] : '';
@@ -49,6 +53,7 @@ class CN_Mail_Carta {
 		$boton     = isset( $args['boton'] ) && is_array( $args['boton'] ) ? $args['boton'] : array( 'texto' => '', 'url' => '' );
 		$posdata   = isset( $args['posdata'] ) ? (string) $args['posdata'] : '';
 		$preheader = isset( $args['preheader'] ) ? (string) $args['preheader'] : '';
+		$linea     = ( isset( $args['cobro'] ) && 'trial' === $args['cobro'] ) ? self::LINEA_SIN_CARGO : self::LINEA_SUSCRIPCION;
 		$btn_texto = rtrim( (string) $boton['texto'] );
 		if ( '' !== $btn_texto && false === strpos( $btn_texto, '→' ) ) {
 			$btn_texto .= ' →';
@@ -111,7 +116,7 @@ class CN_Mail_Carta {
 			$h .= '<a href="' . esc_url( $btn_url ) . '" style="display:block;padding:15px 12px;font-family:Arial,Helvetica,sans-serif;font-size:17px;font-weight:bold;line-height:1.2;color:#FFFFFF;text-decoration:none;">' . str_replace( ' →', "\xC2\xA0→", esc_html( $btn_texto ) ) . '</a>'; // espacio duro antes de la flecha: si el texto se parte en el celular, la flecha viaja con la última palabra y no queda sola.
 			$h .= '</td></tr></table></td></tr>';
 			// Línea fija debajo del botón.
-			$h .= '<tr><td align="center" class="cn-suave" style="padding:0 0 22px;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#6E6757;">' . esc_html( self::LINEA_SIN_CARGO ) . '</td></tr>';
+			$h .= '<tr><td align="center" class="cn-suave" style="padding:0 0 22px;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#6E6757;">' . esc_html( $linea ) . '</td></tr>';
 		}
 
 		if ( '' !== $posdata ) {
@@ -147,7 +152,7 @@ class CN_Mail_Carta {
 		}
 		if ( '' !== $btn_texto && '' !== $btn_url ) {
 			$t[] = $btn_texto . ' ' . $btn_url;
-			$t[] = self::LINEA_SIN_CARGO;
+			$t[] = $linea;
 			$t[] = '';
 		}
 		if ( '' !== $posdata ) {
@@ -180,7 +185,8 @@ class CN_Mail_Carta {
 				array( 'etiqueta' => 'Contraseña (tu celular)', 'valor' => $celular ),
 			),
 			'boton'     => array( 'texto' => 'Entro a mi primera clase', 'url' => $login_url ),
-			'posdata'   => 'Si algo no te sale o no podés entrar, respondé este mail o escribinos por WhatsApp y te ayudamos enseguida.',
+			'cobro'     => 'trial',
+			'posdata'   => 'Si algo no te sale o no podés entrar, respondé este mail y te ayudamos enseguida.',
 		) );
 		$m['asunto'] = 'Bienvenida al Club Natureza 🌿 Tu primera clase te espera';
 		return $m;
