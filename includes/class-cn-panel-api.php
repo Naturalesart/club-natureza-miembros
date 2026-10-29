@@ -205,14 +205,14 @@ class CN_Panel_API {
 
 	// ---------------------------------------------------------------- uso del área de socias (solo si cn_panel_uso_activo = '1')
 	protected static function uso_vacio() {
-		return array( 'ultimo_login_aprox' => null, 'sesion_abierta' => null, 'contenidos_vistos' => null, 'ultimo_visto' => null, 'ultima_actividad' => null, 'ultimo_curso_id' => null, 'ultimo_contenido_id' => null );
+		return array( 'ultimo_login_aprox' => null, 'sesion_abierta' => null, 'contenidos_vistos' => null, 'primer_visto' => null, 'ultimo_visto' => null, 'ultima_actividad' => null, 'ultimo_curso_id' => null, 'ultimo_contenido_id' => null );
 	}
 
 	/**
 	 * Uso por ficha, con TRES consultas agrupadas (solo SELECT) sobre las tablas que ya llena el área de socias:
 	 *  - wp_cn_sesiones: guarda solo la expiración (login + CN_Auth::SESSION_DIAS) y se borra al cerrar sesión, así que el último login es
 	 *    aproximado (MAX(expira) - SESSION_DIAS) y queda en null si la socia cerró sesión. No es "última visita".
-	 *  - wp_cn_vistos:   contenidos marcados como vistos (cantidad y fecha del último).
+	 *  - wp_cn_vistos:   contenidos marcados como vistos (cantidad, fecha del primero y del último).
 	 *  - wp_cn_progreso: el último contenido abierto (una fila por socia) y cuándo.
 	 * Si una consulta falla, sus campos quedan en null (nunca se inventa un 0). Sin celulares ni nombres.
 	 *
@@ -246,7 +246,7 @@ class CN_Panel_API {
 		}
 		$wpdb->last_error = '';
 
-		$rows = $wpdb->get_results( $wpdb->prepare( 'SELECT miembro_id, COUNT(*) AS n, MAX(fecha) AS ultima FROM ' . CN_DB::tabla( 'vistos' ) . " WHERE miembro_id IN ({$in}) GROUP BY miembro_id", $ids ) );
+		$rows = $wpdb->get_results( $wpdb->prepare( 'SELECT miembro_id, COUNT(*) AS n, MIN(fecha) AS primera, MAX(fecha) AS ultima FROM ' . CN_DB::tabla( 'vistos' ) . " WHERE miembro_id IN ({$in}) GROUP BY miembro_id", $ids ) );
 		if ( '' === (string) $wpdb->last_error && is_array( $rows ) ) {
 			foreach ( $out as $id => $_ ) {
 				$out[ $id ]['contenidos_vistos'] = 0;
@@ -254,6 +254,7 @@ class CN_Panel_API {
 			foreach ( $rows as $r ) {
 				if ( isset( $out[ (int) $r->miembro_id ] ) ) {
 					$out[ (int) $r->miembro_id ]['contenidos_vistos'] = (int) $r->n;
+					$out[ (int) $r->miembro_id ]['primer_visto']      = self::iso( $r->primera ); // la primera vez que marcó un contenido como visto: la "primera clase iniciada" no se guarda en ningún lado.
 					$out[ (int) $r->miembro_id ]['ultimo_visto']      = self::iso( $r->ultima );
 				}
 			}
