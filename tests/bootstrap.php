@@ -20,6 +20,11 @@ if ( ! function_exists( 'mb_strlen' ) ) {
 		return strlen( $s );
 	}
 }
+if ( ! function_exists( 'mb_strtoupper' ) ) {
+	function mb_strtoupper( $s, $enc = null ) {
+		return strtoupper( strtr( (string) $s, array( 'á' => 'Á', 'é' => 'É', 'í' => 'Í', 'ó' => 'Ó', 'ú' => 'Ú', 'ñ' => 'Ñ', 'ü' => 'Ü' ) ) );
+	}
+}
 // ---------------------------------------------------------------- estado global de los stubs
 $GLOBALS['cn_opts']       = array();
 $GLOBALS['cn_transients'] = array();
