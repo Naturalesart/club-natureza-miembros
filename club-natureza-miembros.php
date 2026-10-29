@@ -29,6 +29,9 @@ require_once CN_PATH . 'includes/class-cn-vinculo.php';
 require_once CN_PATH . 'includes/class-cn-vinculo-manual.php';
 require_once CN_PATH . 'includes/class-cn-retorno.php';
 require_once CN_PATH . 'includes/class-cn-alta-mail.php';
+if ( file_exists( CN_PATH . 'includes/class-cn-mail-carta.php' ) ) { // el guard evita un fatal si el deploy por SFTP sube este archivo antes que la clase nueva.
+	require_once CN_PATH . 'includes/class-cn-mail-carta.php'; // plantilla "carta" (BORRADOR): solo arma HTML+texto, no envía ni registra hooks.
+}
 require_once CN_PATH . 'includes/class-cn-vinculo-lote.php';
 require_once CN_PATH . 'includes/class-cn-para-contactar.php'; // pantalla "Para contactar" (solo lectura; se engancha sola).
 require_once CN_PATH . 'includes/class-cn-espejo-mp.php';
