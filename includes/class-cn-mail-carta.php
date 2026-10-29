@@ -98,7 +98,7 @@ class CN_Mail_Carta {
 			$h .= '<tr><td style="padding:4px 0 20px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="cn-caja" style="background:#FFFFFF;border:1px solid #E5D9C4;border-radius:12px;"><tr><td style="padding:18px 20px;">';
 			$primero = true;
 			foreach ( $destacado as $d ) {
-				$h .= '<p class="cn-suave" style="margin:' . ( $primero ? '0' : '14px' ) . ' 0 3px;font-family:Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:1px;color:#8A8270;">' . esc_html( strtoupper( (string) $d['etiqueta'] ) ) . '</p>';
+				$h .= '<p class="cn-suave" style="margin:' . ( $primero ? '0' : '14px' ) . ' 0 3px;font-family:Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:1px;color:#8A8270;">' . esc_html( mb_strtoupper( (string) $d['etiqueta'], 'UTF-8' ) ) . '</p>';
 				$h .= '<p class="cn-dato" style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:18px;font-weight:bold;color:' . self::TINTA . ';">' . esc_html( (string) $d['valor'] ) . '</p>';
 				$primero = false;
 			}
@@ -138,7 +138,7 @@ class CN_Mail_Carta {
 			$t[] = '';
 		}
 		foreach ( $destacado as $d ) {
-			$t[] = strtoupper( (string) $d['etiqueta'] ) . ': ' . (string) $d['valor'];
+			$t[] = mb_strtoupper( (string) $d['etiqueta'], 'UTF-8' ) . ': ' . (string) $d['valor'];
 		}
 		if ( $destacado ) {
 			$t[] = '';
