@@ -120,7 +120,9 @@ class CN_Mail_Carta {
 
 		// Firma del equipo, un poco más destacada que el cuerpo.
 		$h .= '<tr><td align="left" style="padding:10px 0 2px;font-family:Georgia,\'Times New Roman\',serif;font-size:17px;line-height:1.5;color:' . self::VERDE . ';" class="cn-titulo">Con cariño,</td></tr>';
-		$h .= '<tr><td align="left" style="padding:0 0 26px;font-family:Georgia,\'Times New Roman\',serif;font-size:21px;line-height:1.35;color:' . self::VERDE . ';" class="cn-titulo"><strong>El equipo de Naturales Art</strong><br>Club Natureza 🌿</td></tr>';
+		// Dos filas con color propio (sin <br> ni <strong> anidados): el modo oscuro de Gmail recoloreaba la segunda línea en gris y abría un hueco.
+		$h .= '<tr><td align="left" style="padding:0;font-family:Georgia,\'Times New Roman\',serif;font-size:21px;font-weight:bold;line-height:1.3;color:' . self::VERDE . ';" class="cn-titulo">El equipo de Naturales Art</td></tr>';
+		$h .= '<tr><td align="left" style="padding:2px 0 26px;font-family:Georgia,\'Times New Roman\',serif;font-size:19px;line-height:1.3;color:' . self::VERDE . ';" class="cn-titulo">Club Natureza 🌿</td></tr>';
 
 		// Baja en un clic.
 		$h .= '<tr><td align="left" class="cn-suave" style="padding:14px 0 0;border-top:1px solid #E5D9C4;font-family:Arial,Helvetica,sans-serif;font-size:12.5px;line-height:1.5;color:#8A8270;">¿No querés recibir más estos mails? <a href="' . self::BAJA_MAILTO . '" style="color:#8A8270;text-decoration:underline;">Dejar de recibirlos</a> — un clic y listo.</td></tr>';
