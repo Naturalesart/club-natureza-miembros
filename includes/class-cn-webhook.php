@@ -467,21 +467,95 @@ class CN_Webhook {
 		}
 		try {
 			if ( null !== $plan && isset( $planes[ $plan ] ) ) {
+				// Si el alta llegó sin fbp/fbc (link directo de MP, vinculación manual), se completan
+				// desde el trial que hizo antes la misma persona. Solo lectura: nunca frena el evento.
+				$meta = self::sub_meta_desde_trial( $fila );
 				CN_Meta_Capi::enviar_subscribe(
 					(string) $fila->external_reference,
 					(float) $planes[ $plan ]['precio'],
 					$email,
 					$celular,
 					$nombre_p,
-					(string) $fila->fbp,
-					(string) $fila->fbc,
-					(string) $fila->ip,
-					(string) $fila->user_agent
+					$meta['fbp'],
+					$meta['fbc'],
+					$meta['ip'],
+					$meta['user_agent']
 				);
 			}
 		} catch ( Throwable $e ) {
 			self::registrar_log_mp( 'sub_post_alta_error', array( 'paso' => 'capi', 'external_reference' => (string) $fila->external_reference, 'mensaje' => mb_substr( $e->getMessage(), 0, 200 ) ) );
 		}
+	}
+	/**
+	 * fbp/fbc/ip/user_agent para el evento Subscribe. Devuelve los de $fila y, si fbp o fbc vienen
+	 * vacíos, completa lo que falte desde trial_pendientes de la MISMA persona (mismo celular ya
+	 * normalizado, como lo guardan los tres caminos de alta). Se toma UNA sola fila para que fbp, fbc,
+	 * ip y user_agent sean coherentes (misma sesión de navegador): la más reciente que tenga fbc (el
+	 * identificador del clic en el anuncio) y, si ninguna lo tiene, la más reciente con fbp. Lo que la
+	 * fila ya trae no se pisa. Sin match, o ante cualquier error, queda como hoy (vacío) y el evento
+	 * sale igual. No toca event_id, mail, alta ni cobro; no escribe en ninguna tabla de datos
+	 * (solo deja un rastro en mp_log, sin celular ni email).
+	 *
+	 * @return array{fbp:string,fbc:string,ip:string,user_agent:string}
+	 */
+	protected static function sub_meta_desde_trial( $fila ) {
+		global $wpdb;
+		$meta = array(
+			'fbp'        => isset( $fila->fbp ) ? (string) $fila->fbp : '',
+			'fbc'        => isset( $fila->fbc ) ? (string) $fila->fbc : '',
+			'ip'         => isset( $fila->ip ) ? (string) $fila->ip : '',
+			'user_agent' => isset( $fila->user_agent ) ? (string) $fila->user_agent : '',
+		);
+		if ( '' !== $meta['fbp'] && '' !== $meta['fbc'] ) {
+			return $meta;
+		}
+		$celular = isset( $fila->celular ) ? trim( (string) $fila->celular ) : '';
+		if ( '' === $celular ) {
+			return $meta;
+		}
+		try {
+			$trial = $wpdb->get_row( $wpdb->prepare(
+				'SELECT id, fbp, fbc, ip, user_agent FROM ' . CN_DB::tabla( 'trial_pendientes' )
+				. " WHERE celular = %s AND ( ( fbc IS NOT NULL AND fbc <> '' ) OR ( fbp IS NOT NULL AND fbp <> '' ) )"
+				. " ORDER BY ( fbc IS NOT NULL AND fbc <> '' ) DESC, id DESC LIMIT 1",
+				$celular
+			) );
+			if ( '' !== (string) $wpdb->last_error ) {
+				throw new RuntimeException( mb_substr( (string) $wpdb->last_error, 0, 200 ) );
+			}
+			if ( ! $trial ) {
+				return $meta;
+			}
+			$completados = array();
+			foreach ( array( 'fbp', 'fbc', 'ip', 'user_agent' ) as $k ) {
+				$v = isset( $trial->{$k} ) ? trim( (string) $trial->{$k} ) : '';
+				if ( '' === $meta[ $k ] && '' !== $v ) {
+					$meta[ $k ]    = $v;
+					$completados[] = $k;
+				}
+			}
+			if ( $completados ) {
+				// Mismo event_id (hash) que deja capi_subscribe en mp_log: se cruzan sin exponer el celular
+				// que viaja en claro dentro del external_reference.
+				self::registrar_log_mp( 'sub_meta_desde_trial', array(
+					'event_id'           => self::sub_event_id_meta( $fila ),
+					'trial_pendiente_id' => (int) $trial->id,
+					'completados'        => $completados,
+				) );
+			}
+		} catch ( Throwable $e ) {
+			self::registrar_log_mp( 'sub_post_alta_error', array(
+				'paso'     => 'meta_trial',
+				'event_id' => self::sub_event_id_meta( $fila ),
+				'mensaje'  => mb_substr( $e->getMessage(), 0, 200 ),
+			) );
+		}
+		return $meta;
+	}
+	/** event_id tal como lo manda CN_Meta_Capi::enviar_subscribe() (hash del external_reference, 32 hex). */
+	protected static function sub_event_id_meta( $fila ) {
+		$ref = isset( $fila->external_reference ) ? (string) $fila->external_reference : '';
+		return '' === $ref ? '' : substr( hash( 'sha256', $ref ), 0, 32 );
 	}
 	/**
 	 * Mail de bienvenida de una socia que se suscribió (no es el del trial: sin "7 días" ni "nunca se te cobra").
