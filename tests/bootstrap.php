@@ -20,6 +20,11 @@ if ( ! function_exists( 'mb_strlen' ) ) {
 		return strlen( $s );
 	}
 }
+if ( ! function_exists( 'mb_strtoupper' ) ) {
+	function mb_strtoupper( $s, $enc = null ) {
+		return strtoupper( strtr( (string) $s, array( 'á' => 'Á', 'é' => 'É', 'í' => 'Í', 'ó' => 'Ó', 'ú' => 'Ú', 'ñ' => 'Ñ', 'ü' => 'Ü' ) ) );
+	}
+}
 // ---------------------------------------------------------------- estado global de los stubs
 $GLOBALS['cn_opts']       = array();
 $GLOBALS['cn_transients'] = array();
@@ -347,6 +352,7 @@ require_once $cn_raiz . 'includes/class-cn-vinculo.php';
 require_once $cn_raiz . 'includes/class-cn-vinculo-manual.php';
 require_once $cn_raiz . 'includes/class-cn-retorno.php';
 require_once $cn_raiz . 'includes/class-cn-alta-mail.php';
+require_once $cn_raiz . 'includes/class-cn-mail-carta.php';
 require_once $cn_raiz . 'includes/class-cn-vinculo-lote.php';
 require_once $cn_raiz . 'includes/class-cn-para-contactar.php';
 require_once $cn_raiz . 'includes/class-cn-espejo-mp.php';
