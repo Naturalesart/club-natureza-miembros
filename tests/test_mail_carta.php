@@ -34,9 +34,11 @@ t( 'títulos en Georgia', false !== strpos( $cn_h, 'Georgia' ) );
 t( 'cuerpo en Arial/Helvetica', false !== strpos( $cn_h, 'Arial,Helvetica' ) );
 t( 'meta color-scheme', false !== strpos( $cn_h, 'name="color-scheme" content="light dark"' ) );
 t( 'overrides de modo oscuro', false !== strpos( $cn_h, 'prefers-color-scheme: dark' ) );
-t( 'botón de al menos 48 px (15+18+15)', false !== strpos( $cn_h, 'padding:15px 20px' ) && false !== strpos( $cn_h, 'font-size:18px' ) );
-t( 'botón en primera persona con flecha', false !== strpos( $cn_h, 'Quiero entrar →' ) );
-t( 'un solo botón', 1 === substr_count( $cn_h, 'display:block;padding:15px 20px' ) );
+t( 'botón de al menos 48 px (15+20+15) y con margen lateral chico para que entre en el celular', false !== strpos( $cn_h, 'padding:15px 12px' ) && false !== strpos( $cn_h, 'font-size:17px;font-weight:bold;line-height:1.2' ) );
+t( 'la flecha va pegada a la última palabra con espacio duro (nunca queda sola)', false !== strpos( $cn_h, "entrar\xC2\xA0→</a>" ) && false === strpos( $cn_h, 'entrar →</a>' ) );
+t( 'el texto plano usa espacio común antes de la flecha', false !== strpos( $cn_m['texto'], 'Quiero entrar → https://' ) );
+t( 'botón en primera persona con flecha', false !== strpos( $cn_h, "Quiero entrar →" ) );
+t( 'un solo botón', 1 === substr_count( $cn_h, 'display:block;padding:15px 12px' ) );
 t( 'línea fija de sin cargo debajo del botón', false !== strpos( $cn_h, CN_Mail_Carta::LINEA_SIN_CARGO ) );
 t( 'firma del equipo destacada', false !== strpos( $cn_h, 'El equipo de Naturales Art' ) && false !== strpos( $cn_h, 'font-size:21px' ) );
 t( 'baja en un clic', false !== strpos( $cn_h, 'Dejar de recibirlos' ) && false !== strpos( $cn_h, 'mailto:' ) );
@@ -82,6 +84,6 @@ $cn_bs = array(
 foreach ( $cn_bs as $cn_k => $cn_b ) {
 	t( "borrador {$cn_k}: asunto, html y texto", '' !== $cn_b['asunto'] && false !== strpos( $cn_b['html'], '#A9502E' ) && '' !== $cn_b['texto'] );
 	t( "borrador {$cn_k}: línea de sin cargo", false !== strpos( $cn_b['html'], CN_Mail_Carta::LINEA_SIN_CARGO ) );
-	t( "borrador {$cn_k}: un solo botón", 1 === substr_count( $cn_b['html'], 'display:block;padding:15px 20px' ) );
+	t( "borrador {$cn_k}: un solo botón", 1 === substr_count( $cn_b['html'], 'display:block;padding:15px 12px' ) );
 }
 t( 'día 0 lleva los datos de acceso', false !== strpos( $cn_bs['dia0']['html'], 'Prueba Uno' ) && false !== strpos( $cn_bs['dia0']['html'], '1100000000' ) );

@@ -108,7 +108,7 @@ class CN_Mail_Carta {
 		// Botón único, ancho completo, mínimo 48 px de alto (15+15 de padding + 18 de letra).
 		if ( '' !== $btn_texto && '' !== $btn_url ) {
 			$h .= '<tr><td style="padding:8px 0 10px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="center" bgcolor="' . self::TERRACOTA . '" style="background:' . self::TERRACOTA . ';border-radius:10px;">';
-			$h .= '<a href="' . esc_url( $btn_url ) . '" style="display:block;padding:15px 20px;font-family:Arial,Helvetica,sans-serif;font-size:18px;font-weight:bold;line-height:1.2;color:#FFFFFF;text-decoration:none;">' . esc_html( $btn_texto ) . '</a>';
+			$h .= '<a href="' . esc_url( $btn_url ) . '" style="display:block;padding:15px 12px;font-family:Arial,Helvetica,sans-serif;font-size:17px;font-weight:bold;line-height:1.2;color:#FFFFFF;text-decoration:none;">' . str_replace( ' →', "\xC2\xA0→", esc_html( $btn_texto ) ) . '</a>'; // espacio duro antes de la flecha: si el texto se parte en el celular, la flecha viaja con la última palabra y no queda sola.
 			$h .= '</td></tr></table></td></tr>';
 			// Línea fija debajo del botón.
 			$h .= '<tr><td align="center" class="cn-suave" style="padding:0 0 22px;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#6E6757;">' . esc_html( self::LINEA_SIN_CARGO ) . '</td></tr>';
