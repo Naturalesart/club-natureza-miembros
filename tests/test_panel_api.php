@@ -181,7 +181,7 @@ update_option( 'cn_panel_uso_activo', '1' );
 pa_uso_base( $w );
 $exp = gmdate( 'Y-m-d H:i:s', time() + 100 * 86400 ); // login hace 80 días (sesión de 180)
 $w->on( '/FROM wp_cn_sesiones WHERE miembro_id IN/', array( cn_fila( array( 'miembro_id' => 1, 'expira' => $exp ) ), cn_fila( array( 'miembro_id' => 3, 'expira' => gmdate( 'Y-m-d H:i:s', time() - 86400 ) ) ) ) );
-$w->on( '/FROM wp_cn_vistos WHERE miembro_id IN/', array( cn_fila( array( 'miembro_id' => 1, 'n' => '7', 'ultima' => '2026-10-20 15:00:00' ) ) ) );
+$w->on( '/FROM wp_cn_vistos WHERE miembro_id IN/', array( cn_fila( array( 'miembro_id' => 1, 'n' => '7', 'primera' => '2026-10-14 12:30:00', 'ultima' => '2026-10-20 15:00:00' ) ) ) );
 $w->on( '/FROM wp_cn_progreso WHERE miembro_id IN/', array( cn_fila( array( 'miembro_id' => 1, 'curso_id' => 4, 'contenido_id' => 22, 'actualizado' => '2026-10-20 15:00:00' ) ) ) );
 $r = CN_Panel_API::manejar( pa_req( 'tok-bueno' ) );
 $j = json_decode( json_encode( $r->data ), true );
@@ -190,6 +190,7 @@ t( 'extendido=true y email completo en las fichas con email válido', true === $
 t( 'email sin arroba: null', null === $j['socias'][1]['email'] );
 t( 'sigue estando el email enmascarado (compatibilidad)', 'j***@gmail.com' === $j['socias'][0]['email_enmascarado'] );
 t( 'uso: contenidos vistos, último visto y última actividad en ISO', 7 === $u['contenidos_vistos'] && '2026-10-20T15:00:00Z' === $u['ultimo_visto'] && '2026-10-20T15:00:00Z' === $u['ultima_actividad'] && 4 === $u['ultimo_curso_id'] && 22 === $u['ultimo_contenido_id'] );
+t( 'uso: primer_visto = primera vez que marcó un contenido como visto (ISO) y null si nunca vio nada', '2026-10-14T12:30:00Z' === $u['primer_visto'] && null === $j['socias'][1]['uso']['primer_visto'] );
 t( 'uso: sesión abierta y último login aproximado = expira - 180 días', true === $u['sesion_abierta'] && gmdate( 'Y-m-d\TH:i:s\Z', strtotime( $exp . ' UTC' ) - 180 * 86400 ) === $u['ultimo_login_aprox'] );
 t( 'sesión vencida: sesion_abierta=false (con fecha aproximada)', false === $j['socias'][2]['uso']['sesion_abierta'] && null !== $j['socias'][2]['uso']['ultimo_login_aprox'] );
 t( 'sin sesión, sin vistos y sin progreso (la consulta anduvo): false / 0 / null', false === $j['socias'][1]['uso']['sesion_abierta'] && 0 === $j['socias'][1]['uso']['contenidos_vistos'] && null === $j['socias'][1]['uso']['ultima_actividad'] && null === $j['socias'][1]['uso']['ultimo_login_aprox'] );
@@ -198,7 +199,7 @@ t( 'tres consultas agrupadas en total (no una por socia)', 3 === count( array_fi
 } ) ) );
 t( 'cero escrituras en la base (solo el transient del rate limit)', array() === $w->log );
 $json = json_encode( $j );
-t( 'el bloque uso tiene solo las 7 claves previstas (sin celular ni nombre) y el JSON no lleva el token', array( 'contenidos_vistos', 'sesion_abierta', 'ultima_actividad', 'ultimo_contenido_id', 'ultimo_curso_id', 'ultimo_login_aprox', 'ultimo_visto' ) === ( function ( $k ) { sort( $k ); return $k; } )( array_keys( $u ) ) && false === strpos( $json, 'tok-bueno' ) );
+t( 'el bloque uso tiene solo las 8 claves previstas (sin celular ni nombre) y el JSON no lleva el token', array( 'contenidos_vistos', 'primer_visto', 'sesion_abierta', 'ultima_actividad', 'ultimo_contenido_id', 'ultimo_curso_id', 'ultimo_login_aprox', 'ultimo_visto' ) === ( function ( $k ) { sort( $k ); return $k; } )( array_keys( $u ) ) && false === strpos( $json, 'tok-bueno' ) );
 
 $w = pa_preparar();
 update_option( 'cn_panel_uso_activo', '1' );
