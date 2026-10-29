@@ -12,6 +12,16 @@ class CN_Shortcodes {
 	protected static $login_tipo    = '';
 	protected static $susc_mensaje  = '';
 
+	// Formulario de planes ([cn_planes_form], landing /planes-club/): mensaje de error y
+	// plan al que pertenece, para mostrarlo solo debajo del formulario que se envió.
+	protected static $planes_mensaje = '';
+	protected static $planes_plan    = '';
+	protected static $planes_css_ok  = false; // el CSS inline se imprime una sola vez por página.
+
+	// Rate limit del formulario de planes (público, sin login): mismo criterio que el trial.
+	const PLANES_MAX_INTENTOS = 8;
+	const PLANES_VENTANA_MIN  = 10;
+
 	// true cuando el login recién se resolvió con éxito en ESTE request (POST).
 	// Se usa para limpiar la URL por JS y evitar el aviso de "reenviar formulario".
 	protected static $login_recien  = false;
@@ -20,6 +30,7 @@ class CN_Shortcodes {
 		add_shortcode( 'cn_login', array( __CLASS__, 'shortcode_login' ) );
 		add_shortcode( 'cn_suscripcion', array( __CLASS__, 'shortcode_suscripcion' ) );
 		add_shortcode( 'cn_boton_suscriptora', array( __CLASS__, 'shortcode_boton_suscriptora' ) );
+		add_shortcode( 'cn_planes_form', array( __CLASS__, 'shortcode_planes_form' ) );
 
 		// El procesamiento de login/logout/suscripción DEBE correr antes de que
 		// el theme empiece a imprimir HTML: setcookie() y wp_safe_redirect()
@@ -115,6 +126,156 @@ class CN_Shortcodes {
 				}
 			}
 		}
+
+		// Planes (landing /planes-club/): mismo motivo que arriba, el redirect al init_point
+		// de MP tiene que salir con los headers todavía abiertos.
+		if ( isset( $_POST['cn_planes_submit'] ) ) {
+			$res = self::procesar_planes_form( $_POST );
+			if ( $res['ok'] ) {
+				wp_redirect( $res['init_point'] );
+				exit;
+			}
+			self::$planes_mensaje = $res['mensaje'];
+			self::$planes_plan    = $res['plan'];
+		}
+	}
+
+	/**
+	 * Procesa el POST de [cn_planes_form]. Hace lo mismo que el formulario del trial
+	 * (CN_Webhook::crear_preference_trial_endpoint) pero para una suscripción: captura
+	 * fbp/fbc/ip/user_agent en el navegador de la visitante (única oportunidad: el webhook
+	 * de MP es servidor-a-servidor) y los deja en suscripciones_pendientes con origen
+	 * 'landing' vía CN_MP::crear_suscripcion_link(), que es quien habla con MP. El alta
+	 * posterior (webhook sub_, mail, Subscribe de Meta) no cambia: ya existe para 'landing'.
+	 *
+	 * Sin nonce a propósito: la landing se sirve cacheada y un nonce cacheado vence y
+	 * rompería el envío en silencio. En su lugar: honeypot + rate limit por IP + plan de
+	 * lista cerrada. El celular se normaliza UNA sola vez acá.
+	 *
+	 * Separado de procesar_formularios() para poder probarlo sin redirect ni exit.
+	 *
+	 * @param array $post Normalmente $_POST.
+	 * @return array{ok:bool,init_point:string,mensaje:string,plan:string}
+	 */
+	public static function procesar_planes_form( $post ) {
+		$planes = CN_MP::get_planes();
+		$plan   = isset( $post['cn_planes_plan'] ) ? sanitize_key( wp_unslash( $post['cn_planes_plan'] ) ) : '';
+		if ( ! isset( $planes[ $plan ] ) ) {
+			$plan = '';
+		}
+		$salida = function ( $mensaje ) use ( $plan ) {
+			return array( 'ok' => false, 'init_point' => '', 'mensaje' => $mensaje, 'plan' => $plan );
+		};
+		// Honeypot: un humano nunca completa este campo (está oculto por CSS).
+		if ( ! empty( $post['cn_planes_web'] ) ) {
+			return $salida( 'Hubo un problema, recargá la página e intentá de nuevo.' );
+		}
+		$ip  = CN_Helpers::get_client_ip();
+		$key = 'cn_planes_fails_' . md5( $ip );
+		if ( (int) get_transient( $key ) >= self::PLANES_MAX_INTENTOS ) {
+			return $salida( 'Demasiados intentos. Probá de nuevo en unos minutos.' );
+		}
+		if ( '' === $plan ) {
+			self::planes_intento_fallido( $key );
+			return $salida( 'Elegí un plan válido.' );
+		}
+		$nombre  = isset( $post['cn_planes_nombre'] ) ? trim( sanitize_text_field( wp_unslash( $post['cn_planes_nombre'] ) ) ) : '';
+		$celular = isset( $post['cn_planes_celular'] ) ? sanitize_text_field( wp_unslash( $post['cn_planes_celular'] ) ) : '';
+		if ( strlen( $nombre ) < 3 ) {
+			self::planes_intento_fallido( $key );
+			return $salida( 'Ingresá tu nombre y apellido.' );
+		}
+		$norm = CN_Helpers::normalizar_celular( $celular );
+		if ( empty( $norm['valido'] ) || '' === (string) $norm['normalizado'] ) {
+			self::planes_intento_fallido( $key );
+			return $salida( 'Ingresá un celular válido (código de área + número).' );
+		}
+		// Señales del navegador para el Subscribe de Meta, igual que el trial. El _fbc puede
+		// faltar si la visitante llegó directo del anuncio (el pixel base todavía no corrió):
+		// se arma desde el fbclid de la URL con la forma "fb.1.<timestamp_ms>.<fbclid>".
+		// El formulario postea a la misma URL (action vacío), así que el fbclid sigue en $_GET.
+		$fbp = isset( $_COOKIE['_fbp'] ) ? sanitize_text_field( wp_unslash( $_COOKIE['_fbp'] ) ) : '';
+		$fbc = isset( $_COOKIE['_fbc'] ) ? sanitize_text_field( wp_unslash( $_COOKIE['_fbc'] ) ) : '';
+		if ( '' === $fbc && ! empty( $_GET['fbclid'] ) ) {
+			$fbclid = sanitize_text_field( wp_unslash( $_GET['fbclid'] ) );
+			$fbc    = 'fb.1.' . round( microtime( true ) * 1000 ) . '.' . $fbclid;
+		}
+		$ua   = isset( $_SERVER['HTTP_USER_AGENT'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_USER_AGENT'] ) ) : '';
+		$meta = array( 'fbp' => $fbp, 'fbc' => $fbc, 'ip' => $ip, 'user_agent' => $ua );
+		$res  = CN_MP::crear_suscripcion_link( $plan, $nombre, $norm['normalizado'], '', 'landing', $meta );
+		if ( is_wp_error( $res ) ) {
+			self::planes_intento_fallido( $key );
+			CN_Webhook::registrar_log_mp( 'planes_form_fallo', array( 'plan' => $plan, 'error' => $res->get_error_message() ) );
+			return $salida( 'No pudimos iniciar la suscripción. Probá de nuevo en un minuto.' );
+		}
+		return array( 'ok' => true, 'init_point' => (string) $res, 'mensaje' => '', 'plan' => $plan );
+	}
+
+	protected static function planes_intento_fallido( $key ) {
+		set_transient( $key, (int) get_transient( $key ) + 1, self::PLANES_VENTANA_MIN * MINUTE_IN_SECONDS );
+	}
+
+	/**
+	 * Mini formulario de suscripción por plan para la landing /planes-club/.
+	 * Uso: [cn_planes_form plan="basico" texto="Quiero el Club"]  /  [cn_planes_form plan="full" texto="Quiero el Full"]
+	 * Nombre + celular (sin email: MP no lo exige para el link y pedirlo traba el checkout
+	 * si no coincide con la cuenta de MP). Estilo propio del Club (crema, verde, terracota,
+	 * Georgia), CSS inline una sola vez, sin scripts.
+	 */
+	public static function shortcode_planes_form( $atts ) {
+		$atts = shortcode_atts( array(
+			'plan'  => 'basico',
+			'texto' => '',
+		), $atts, 'cn_planes_form' );
+		$planes = CN_MP::get_planes();
+		$plan   = sanitize_key( $atts['plan'] );
+		if ( ! isset( $planes[ $plan ] ) ) {
+			return '';
+		}
+		$texto     = '' !== trim( (string) $atts['texto'] ) ? $atts['texto'] : 'Quiero sumarme';
+		$id        = 'cn-pf-' . $plan;
+		$mensaje   = ( self::$planes_plan === $plan ) ? self::$planes_mensaje : '';
+		// Si hubo error, repoblamos lo que escribió para que no lo tipee de nuevo.
+		$v_nombre  = '' !== $mensaje && isset( $_POST['cn_planes_nombre'] ) ? sanitize_text_field( wp_unslash( $_POST['cn_planes_nombre'] ) ) : '';
+		$v_celular = '' !== $mensaje && isset( $_POST['cn_planes_celular'] ) ? sanitize_text_field( wp_unslash( $_POST['cn_planes_celular'] ) ) : '';
+
+		ob_start();
+		if ( ! self::$planes_css_ok ) {
+			self::$planes_css_ok = true;
+			?>
+			<style>
+			.cn-pf{background:#fff;border:1px solid #e3d6bd;border-radius:10px;padding:18px 16px;font-family:Georgia,'Times New Roman',serif;color:#2F4A3A;box-sizing:border-box;width:100%}
+			.cn-pf *{box-sizing:border-box}
+			.cn-pf__titulo{margin:0 0 12px;font-size:1.15rem;font-weight:bold;text-align:center;color:#2F4A3A}
+			.cn-pf__precio{display:block;font-size:.95rem;font-weight:normal;color:#A9502E;margin-top:2px}
+			.cn-pf label{display:block;font-size:.95rem;margin:0 0 4px;color:#2F4A3A}
+			.cn-pf input[type=text],.cn-pf input[type=tel]{width:100%;padding:12px 12px;border:1px solid #cdbfa3;border-radius:8px;font:inherit;font-size:16px;color:#2F4A3A;background:#FAF3E6;margin-bottom:12px}
+			.cn-pf input:focus{outline:none;border-color:#A9502E;background:#fff}
+			.cn-pf__web{position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden}
+			.cn-pf__btn{display:block;width:100%;background:#A9502E;color:#fff;border:0;border-radius:8px;padding:16px 12px;font-family:Georgia,serif;font-size:1.1rem;font-weight:bold;cursor:pointer}
+			.cn-pf__btn:hover,.cn-pf__btn:focus{background:#8c4125}
+			.cn-pf__error{background:#fbe9e3;border:1px solid #A9502E;color:#8c4125;border-radius:8px;padding:10px 12px;margin:0 0 12px;font-size:.95rem}
+			.cn-pf__nota{margin:10px 0 0;font-size:.85rem;color:#6b7d72;text-align:center}
+			</style>
+			<?php
+		}
+		?>
+		<form class="cn-pf" method="post" action="" id="<?php echo esc_attr( $id ); ?>">
+			<p class="cn-pf__titulo"><?php echo esc_html( $planes[ $plan ]['nombre'] ); ?><span class="cn-pf__precio">$<?php echo esc_html( number_format( (float) $planes[ $plan ]['precio'], 0, ',', '.' ) ); ?>/mes</span></p>
+			<?php if ( '' !== $mensaje ) : ?>
+				<p class="cn-pf__error" role="alert"><?php echo esc_html( $mensaje ); ?></p>
+			<?php endif; ?>
+			<label for="<?php echo esc_attr( $id ); ?>-nombre">Nombre y apellido</label>
+			<input type="text" id="<?php echo esc_attr( $id ); ?>-nombre" name="cn_planes_nombre" required autocomplete="name" value="<?php echo esc_attr( $v_nombre ); ?>">
+			<label for="<?php echo esc_attr( $id ); ?>-celular">Celular</label>
+			<input type="tel" id="<?php echo esc_attr( $id ); ?>-celular" name="cn_planes_celular" required inputmode="numeric" autocomplete="tel" placeholder="Ej: 11 2345 6789" value="<?php echo esc_attr( $v_celular ); ?>">
+			<div class="cn-pf__web" aria-hidden="true"><label for="<?php echo esc_attr( $id ); ?>-web">Web</label><input type="text" id="<?php echo esc_attr( $id ); ?>-web" name="cn_planes_web" tabindex="-1" autocomplete="off"></div>
+			<input type="hidden" name="cn_planes_plan" value="<?php echo esc_attr( $plan ); ?>">
+			<button type="submit" name="cn_planes_submit" value="1" class="cn-pf__btn"><?php echo esc_html( $texto ); ?></button>
+			<p class="cn-pf__nota">Pagás en Mercado Pago. Cancelás cuando quieras.</p>
+		</form>
+		<?php
+		return ob_get_clean();
 	}
 
 	/**
