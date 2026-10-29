@@ -12,7 +12,7 @@
  *  - cuerpo 17 px Arial/Helvetica, interlineado 1,5, alineado a la izquierda
  *  - títulos en Georgia; fondo crema #FAF3E6, verde #2F4A3A, botón terracota #A9502E
  *  - un solo botón de ancho completo (mínimo 48 px de alto), en primera persona y con flecha
- *  - línea fija de "sin cargo automático" debajo del botón, firma de Naty y baja en un clic
+ *  - línea fija de "sin cargo automático" debajo del botón, firma del equipo (destacada) y baja en un clic
  *  - modo oscuro: meta color-scheme + overrides de prefers-color-scheme (y colores que
  *    no se invierten mal en Gmail, que ignora esos overrides y recalcula solo)
  */
@@ -118,9 +118,9 @@ class CN_Mail_Carta {
 			$h .= '<tr><td align="left" class="cn-texto" style="padding:0 0 16px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.5;color:' . self::TINTA . ';">' . esc_html( $posdata ) . '</td></tr>';
 		}
 
-		// Firma de Naty.
-		$h .= '<tr><td align="left" style="padding:10px 0 0;font-family:Georgia,\'Times New Roman\',serif;font-size:17px;line-height:1.5;color:' . self::VERDE . ';" class="cn-titulo">Con cariño,<br>Naty 🌿</td></tr>';
-		$h .= '<tr><td align="left" class="cn-suave" style="padding:4px 0 26px;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#6E6757;">Club Natureza · Naturales Art</td></tr>';
+		// Firma del equipo, un poco más destacada que el cuerpo.
+		$h .= '<tr><td align="left" style="padding:10px 0 2px;font-family:Georgia,\'Times New Roman\',serif;font-size:17px;line-height:1.5;color:' . self::VERDE . ';" class="cn-titulo">Con cariño,</td></tr>';
+		$h .= '<tr><td align="left" style="padding:0 0 26px;font-family:Georgia,\'Times New Roman\',serif;font-size:21px;line-height:1.35;color:' . self::VERDE . ';" class="cn-titulo"><strong>El equipo de Naturales Art</strong><br>Club Natureza 🌿</td></tr>';
 
 		// Baja en un clic.
 		$h .= '<tr><td align="left" class="cn-suave" style="padding:14px 0 0;border-top:1px solid #E5D9C4;font-family:Arial,Helvetica,sans-serif;font-size:12.5px;line-height:1.5;color:#8A8270;">¿No querés recibir más estos mails? <a href="' . self::BAJA_MAILTO . '" style="color:#8A8270;text-decoration:underline;">Dejar de recibirlos</a> — un clic y listo.</td></tr>';
@@ -153,7 +153,7 @@ class CN_Mail_Carta {
 			$t[] = '';
 		}
 		$t[] = 'Con cariño,';
-		$t[] = 'Naty - Club Natureza · Naturales Art';
+		$t[] = 'El equipo de Naturales Art · Club Natureza';
 		$t[] = '';
 		$t[] = 'Para dejar de recibir estos mails, respondé con el asunto BAJA y listo.';
 

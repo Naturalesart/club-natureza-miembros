@@ -38,7 +38,7 @@ t( 'botón de al menos 48 px (15+18+15)', false !== strpos( $cn_h, 'padding:15px
 t( 'botón en primera persona con flecha', false !== strpos( $cn_h, 'Quiero entrar →' ) );
 t( 'un solo botón', 1 === substr_count( $cn_h, 'display:block;padding:15px 20px' ) );
 t( 'línea fija de sin cargo debajo del botón', false !== strpos( $cn_h, CN_Mail_Carta::LINEA_SIN_CARGO ) );
-t( 'firma de Naty', false !== strpos( $cn_h, 'Naty' ) );
+t( 'firma del equipo destacada', false !== strpos( $cn_h, 'El equipo de Naturales Art' ) && false !== strpos( $cn_h, 'font-size:21px' ) );
 t( 'baja en un clic', false !== strpos( $cn_h, 'Dejar de recibirlos' ) && false !== strpos( $cn_h, 'mailto:' ) );
 t( 'sin banners, GIF ni fotos si no se piden', false === strpos( $cn_h, '.gif' ) && false === strpos( $cn_h, '<img' ) );
 
