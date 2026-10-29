@@ -39,7 +39,9 @@ t( 'la flecha va pegada a la última palabra con espacio duro (nunca queda sola)
 t( 'el texto plano usa espacio común antes de la flecha', false !== strpos( $cn_m['texto'], 'Quiero entrar → https://' ) );
 t( 'botón en primera persona con flecha', false !== strpos( $cn_h, "Quiero entrar →" ) );
 t( 'un solo botón', 1 === substr_count( $cn_h, 'display:block;padding:15px 12px' ) );
-t( 'línea fija de sin cargo debajo del botón', false !== strpos( $cn_h, CN_Mail_Carta::LINEA_SIN_CARGO ) );
+t( 'por defecto (sin indicar cobro) va la línea de suscripción, nunca la de sin cargo', false !== strpos( $cn_h, 'Se cobra mes a mes en Mercado Pago. Cancelás cuando quieras.' ) && false === strpos( $cn_h, 'Nunca se te cobra' ) );
+$cn_mtr = CN_Mail_Carta::armar( array( 'titulo' => 'T', 'cobro' => 'trial', 'boton' => array( 'texto' => 'Voy', 'url' => 'https://naturalesart.com/x' ) ) );
+t( 'cobro=trial lleva la línea de sin cargo y no la de suscripción', false !== strpos( $cn_mtr['html'], 'Nunca se te cobra nada de forma automática.' ) && false === strpos( $cn_mtr['html'], 'Se cobra mes a mes' ) && false !== strpos( $cn_mtr['texto'], 'Nunca se te cobra' ) );
 t( 'firma del equipo destacada', false !== strpos( $cn_h, 'El equipo de Naturales Art' ) && false !== strpos( $cn_h, 'font-size:21px' ) );
 t( 'baja en un clic', false !== strpos( $cn_h, 'Dejar de recibirlos' ) && false !== strpos( $cn_h, 'mailto:' ) );
 t( 'sin banners, GIF ni fotos si no se piden', false === strpos( $cn_h, '.gif' ) && false === strpos( $cn_h, '<img' ) );
@@ -72,7 +74,7 @@ t( 'texto plano sin etiquetas HTML', false === strpos( $cn_t, '<' ) );
 t( 'texto plano con el título', false !== strpos( $cn_t, 'Título de prueba' ) );
 t( 'texto plano con los datos destacados', false !== strpos( $cn_t, 'USUARIO: Prueba Uno' ) );
 t( 'texto plano con el link del botón', false !== strpos( $cn_t, 'https://naturalesart.com/ingreso' ) );
-t( 'texto plano con la línea de sin cargo', false !== strpos( $cn_t, CN_Mail_Carta::LINEA_SIN_CARGO ) );
+t( 'texto plano con la línea de suscripción', false !== strpos( $cn_t, CN_Mail_Carta::LINEA_SUSCRIPCION ) && false === strpos( $cn_t, 'Nunca se te cobra' ) );
 t( 'texto plano con la baja', false !== strpos( $cn_t, 'BAJA' ) );
 
 seccion( 'Plantilla carta: los tres borradores' );
@@ -83,7 +85,11 @@ $cn_bs = array(
 );
 foreach ( $cn_bs as $cn_k => $cn_b ) {
 	t( "borrador {$cn_k}: asunto, html y texto", '' !== $cn_b['asunto'] && false !== strpos( $cn_b['html'], '#A9502E' ) && '' !== $cn_b['texto'] );
-	t( "borrador {$cn_k}: línea de sin cargo", false !== strpos( $cn_b['html'], CN_Mail_Carta::LINEA_SIN_CARGO ) );
+	$cn_es_trial = ( 'dia0' === $cn_k );
+	t( "borrador {$cn_k}: línea de cobro correcta (" . ( $cn_es_trial ? 'trial: sin cargo' : 'vende suscripción: mes a mes' ) . ')', $cn_es_trial
+		? ( false !== strpos( $cn_b['html'], CN_Mail_Carta::LINEA_SIN_CARGO ) && false === strpos( $cn_b['html'], 'Se cobra mes a mes' ) )
+		: ( false !== strpos( $cn_b['html'], CN_Mail_Carta::LINEA_SUSCRIPCION ) && false === strpos( $cn_b['html'], 'Nunca se te cobra' ) && false === strpos( $cn_b['texto'], 'Nunca se te cobra' ) ) );
+	t( "borrador {$cn_k}: cero WhatsApp", false === stripos( $cn_b['html'], 'whatsapp' ) && false === stripos( $cn_b['texto'], 'whatsapp' ) && false === stripos( $cn_b['html'], 'wa.me' ) );
 	t( "borrador {$cn_k}: un solo botón", 1 === substr_count( $cn_b['html'], 'display:block;padding:15px 12px' ) );
 }
 t( 'día 0 lleva los datos de acceso', false !== strpos( $cn_bs['dia0']['html'], 'Prueba Uno' ) && false !== strpos( $cn_bs['dia0']['html'], '1100000000' ) );
