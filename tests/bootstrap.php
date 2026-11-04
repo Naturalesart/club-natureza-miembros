@@ -368,11 +368,14 @@ if ( file_exists( $cn_raiz . 'includes/class-cn-sync.php' ) ) {
 	require_once $cn_raiz . 'includes/class-cn-sync.php';
 }
 require_once $cn_raiz . 'includes/class-cn-auth.php';
-if ( file_exists( $cn_raiz . 'includes/class-cn-cuentas.php' ) ) {
+if ( ! getenv( 'CN_TEST_CLASE_VIEJA' ) && file_exists( $cn_raiz . 'includes/class-cn-cuentas.php' ) ) { // CN_TEST_CLASE_VIEJA: los tests lanzan un proceso aparte que simula el deploy a medias (clase vieja sin los métodos nuevos).
 	require_once $cn_raiz . 'includes/class-cn-cuentas.php';
 }
-if ( file_exists( $cn_raiz . 'includes/class-cn-acceso.php' ) ) {
+if ( ! getenv( 'CN_TEST_CLASE_VIEJA' ) && file_exists( $cn_raiz . 'includes/class-cn-acceso.php' ) ) {
 	require_once $cn_raiz . 'includes/class-cn-acceso.php';
+}
+if ( ! getenv( 'CN_TEST_CLASE_VIEJA' ) && file_exists( $cn_raiz . 'includes/class-cn-mail-cuenta.php' ) ) {
+	require_once $cn_raiz . 'includes/class-cn-mail-cuenta.php';
 }
 require_once $cn_raiz . 'includes/class-cn-admin.php';
 require_once $cn_raiz . 'includes/class-cn-colaboradora.php';

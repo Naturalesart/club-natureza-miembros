@@ -59,6 +59,10 @@ if ( file_exists( CN_PATH . 'includes/class-cn-acceso.php' ) ) { // mismo guard:
 	require_once CN_PATH . 'includes/class-cn-acceso.php'; // pantallas del acceso con email (PASO C): inertes mientras cn_cuentas_modo no sea 'on'.
 	add_action( 'init', array( 'CN_Acceso_Paginas', 'registrar' ) );
 }
+if ( file_exists( CN_PATH . 'includes/class-cn-mail-cuenta.php' ) ) { // mismo guard.
+	require_once CN_PATH . 'includes/class-cn-mail-cuenta.php'; // mails de cuenta (PASO D): con cn_cuentas_modo apagado no envían ni programan nada.
+	add_action( 'init', array( 'CN_Mail_Cuenta', 'registrar' ) );
+}
 add_action( 'init', array( 'CN_Retorno', 'registrar' ) );
 CN_Planes_MP::registrar();
 // Rol "Colaboradora Club": acceso acotado (solo cargar contenido), sin permisos de administrador.
