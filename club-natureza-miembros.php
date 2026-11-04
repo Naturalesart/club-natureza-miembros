@@ -50,6 +50,9 @@ require_once CN_PATH . 'includes/class-cn-reemplazo-auto.php'; // reemplazo auto
 require_once CN_PATH . 'includes/class-cn-extender-acceso.php'; // pantalla "Extender acceso" (se engancha sola; sin MP).
 require_once CN_PATH . 'includes/class-cn-corregir-vinculo.php'; // pantalla "Corregir vínculo" (se engancha sola; solo GET a MP).
 require_once CN_PATH . 'includes/class-cn-diag-pagador.php'; // TEMPORAL (diagnóstico, solo lectura): borrar esta línea y el archivo para quitarla.
+if ( file_exists( CN_PATH . 'includes/class-cn-cuentas.php' ) ) { // el guard evita un fatal si el deploy por SFTP sube este archivo antes que la clase nueva.
+	require_once CN_PATH . 'includes/class-cn-cuentas.php'; // cuentas email + contraseña (PASO B): solo núcleo, sin pantallas ni enganches; flag cn_cuentas_modo apagado.
+}
 register_activation_hook( __FILE__, array( 'CN_Activator', 'activar' ) );
 add_action( 'init', array( 'CN_Shortcodes', 'registrar' ) );
 add_action( 'init', array( 'CN_Retorno', 'registrar' ) );
