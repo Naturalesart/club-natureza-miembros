@@ -433,6 +433,13 @@ class CN_Webhook {
 			// Ya confirmado: mail de bienvenida y CAPI quedan FUERA de la transacción y nunca afectan el alta.
 			if ( $es_alta ) {
 				self::sub_post_alta( $fila, $plan, $planes );
+				try { // PASO E: cuenta con email + contraseña (la ficha se busca por preapproval_id; nunca afecta el alta).
+					if ( class_exists( 'CN_Cuentas' ) ) {
+						CN_Cuentas::enganche_preapproval( $preapproval_id, 'sub' );
+					}
+				} catch ( Throwable $e ) {
+					self::registrar_log_mp( 'cuenta_enganche_error', array( 'ruta' => 'sub', 'mensaje' => mb_substr( $e->getMessage(), 0, 200 ) ) );
+				}
 			}
 			return true;
 		} catch ( Throwable $e ) {
@@ -562,6 +569,7 @@ class CN_Webhook {
 	 * Mismo wrapper HTML que enviar_mail_bienvenida(). El usuario es el nombre y la contraseña el celular.
 	 */
 	protected static function enviar_mail_bienvenida_suscripcion( $nombre, $celular, $email, $plan_nombre ) {
+		if ( class_exists( 'CN_Cuentas' ) && CN_Cuentas::reemplaza_bienvenida_datos( $nombre, $celular, 'sub' ) ) { return; } // PASO E: con cn_cuentas_modo=on el mail de cuenta reemplaza a este (nunca si algo falla).
 		if ( '' === $email ) {
 			return;
 		}
@@ -988,6 +996,13 @@ class CN_Webhook {
 				$res['notificacion'] = array( 'mail' => ( '' !== $aviso['email'] ), 'capi' => true );
 			}
 		}
+		try { // PASO E: cuenta con email + contraseña. Solo si se pidió avisar (notificar=false no crea cuenta); nunca afecta lo ya guardado.
+			if ( $es_alta && $notificar && ! empty( $res['miembro_id'] ) && class_exists( 'CN_Cuentas' ) ) {
+				CN_Cuentas::enganche_ficha( (int) $res['miembro_id'], 'vinculo_admin' );
+			}
+		} catch ( Throwable $e ) {
+			self::registrar_log_mp( 'cuenta_enganche_error', array( 'ruta' => 'vinculo_admin', 'mensaje' => mb_substr( $e->getMessage(), 0, 200 ) ) );
+		}
 		return $res;
 	}
 	/**
@@ -1343,6 +1358,13 @@ class CN_Webhook {
 			}
 		}
 		self::enviar_mail_bienvenida( $nombre, $celular, $email );
+		try { // PASO E: cuenta con email + contraseña (solo con cn_cuentas_modo distinto de off; idempotente; nunca afecta el alta).
+			if ( class_exists( 'CN_Cuentas' ) ) {
+				CN_Cuentas::enganche_trial( $id );
+			}
+		} catch ( Throwable $e ) {
+			self::registrar_log_mp( 'cuenta_enganche_error', array( 'ruta' => 'trial', 'mensaje' => mb_substr( $e->getMessage(), 0, 200 ) ) );
+		}
 		// Registro en la sheet de seguimiento (no bloqueante, nunca rompe el alta).
 		self::registrar_alta_en_sheet( $nombre, $celular, $email, $monto, $id, $fecha_fin_trial, $ahora );
 		// CAPI Purchase — mismo event_id (external_reference) que el Pixel dispara
@@ -1538,6 +1560,7 @@ class CN_Webhook {
 	 * el alta si falla (wp_mail devuelve false silenciosamente, no lanza excepción).
 	 */
 	protected static function enviar_mail_bienvenida( $nombre, $celular, $email ) {
+		if ( class_exists( 'CN_Cuentas' ) && CN_Cuentas::reemplaza_bienvenida_datos( $nombre, $celular, 'trial' ) ) { return; } // PASO E: con cn_cuentas_modo=on el mail de cuenta reemplaza a este (nunca si algo falla).
 		if ( '' === $email ) {
 			return; // Sin mail no hay a quién mandarle nada — no es un error, solo no llegó el dato.
 		}

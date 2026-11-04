@@ -124,11 +124,25 @@ class CN_Cuentas {
 	}
 
 	/**
-	 * Para enganchar en update_option_cn_cuentas_modo (PASO E): al salir de off se guarda desde cuándo
-	 * corre, una sola vez. No se registra acá (PASO B no engancha nada).
+	 * Engancha (PASO E) update_option_cn_cuentas_modo y add_option_cn_cuentas_modo (la primera vez que se guarda
+	 * la opción WordPress usa esta segunda). Solo guarda cn_cuentas_desde: no hace nada más.
+	 */
+	public static function registrar() {
+		add_action( 'update_option_' . self::OPT_MODO, array( __CLASS__, 'al_cambiar_modo' ), 10, 2 );
+		add_action( 'add_option_' . self::OPT_MODO, array( __CLASS__, 'al_crear_modo' ), 10, 2 );
+	}
+
+	/** add_option_{opción} manda ( nombre, valor ): antes no había nada, o sea off. */
+	public static function al_crear_modo( $opcion, $valor ) {
+		self::al_cambiar_modo( 'off', $valor );
+	}
+
+	/**
+	 * Al salir de off se guarda desde cuándo corre, una sola vez. Cualquier valor anterior que no sea log u on
+	 * (off, vacío, inválido) cuenta como off.
 	 */
 	public static function al_cambiar_modo( $anterior, $nuevo ) {
-		if ( 'off' === (string) $anterior && in_array( (string) $nuevo, array( 'log', 'on' ), true ) && ! get_option( self::OPT_DESDE ) ) {
+		if ( ! in_array( (string) $anterior, array( 'log', 'on' ), true ) && in_array( (string) $nuevo, array( 'log', 'on' ), true ) && ! get_option( self::OPT_DESDE ) ) {
 			update_option( self::OPT_DESDE, self::ahora_ts() );
 		}
 	}
@@ -575,10 +589,11 @@ class CN_Cuentas {
 		}
 		$token = self::emitir_token( (int) $cuenta->id, 'crear' );
 		self::log( 'cuenta_creada', array( 'cuenta_id' => (int) $cuenta->id, 'miembro_id' => $ficha_id, 'origen' => $origen ) );
+		$mail_ok = false;
 		if ( '' !== $token ) {
-			self::notificar( $cuenta, $ficha, 'crear', $token, (string) $origen );
+			$mail_ok = self::notificar( $cuenta, $ficha, 'crear', $token, (string) $origen );
 		}
-		return array( 'accion' => 'creada', 'cuenta_id' => (int) $cuenta->id );
+		return array( 'accion' => 'creada', 'cuenta_id' => (int) $cuenta->id, 'mail_ok' => $mail_ok );
 	}
 
 	/** ¿El email ya es de OTRA cuenta o de otra ficha? En ese caso no se mezcla ni se pisa nada. */
@@ -645,22 +660,140 @@ class CN_Cuentas {
 		return gmdate( 'Y-m-d H:i:s', self::ahora_ts() - (int) $horas * 3600 );
 	}
 
-	/** Avisa por mail. Nunca deja el token en logs. Un fallo acá no deshace nada. */
+	/* ------------------------------------------------------------------ enganches con las altas (PASO E) */
+
+	/** Origen de provisionar() según el tipo de log de CN_Vinculo_Manual::confirmar. '' = no provisiona (el lote). */
+	public static function origen_de_log_tipo( $log_tipo ) {
+		$mapa = array( 'vinculo_manual' => 'vinculo_manual', 'retorno_vinculo' => 'retorno' );
+		return isset( $mapa[ $log_tipo ] ) ? $mapa[ $log_tipo ] : '';
+	}
+
+	protected static function id_ficha_por( $columna, $valor ) {
+		global $wpdb;
+		if ( '' === (string) $valor ) {
+			return 0;
+		}
+		return (int) $wpdb->get_var( $wpdb->prepare( 'SELECT id FROM ' . CN_DB::tabla( 'miembros' ) . ' WHERE ' . $columna . ' = %s LIMIT 1', (string) $valor ) );
+	}
+
+	/** provisionar() sin dejar pasar ninguna excepción: un error acá nunca rompe el alta. */
+	protected static function enganchar( $ficha_id, $origen, $ruta ) {
+		try {
+			return self::provisionar( (int) $ficha_id, $origen );
+		} catch ( Throwable $e ) {
+			self::log( 'cuenta_enganche_error', array( 'ruta' => $ruta, 'origen' => $origen, 'mensaje' => mb_substr( $e->getMessage(), 0, 200 ) ) );
+			return array( 'accion' => 'error' );
+		}
+	}
+
+	/** Trial recién dado de alta (webhook, después del mail de bienvenida). Con el modo en off no lee ni escribe nada. */
+	public static function enganche_trial( $trial_payment_id ) {
+		if ( 'off' === self::modo() ) {
+			return null;
+		}
+		try {
+			$id = self::id_ficha_por( 'trial_payment_id', $trial_payment_id );
+		} catch ( Throwable $e ) {
+			return null;
+		}
+		return $id > 0 ? self::enganchar( $id, 'trial', 'trial' ) : null;
+	}
+
+	/** Suscripción automática dada de alta (webhook, después de sub_post_alta). La ficha se busca por preapproval_id. */
+	public static function enganche_preapproval( $preapproval_id, $origen = 'sub' ) {
+		if ( 'off' === self::modo() ) {
+			return null;
+		}
+		try {
+			$id = self::id_ficha_por( 'preapproval_id', $preapproval_id );
+		} catch ( Throwable $e ) {
+			return null;
+		}
+		return $id > 0 ? self::enganchar( $id, $origen, 'preapproval' ) : null;
+	}
+
+	/** Vinculación (admin o manual/retorno) con ficha ya conocida. $origen vacío (el lote) no hace nada. */
+	public static function enganche_ficha( $ficha_id, $origen ) {
+		if ( 'off' === self::modo() || '' === (string) $origen || (int) $ficha_id <= 0 ) {
+			return null;
+		}
+		return self::enganchar( (int) $ficha_id, (string) $origen, 'ficha' );
+	}
+
+	/**
+	 * Guarda de los mails de bienvenida de siempre: true = "este alta ya recibe el mail de cuenta, no mandes el viejo".
+	 * Solo con el modo en 'on'. Crea la cuenta y manda su mail ACÁ; devuelve true únicamente si la cuenta quedó creada
+	 * y el mail salió (o si la cuenta ya existía: reintento de un aviso). Si algo falla (sin email, email en uso,
+	 * re-trial, error) devuelve false y sale la bienvenida de siempre: nunca queda una socia sin acceso.
+	 */
+	public static function reemplaza_bienvenida( $ficha_id, $origen = 'trial' ) {
+		if ( 'on' !== self::modo() ) {
+			return false;
+		}
+		try {
+			$r = self::provisionar( (int) $ficha_id, (string) $origen );
+		} catch ( Throwable $e ) {
+			self::log( 'cuenta_enganche_error', array( 'ruta' => 'bienvenida', 'origen' => $origen, 'mensaje' => mb_substr( $e->getMessage(), 0, 200 ) ) );
+			return false;
+		}
+		if ( 'ya_tiene' === $r['accion'] ) {
+			return true;
+		}
+		return 'creada' === $r['accion'] && ! empty( $r['mail_ok'] );
+	}
+
+	/**
+	 * Igual, para los mails de bienvenida de siempre, que no conocen el id de la ficha: la identifican como lo hace el
+	 * login (nombre + celular; el hash del celular lleva sal, así que no se busca por igualdad sino verificándolo).
+	 * Si no hay exactamente una ficha, devuelve false y sale la bienvenida de siempre.
+	 */
+	public static function reemplaza_bienvenida_datos( $nombre, $celular, $origen = 'trial' ) {
+		if ( 'on' !== self::modo() ) {
+			return false; // antes de cualquier consulta: con off/log la bienvenida de siempre sale exactamente igual.
+		}
+		try {
+			$id = self::id_ficha_por_nombre_celular( (string) $nombre, (string) $celular );
+		} catch ( Throwable $e ) {
+			return false;
+		}
+		return $id > 0 && self::reemplaza_bienvenida( $id, $origen );
+	}
+
+	/** Id de la ficha de ESE nombre y celular (misma búsqueda que CN_Auth::login); 0 si no hay o hay más de una. */
+	protected static function id_ficha_por_nombre_celular( $nombre, $celular ) {
+		global $wpdb;
+		$norm = CN_Helpers::normalizar_celular( $celular );
+		$cel  = isset( $norm['normalizado'] ) ? (string) $norm['normalizado'] : '';
+		$nom  = trim( (string) $nombre );
+		if ( '' === $cel || '' === $nom ) {
+			return 0;
+		}
+		$candidatos = $wpdb->get_results( $wpdb->prepare( 'SELECT id, celular_hash FROM ' . CN_DB::tabla( 'miembros' ) . ' WHERE LOWER(TRIM(nombre_apellido)) = LOWER(TRIM(%s))', $nom ) );
+		$ids = array();
+		foreach ( (array) $candidatos as $c ) {
+			if ( CN_Helpers::verificar_celular( $cel, (string) $c->celular_hash ) ) {
+				$ids[] = (int) $c->id;
+			}
+		}
+		return 1 === count( $ids ) ? $ids[0] : 0;
+	}
+
+	/** Avisa por mail. Nunca deja el token en logs. Un fallo acá no deshace nada. Devuelve true solo si el mail salió. */
 	protected static function notificar( $cuenta, $ficha, $proposito, $token, $origen = '' ) {
 		try {
 			if ( is_callable( self::$notificador ) ) {
 				call_user_func( self::$notificador, $cuenta, $ficha, $proposito, $token );
-				return;
+				return true;
 			}
 			if ( class_exists( 'CN_Mail_Cuenta' ) && method_exists( 'CN_Mail_Cuenta', 'enviar' ) ) {
 				$plantilla = array( 'recuperar' => 'recuperar', 'entrar' => 'entrar' );
 				$plantilla = isset( $plantilla[ $proposito ] ) ? $plantilla[ $proposito ] : ( 'trial' === $origen ? 'bienvenida_trial' : 'bienvenida_suscripcion' );
-				CN_Mail_Cuenta::enviar( (int) $cuenta->id, $plantilla, $token );
-				return;
+				return 'enviado' === CN_Mail_Cuenta::enviar( (int) $cuenta->id, $plantilla, $token );
 			}
 			self::log( 'cuenta_mail_sin_plantilla', array( 'cuenta_id' => (int) $cuenta->id, 'proposito' => $proposito ) );
 		} catch ( Throwable $e ) {
 			self::log( 'cuenta_mail_error', array( 'cuenta_id' => (int) $cuenta->id, 'proposito' => $proposito, 'mensaje' => mb_substr( $e->getMessage(), 0, 200 ) ) );
 		}
+		return false;
 	}
 }
