@@ -297,3 +297,18 @@ t( 'en la vista previa el destinatario no sale de $_POST ni $_GET', 1 === preg_m
 t( 'la clase Carta de siempre sigue sin enviar nada', ! preg_match( '/wp_mail/', file_get_contents( dirname( __DIR__ ) . '/includes/class-cn-mail-carta.php' ) ) );
 $cm_pre = glob( dirname( __DIR__ ) . '/tests/previews/*.html' );
 t( 'las 6 vistas previas HTML están en tests/previews (no se despliegan)', 6 === count( $cm_pre ) );
+
+// ------------------------------------------------------------------ deploy por SFTP a medias
+seccion( 'PASO D: clase vieja sin los métodos nuevos (deploy archivo por archivo)' );
+function cm_proceso_viejo( $escenario ) {
+	$cmd = ( DIRECTORY_SEPARATOR === chr( 92 ) ? 'set CN_TEST_CLASE_VIEJA=1&& ' : 'CN_TEST_CLASE_VIEJA=1 ' ) . escapeshellarg( PHP_BINARY ) . ' ' . escapeshellarg( __DIR__ . '/aux_clase_vieja.php' ) . ' ' . escapeshellarg( $escenario ) . ' 2>&1';
+	$txt = (string) shell_exec( $cmd );
+	$j   = json_decode( trim( $txt ), true );
+	return is_array( $j ) ? $j : array( 'error' => substr( $txt, 0, 300 ) );
+}
+$v = cm_proceso_viejo( 'mail' );
+t( 'con una CN_Cuentas vieja no hay fatal (el proceso termina e imprime su resultado)', isset( $v['escenario'] ), isset( $v['error'] ) ? $v['error'] : '' );
+t( 'enviar() no hace nada y no manda mails', 'off' === ( $v['enviar'] ?? '' ) && 0 === ( $v['mails'] ?? -1 ) );
+t( 'los recordatorios no hacen nada', array( 'rec24' => 0, 'rec72' => 0 ) === ( $v['recordatorios'] ?? null ) );
+t( 'no se programa el cron', array() === ( $v['cron'] ?? null ) );
+t( 'la vista previa tampoco se manda', false === ( $v['vista_previa'] ?? null ) );
