@@ -47,9 +47,25 @@ class CN_Mail_Cuenta {
 		add_action( 'admin_menu', array( __CLASS__, 'menu' ), 20 );
 	}
 
+	/**
+	 * ¿Están todas las piezas que usa esta clase, en su versión nueva? El deploy por SFTP sube archivo por archivo: por un
+	 * rato puede existir esta clase con una CN_Cuentas vieja (sin los métodos nuevos, o con cuenta_por_id y ficha todavía
+	 * protegidos). is_callable() mira también la visibilidad desde acá. Si falta algo, esta clase no hace nada (como hoy).
+	 */
+	protected static function listo() {
+		foreach ( array( 'modo', 'cuenta_por_id', 'ficha', 'emitir_token', 'mascara', 'marca_tomar', 'marca_soltar', 'marca_existe', 'cuentas_sin_password', 'hace_horas' ) as $metodo ) {
+			if ( ! class_exists( 'CN_Cuentas' ) || ! is_callable( array( 'CN_Cuentas', $metodo ) ) ) {
+				return false;
+			}
+		}
+		return class_exists( 'CN_Mail_Carta' ) && is_callable( array( 'CN_Mail_Carta', 'armar' ) )
+			&& class_exists( 'CN_Acceso_Paginas' ) && is_callable( array( 'CN_Acceso_Paginas', 'url_acceso' ) ) && is_callable( array( 'CN_Acceso_Paginas', 'url_crear' ) )
+			&& class_exists( 'CN_Acceso_Sesion' ) && is_callable( array( 'CN_Acceso_Sesion', 'motivo_acceso' ) );
+	}
+
 	/** Programa el cron solo con el modo en 'on' (con el flag apagado no se escribe nada). */
 	public static function programar_cron() {
-		if ( 'on' === CN_Cuentas::modo() && ! wp_next_scheduled( self::CRON_HOOK ) ) {
+		if ( self::listo() && 'on' === CN_Cuentas::modo() && ! wp_next_scheduled( self::CRON_HOOK ) ) {
 			wp_schedule_event( time() + 300, 'hourly', self::CRON_HOOK );
 		}
 	}
@@ -191,6 +207,9 @@ class CN_Mail_Cuenta {
 	 * $token: el que ya emitió CN_Cuentas (alta, "olvidé", "link a mi mail"); si viene vacío y el modo es 'on', se emite acá.
 	 */
 	public static function enviar( $cuenta_id, $plantilla, $token = '' ) {
+		if ( ! self::listo() ) {
+			return 'off'; // piezas viejas o a medio subir: no se manda nada (sale lo de siempre).
+		}
 		$modo = CN_Cuentas::modo();
 		if ( 'off' === $modo ) {
 			return 'off';
@@ -239,7 +258,7 @@ class CN_Mail_Cuenta {
 	 */
 	public static function recordatorios() {
 		$res = array( 'rec24' => 0, 'rec72' => 0 );
-		if ( 'on' !== CN_Cuentas::modo() ) {
+		if ( ! self::listo() || 'on' !== CN_Cuentas::modo() ) {
 			return $res;
 		}
 		$tandas = array(
@@ -288,7 +307,7 @@ class CN_Mail_Cuenta {
 
 	/** Manda UNA vista previa a naturalesartcursos@gmail.com. El destinatario es la constante: no hay parámetro para cambiarlo. */
 	public static function enviar_vista_previa( $plantilla ) {
-		if ( ! isset( self::PLANTILLAS[ $plantilla ] ) ) {
+		if ( ! isset( self::PLANTILLAS[ $plantilla ] ) || ! self::listo() ) {
 			return false;
 		}
 		$m = self::armar( $plantilla, self::datos_ejemplo() );
