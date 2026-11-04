@@ -365,6 +365,7 @@ class CN_Shortcodes {
 			<?php wp_nonce_field( 'cn_login', 'cn_login_nonce' ); ?>
 			<button type="submit" name="cn_login_submit" value="1" class="cn-boton">Entrar</button>
 		</form>
+<?php echo class_exists( 'CN_Acceso_Paginas' ) ? CN_Acceso_Paginas::enlace_login() : ''; // link discreto al acceso con email: vacío salvo con cn_cuentas_modo = on. ?>
 		<?php
 	}
 

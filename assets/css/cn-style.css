@@ -721,3 +721,17 @@
 	.cn-galeria .cn-clase__play { width: 32px !important; height: 32px !important; background: rgba(255, 255, 255, 0.72) !important; }
 	.cn-galeria .cn-clase__play::before { border-width: 6px 0 6px 9px !important; }
 }
+
+/* ---- Acceso con email + contraseña (PASO C). Solo afecta a .cn-acceso y al link de [cn_login] con el flag en on. ---- */
+.cn-acceso { max-width: 460px !important; margin: 0 auto !important; padding: 0 16px !important; }
+.cn-acceso .cn-form { max-width: 100% !important; }
+.cn-acceso p, .cn-acceso label, .cn-acceso input, .cn-acceso .cn-boton { font-size: 18px !important; line-height: 1.45 !important; }
+.cn-acceso .cn-campo input { min-height: 52px !important; }
+.cn-acceso .cn-boton { min-height: 52px !important; padding: 14px 18px !important; }
+.cn-acceso__pass { position: relative !important; display: flex !important; gap: 8px !important; align-items: stretch !important; }
+.cn-acceso__pass input { flex: 1 1 auto !important; min-width: 0 !important; }
+.cn-acceso__ver { flex: 0 0 auto !important; min-width: 96px !important; min-height: 52px !important; padding: 0 14px !important; border: 1px solid var(--cn-sage) !important; border-radius: 10px !important; background: #fff !important; color: var(--cn-verde-botanico) !important; font-size: 16px !important; font-weight: 600 !important; cursor: pointer !important; }
+.cn-acceso__ver[hidden] { display: none !important; }
+.cn-acceso__enlace { text-align: center !important; margin: 14px 0 0 !important; }
+.cn-acceso__enlace a { color: var(--cn-verde-botanico) !important; text-decoration: underline !important; padding: 8px 4px !important; display: inline-block !important; }
+.cn-acceso__trampa { position: absolute !important; left: -9999px !important; width: 1px !important; height: 1px !important; overflow: hidden !important; }

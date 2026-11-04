@@ -55,6 +55,10 @@ if ( file_exists( CN_PATH . 'includes/class-cn-cuentas.php' ) ) { // el guard ev
 }
 register_activation_hook( __FILE__, array( 'CN_Activator', 'activar' ) );
 add_action( 'init', array( 'CN_Shortcodes', 'registrar' ) );
+if ( file_exists( CN_PATH . 'includes/class-cn-acceso.php' ) ) { // mismo guard: el deploy por SFTP sube archivo por archivo.
+	require_once CN_PATH . 'includes/class-cn-acceso.php'; // pantallas del acceso con email (PASO C): inertes mientras cn_cuentas_modo no sea 'on'.
+	add_action( 'init', array( 'CN_Acceso_Paginas', 'registrar' ) );
+}
 add_action( 'init', array( 'CN_Retorno', 'registrar' ) );
 CN_Planes_MP::registrar();
 // Rol "Colaboradora Club": acceso acotado (solo cargar contenido), sin permisos de administrador.
