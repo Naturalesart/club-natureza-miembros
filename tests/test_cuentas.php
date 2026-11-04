@@ -569,7 +569,7 @@ $todo  = implode( ' ', array_filter( $rc->getConstants(), 'is_string' ) ) . ' ' 
 $fuente = file_get_contents( dirname( __DIR__ ) . '/includes/class-cn-cuentas.php' );
 t( 'textos: no mencionan WhatsApp', false === stripos( $todo, 'whatsapp' ) && false === strpos( $todo, 'wa.me' ) );
 t( 'código: no usa CN_WA_SOPORTE ni wa.me', false === strpos( $fuente, 'CN_WA_SOPORTE' ) && false === strpos( $fuente, 'wa.me' ) );
-t( 'código: no registra hooks (PASO B)', ! preg_match( '/\badd_(action|filter|shortcode)\s*\(/', $fuente ) );
+t( 'código: los únicos hooks son los dos de la opción cn_cuentas_modo (PASO E; en el PASO B no había ninguno)', 2 === preg_match_all( '/\badd_(action|filter|shortcode)\s*\(/', $fuente ) && 2 === preg_match_all( "/add_action\( '(update|add)_option_' \. self::OPT_MODO/", $fuente ) );
 
 seccion( 'regresión: login clásico nombre + celular sigue igual con el flag prendido' );
 foreach ( array( 'off', 'on' ) as $modo ) {
