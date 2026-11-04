@@ -374,6 +374,9 @@ if ( file_exists( $cn_raiz . 'includes/class-cn-cuentas.php' ) ) {
 if ( file_exists( $cn_raiz . 'includes/class-cn-acceso.php' ) ) {
 	require_once $cn_raiz . 'includes/class-cn-acceso.php';
 }
+if ( file_exists( $cn_raiz . 'includes/class-cn-mail-cuenta.php' ) ) {
+	require_once $cn_raiz . 'includes/class-cn-mail-cuenta.php';
+}
 require_once $cn_raiz . 'includes/class-cn-admin.php';
 require_once $cn_raiz . 'includes/class-cn-colaboradora.php';
 require_once $cn_raiz . 'includes/class-cn-diag-pagador.php';

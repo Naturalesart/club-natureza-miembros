@@ -44,6 +44,8 @@ class CN_Mail_Carta {
 	 *  - cobro       (opcional: 'trial' | 'suscripcion', por defecto 'suscripcion') — línea fija bajo el botón.
 	 *                'trial' = "Nunca se te cobra…" (solo mails del trial, que no cobran);
 	 *                'suscripcion' = "Se cobra mes a mes…" (mails que venden la suscripción, que sí se cobra).
+	 *                'ninguna' = sin línea (mails de cuenta: recuperar contraseña, link de entrada, recordatorios).
+	 *  - respaldo    (opcional, string URL) — link de texto de respaldo bajo el botón, por si el botón no anda.
 	 */
 	public static function armar( $args ) {
 		$titulo    = isset( $args['titulo'] ) ? (string) $args['titulo'] : '';
@@ -53,7 +55,9 @@ class CN_Mail_Carta {
 		$boton     = isset( $args['boton'] ) && is_array( $args['boton'] ) ? $args['boton'] : array( 'texto' => '', 'url' => '' );
 		$posdata   = isset( $args['posdata'] ) ? (string) $args['posdata'] : '';
 		$preheader = isset( $args['preheader'] ) ? (string) $args['preheader'] : '';
-		$linea     = ( isset( $args['cobro'] ) && 'trial' === $args['cobro'] ) ? self::LINEA_SIN_CARGO : self::LINEA_SUSCRIPCION;
+		$cobro     = isset( $args['cobro'] ) ? (string) $args['cobro'] : 'suscripcion';
+		$linea     = 'ninguna' === $cobro ? '' : ( 'trial' === $cobro ? self::LINEA_SIN_CARGO : self::LINEA_SUSCRIPCION );
+		$respaldo  = isset( $args['respaldo'] ) ? (string) $args['respaldo'] : '';
 		$btn_texto = rtrim( (string) $boton['texto'] );
 		if ( '' !== $btn_texto && false === strpos( $btn_texto, '→' ) ) {
 			$btn_texto .= ' →';
@@ -116,7 +120,13 @@ class CN_Mail_Carta {
 			$h .= '<a href="' . esc_url( $btn_url ) . '" style="display:block;padding:15px 12px;font-family:Arial,Helvetica,sans-serif;font-size:17px;font-weight:bold;line-height:1.2;color:#FFFFFF;text-decoration:none;">' . str_replace( ' →', "\xC2\xA0→", esc_html( $btn_texto ) ) . '</a>'; // espacio duro antes de la flecha: si el texto se parte en el celular, la flecha viaja con la última palabra y no queda sola.
 			$h .= '</td></tr></table></td></tr>';
 			// Línea fija debajo del botón.
-			$h .= '<tr><td align="center" class="cn-suave" style="padding:0 0 22px;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#6E6757;">' . esc_html( $linea ) . '</td></tr>';
+			if ( '' !== $linea ) {
+				$h .= '<tr><td align="center" class="cn-suave" style="padding:0 0 ' . ( '' !== $respaldo ? '12' : '22' ) . 'px;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#6E6757;">' . esc_html( $linea ) . '</td></tr>';
+			}
+			// Link de texto de respaldo (solo si el mail lo pide).
+			if ( '' !== $respaldo ) {
+				$h .= '<tr><td align="left" class="cn-suave" style="padding:' . ( '' !== $linea ? '0' : '8px' ) . ' 0 22px;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#6E6757;word-break:break-all;">Si el botón no te funciona, copiá este link y pegalo en tu navegador:<br><a href="' . esc_url( $respaldo ) . '" style="color:#6E6757;text-decoration:underline;">' . esc_html( $respaldo ) . '</a></td></tr>';
+			}
 		}
 
 		if ( '' !== $posdata ) {
@@ -152,7 +162,12 @@ class CN_Mail_Carta {
 		}
 		if ( '' !== $btn_texto && '' !== $btn_url ) {
 			$t[] = $btn_texto . ' ' . $btn_url;
-			$t[] = $linea;
+			if ( '' !== $linea ) {
+				$t[] = $linea;
+			}
+			if ( '' !== $respaldo ) {
+				$t[] = 'Si el botón no te funciona, copiá este link y pegalo en tu navegador: ' . $respaldo;
+			}
 			$t[] = '';
 		}
 		if ( '' !== $posdata ) {

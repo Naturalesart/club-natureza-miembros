@@ -168,10 +168,10 @@ class CN_Cuentas {
 		}
 	}
 
-	protected static function ficha( $miembro_id ) {
+	public static function ficha( $miembro_id ) {
 		global $wpdb;
 		return $wpdb->get_row( $wpdb->prepare(
-			'SELECT id, nombre_apellido, estado, fecha_fin_trial, preapproval_id, email, celular_texto_plano, fecha_alta FROM ' . CN_DB::tabla( 'miembros' ) . ' WHERE id = %d',
+			'SELECT id, nombre_apellido, estado, fecha_fin_trial, preapproval_id, email, celular_texto_plano, fecha_alta, plan FROM ' . CN_DB::tabla( 'miembros' ) . ' WHERE id = %d',
 			(int) $miembro_id
 		) );
 	}
@@ -190,7 +190,7 @@ class CN_Cuentas {
 		return $wpdb->get_row( $wpdb->prepare( 'SELECT * FROM ' . CN_DB::tabla( 'cuentas' ) . ' WHERE miembro_id = %d', (int) $miembro_id ) );
 	}
 
-	protected static function cuenta_por_id( $id ) {
+	public static function cuenta_por_id( $id ) {
 		global $wpdb;
 		return $wpdb->get_row( $wpdb->prepare( 'SELECT * FROM ' . CN_DB::tabla( 'cuentas' ) . ' WHERE id = %d', (int) $id ) );
 	}
@@ -576,7 +576,7 @@ class CN_Cuentas {
 		$token = self::emitir_token( (int) $cuenta->id, 'crear' );
 		self::log( 'cuenta_creada', array( 'cuenta_id' => (int) $cuenta->id, 'miembro_id' => $ficha_id, 'origen' => $origen ) );
 		if ( '' !== $token ) {
-			self::notificar( $cuenta, $ficha, 'crear', $token );
+			self::notificar( $cuenta, $ficha, 'crear', $token, (string) $origen );
 		}
 		return array( 'accion' => 'creada', 'cuenta_id' => (int) $cuenta->id );
 	}
@@ -597,15 +597,65 @@ class CN_Cuentas {
 		return false;
 	}
 
+	/* ------------------------------------------------------------------ marcas (recordatorios) */
+
+	/**
+	 * Marca "ya se mandó X" para una cuenta, sin columnas nuevas: una fila en cn_cuenta_tokens con un propósito de
+	 * marca (rec24 / rec72), ya usada y con un hash único por cuenta y marca. La UNIQUE de token_hash hace que
+	 * solo un proceso pueda tomarla: devuelve true si la tomó ahora, false si ya estaba. Nunca es un token válido.
+	 */
+	public static function marca_tomar( $cuenta_id, $marca ) {
+		global $wpdb;
+		$ahora = self::ahora_mysql();
+		$ok = $wpdb->insert(
+			CN_DB::tabla( 'cuenta_tokens' ),
+			array( 'cuenta_id' => (int) $cuenta_id, 'proposito' => (string) $marca, 'token_hash' => self::hash_marca( $cuenta_id, $marca ), 'expira' => $ahora, 'usado' => 1, 'creado' => $ahora ),
+			array( '%d', '%s', '%s', '%s', '%d', '%s' )
+		);
+		return false !== $ok && 0 !== $ok;
+	}
+
+	/** Suelta la marca (si el mail falló, el próximo ciclo lo reintenta). */
+	public static function marca_soltar( $cuenta_id, $marca ) {
+		global $wpdb;
+		$wpdb->query( $wpdb->prepare( 'DELETE FROM ' . CN_DB::tabla( 'cuenta_tokens' ) . ' WHERE token_hash = %s AND proposito = %s', self::hash_marca( $cuenta_id, $marca ), (string) $marca ) );
+	}
+
+	public static function marca_existe( $cuenta_id, $marca ) {
+		global $wpdb;
+		return (bool) $wpdb->get_row( $wpdb->prepare( 'SELECT * FROM ' . CN_DB::tabla( 'cuenta_tokens' ) . ' WHERE token_hash = %s', self::hash_marca( $cuenta_id, $marca ) ) );
+	}
+
+	protected static function hash_marca( $cuenta_id, $marca ) {
+		return hash( 'sha256', 'marca|' . (int) $cuenta_id . '|' . $marca );
+	}
+
+	/** Cuentas SIN contraseña creadas entre $desde_mysql (más viejas) y $hasta_mysql (más nuevas), de las más viejas a las más nuevas. */
+	public static function cuentas_sin_password( $desde_mysql, $hasta_mysql, $limite = 50 ) {
+		global $wpdb;
+		return (array) $wpdb->get_results( $wpdb->prepare(
+			'SELECT * FROM ' . CN_DB::tabla( 'cuentas' ) . " WHERE (pass_hash IS NULL OR pass_hash = '') AND creada > %s AND creada <= %s ORDER BY id ASC LIMIT %d",
+			(string) $desde_mysql,
+			(string) $hasta_mysql,
+			(int) $limite
+		) );
+	}
+
+	public static function hace_horas( $horas ) {
+		return gmdate( 'Y-m-d H:i:s', self::ahora_ts() - (int) $horas * 3600 );
+	}
+
 	/** Avisa por mail. Nunca deja el token en logs. Un fallo acá no deshace nada. */
-	protected static function notificar( $cuenta, $ficha, $proposito, $token ) {
+	protected static function notificar( $cuenta, $ficha, $proposito, $token, $origen = '' ) {
 		try {
 			if ( is_callable( self::$notificador ) ) {
 				call_user_func( self::$notificador, $cuenta, $ficha, $proposito, $token );
 				return;
 			}
 			if ( class_exists( 'CN_Mail_Cuenta' ) && method_exists( 'CN_Mail_Cuenta', 'enviar' ) ) {
-				CN_Mail_Cuenta::enviar( $cuenta, $ficha, $proposito, $token );
+				$plantilla = array( 'recuperar' => 'recuperar', 'entrar' => 'entrar' );
+				$plantilla = isset( $plantilla[ $proposito ] ) ? $plantilla[ $proposito ] : ( 'trial' === $origen ? 'bienvenida_trial' : 'bienvenida_suscripcion' );
+				CN_Mail_Cuenta::enviar( (int) $cuenta->id, $plantilla, $token );
 				return;
 			}
 			self::log( 'cuenta_mail_sin_plantilla', array( 'cuenta_id' => (int) $cuenta->id, 'proposito' => $proposito ) );
