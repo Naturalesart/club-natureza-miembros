@@ -184,6 +184,13 @@ function wp_remote_retrieve_response_code( $r ) {
 function wp_remote_retrieve_body( $r ) {
 	return $r['body'];
 }
+// Contraseñas (WordPress real usa bcrypt/phpass; acá alcanza con password_hash).
+function wp_hash_password( $p ) {
+	return password_hash( (string) $p, PASSWORD_BCRYPT, array( 'cost' => 4 ) );
+}
+function wp_check_password( $p, $h, $uid = '' ) {
+	return password_verify( (string) $p, (string) $h );
+}
 function wp_salt( $s = 'auth' ) {
 	return 'sal-de-prueba-' . $s;
 }
@@ -361,6 +368,9 @@ if ( file_exists( $cn_raiz . 'includes/class-cn-sync.php' ) ) {
 	require_once $cn_raiz . 'includes/class-cn-sync.php';
 }
 require_once $cn_raiz . 'includes/class-cn-auth.php';
+if ( file_exists( $cn_raiz . 'includes/class-cn-cuentas.php' ) ) {
+	require_once $cn_raiz . 'includes/class-cn-cuentas.php';
+}
 require_once $cn_raiz . 'includes/class-cn-admin.php';
 require_once $cn_raiz . 'includes/class-cn-colaboradora.php';
 require_once $cn_raiz . 'includes/class-cn-diag-pagador.php';
