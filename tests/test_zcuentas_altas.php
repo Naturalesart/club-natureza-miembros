@@ -261,7 +261,7 @@ seccion( 'PASO E: los enganches están donde deben, envueltos y detrás de class
 $raiz = dirname( __DIR__ ) . '/includes/';
 $web  = file_get_contents( $raiz . 'class-cn-webhook.php' );
 $vm   = file_get_contents( $raiz . 'class-cn-vinculo-manual.php' );
-t( 'webhook: 2 guardas de bienvenida, como primera línea de cada función', 2 === preg_match_all( '/function enviar_mail_bienvenida(?:_suscripcion)?\([^)]*\) \{\R\t\tif \( class_exists\( \'CN_Cuentas\' \) && CN_Cuentas::reemplaza_bienvenida_datos\(/', $web ) );
+t( 'webhook: 2 guardas de bienvenida, como primera línea de cada función', 2 === preg_match_all( '/function enviar_mail_bienvenida(?:_suscripcion)?\([^)]*\) \{\R\t\tif \( class_exists\( \'CN_Cuentas\' \) && method_exists\( \'CN_Cuentas\', \'reemplaza_bienvenida_datos\' \) && CN_Cuentas::reemplaza_bienvenida_datos\(/', $web ) );
 t( 'webhook: los 3 enganches (trial, sub, admin) están dentro de try/catch Throwable', 3 === preg_match_all( '/try \{ \/\/ PASO E:/', $web ) && 3 === preg_match_all( "/'cuenta_enganche_error'/", $web ) );
 t( 'webhook: cada llamada va con class_exists( \'CN_Cuentas\' )', 5 === substr_count( $web, "class_exists( 'CN_Cuentas' )" ) );
 t( 'webhook: el enganche del trial viene DESPUÉS del mail de bienvenida', strpos( $web, 'CN_Cuentas::enganche_trial' ) > strpos( $web, 'self::enviar_mail_bienvenida( $nombre, $celular, $email );' ) );
@@ -283,3 +283,24 @@ foreach ( array( 'class-cn-webhook.php' => $web, 'class-cn-vinculo-manual.php' =
 	}
 }
 t( 'las líneas nuevas de las altas no mencionan WhatsApp', false === stripos( $nuevo, 'whatsapp' ) && false === stripos( $nuevo, 'wa.me' ) && false === strpos( $nuevo, 'CN_WA_SOPORTE' ) );
+
+// ------------------------------------------------------------------ deploy por SFTP a medias
+seccion( 'PASO E: clase vieja sin los métodos nuevos (deploy archivo por archivo)' );
+$v = cm_proceso_viejo( 'altas' );
+t( 'con una CN_Cuentas vieja las altas no dan fatal', isset( $v['escenario'] ), isset( $v['error'] ) ? $v['error'] : '' );
+t( 'la clase simulada de verdad no tiene los métodos nuevos', false === ( $v['tiene_metodos_nuevos'] ?? null ) );
+t( 'salen las dos bienvenidas de siempre (trial y suscripción)', array( CE_VIEJO_TRIAL, CE_VIEJO_SUB ) === ( $v['asuntos'] ?? null ) );
+t( 'sub_post_alta sigue mandando su bienvenida de siempre (más el evento Meta sin cambios)', 3 === ( $v['mails_tras_sub_post_alta'] ?? null ) );
+// cada llamada a un método NUEVO de CN_Cuentas lleva su method_exists en el mismo archivo
+$falta = array();
+foreach ( array( 'club-natureza-miembros.php' => dirname( __DIR__ ) . '/club-natureza-miembros.php', 'class-cn-webhook.php' => $raiz . 'class-cn-webhook.php', 'class-cn-vinculo-manual.php' => $raiz . 'class-cn-vinculo-manual.php' ) as $b => $ruta ) {
+	$c = file_get_contents( $ruta );
+	if ( preg_match_all( '/(?<![\w:])CN_Cuentas::(\w+)\(/', $c, $mm ) ) {
+		foreach ( array_unique( $mm[1] ) as $metodo ) {
+			if ( false === strpos( $c, "method_exists( 'CN_Cuentas', '$metodo' )" ) ) {
+				$falta[] = "$b::$metodo";
+			}
+		}
+	}
+}
+t( 'toda llamada a CN_Cuentas::método en el plugin y las altas tiene method_exists del mismo método', array() === $falta, implode( ', ', $falta ) );

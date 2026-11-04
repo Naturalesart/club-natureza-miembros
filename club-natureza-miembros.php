@@ -52,7 +52,9 @@ require_once CN_PATH . 'includes/class-cn-corregir-vinculo.php'; // pantalla "Co
 require_once CN_PATH . 'includes/class-cn-diag-pagador.php'; // TEMPORAL (diagnóstico, solo lectura): borrar esta línea y el archivo para quitarla.
 if ( file_exists( CN_PATH . 'includes/class-cn-cuentas.php' ) ) { // el guard evita un fatal si el deploy por SFTP sube este archivo antes que la clase nueva.
 	require_once CN_PATH . 'includes/class-cn-cuentas.php'; // cuentas email + contraseña (PASO B): solo núcleo, sin pantallas ni enganches; flag cn_cuentas_modo apagado.
-	CN_Cuentas::registrar(); // PASO E: solo engancha update/add_option de cn_cuentas_modo (guarda cn_cuentas_desde al salir de off).
+	if ( method_exists( 'CN_Cuentas', 'registrar' ) ) { // el guard cubre una CN_Cuentas vieja (sin el método nuevo) por el deploy archivo por archivo.
+		CN_Cuentas::registrar(); // PASO E: solo engancha update/add_option de cn_cuentas_modo (guarda cn_cuentas_desde al salir de off).
+	}
 }
 register_activation_hook( __FILE__, array( 'CN_Activator', 'activar' ) );
 add_action( 'init', array( 'CN_Shortcodes', 'registrar' ) );
