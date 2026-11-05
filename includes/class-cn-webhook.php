@@ -568,6 +568,13 @@ class CN_Webhook {
 	 * Mail de bienvenida de una socia que se suscribió (no es el del trial: sin "7 días" ni "nunca se te cobra").
 	 * Mismo wrapper HTML que enviar_mail_bienvenida(). El usuario es el nombre y la contraseña el celular.
 	 */
+	/**
+	 * Solo el mail de bienvenida de una suscripción: sin evento Meta (sub_post_alta no se llama) y sin cuenta aparte.
+	 * Wrapper público y aditivo para CN_Autovincular; conserva la guarda del PASO E de la función protegida.
+	 */
+	public static function enviar_mail_acceso_sub( $nombre, $celular, $email, $plan_nombre ) {
+		self::enviar_mail_bienvenida_suscripcion( (string) $nombre, (string) $celular, (string) $email, (string) $plan_nombre );
+	}
 	protected static function enviar_mail_bienvenida_suscripcion( $nombre, $celular, $email, $plan_nombre ) {
 		if ( class_exists( 'CN_Cuentas' ) && method_exists( 'CN_Cuentas', 'reemplaza_bienvenida_datos' ) && CN_Cuentas::reemplaza_bienvenida_datos( $nombre, $celular, 'sub' ) ) { return; } // PASO E: con cn_cuentas_modo=on el mail de cuenta reemplaza a este (nunca si algo falla).
 		if ( '' === $email ) {
