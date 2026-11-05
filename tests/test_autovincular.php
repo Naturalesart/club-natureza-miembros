@@ -281,3 +281,143 @@ seccion( 'cero menciones prohibidas en lo nuevo' );
 $src = file_get_contents( dirname( __DIR__ ) . '/includes/class-cn-autovincular.php' );
 t( 'class-cn-autovincular.php: sin whatsapp/wa.me, sin wp_remote_* propios, sin INSERT/UPDATE/DELETE directos en miembros', false === stripos( $src, 'whatsapp' ) && false === stripos( $src, 'wa.me' ) && false === strpos( $src, 'wp_remote_' ) && false === strpos( $src, '->update(' ) && false === strpos( $src, '->insert(' ) && false === strpos( $src, '->delete(' ) );
 t( 'la única vía de escritura es CN_Webhook::vincular_suscripcion (está la llamada y ningún SQL propio de escritura)', false !== strpos( $src, 'CN_Webhook::vincular_suscripcion( $id, (int) $c->id, false )' ) && false === stripos( $src, 'INSERT INTO' ) && false === stripos( $src, 'UPDATE wp_' ) && false === stripos( $src, 'DELETE FROM' ) );
+
+// =====================================================================================================================
+// REVISIÓN DE #38 — punto 1: fichas manuales / con plan NO son candidatas (el comentario ahora coincide con el código)
+// =====================================================================================================================
+seccion( 'punto 1: solo las fichas de TRIAL sin preapproval ni plan pueden ser candidatas' );
+$pago_ts = time() - 7200;
+$item    = av_item( 1, 'Marcela', 'Palomo' );
+$cand_n  = function ( $extra ) use ( $item, $pago_ts ) {
+	return count( CN_Autovincular::candidatas( $item, '', array( av_socia( 5, 'Marcela Palomo', $extra ) ), $pago_ts ) );
+};
+t( 'trial vigente: candidata', 1 === $cand_n( array() ) );
+t( 'trial vencido y cancelada (pagó por link directo después): candidata', 1 === $cand_n( array( 'estado' => 'cancelada', 'fecha_fin_trial' => av_hace( 3 * 86400 ) ) ) );
+t( 'trial vencido y pausada: candidata', 1 === $cand_n( array( 'estado' => 'pausado', 'fecha_fin_trial' => av_hace( 3 * 86400 ) ) ) );
+t( 'MANUAL pura (activa, sin trial, sin plan): NO es candidata', 0 === $cand_n( array( 'fecha_fin_trial' => null ) ) );
+t( 'MANUAL con fecha_fin_trial vacía como texto: NO es candidata', 0 === $cand_n( array( 'fecha_fin_trial' => '' ) ) );
+t( 'MANUAL "suscripta" (con plan y acceso_hasta pero SIN preapproval): NO es candidata', 0 === $cand_n( array( 'fecha_fin_trial' => null, 'plan' => 'basico', 'acceso_hasta' => gmdate( 'Y-m-d H:i:s', time() + 20 * 86400 ) ) ) );
+t( 'trial que conserva el plan de una suscripción anterior (reasignada/cancelada): NO es candidata', 0 === $cand_n( array( 'plan' => 'full' ) ) );
+t( 'con preapproval cargado sigue sin ser candidata', 0 === $cand_n( array( 'preapproval_id' => 'OTRA00000000000000000000000000aa' ) ) );
+// De punta a punta: una manual con el nombre exacto NO se vincula; se alerta y no se escribe nada.
+$w = av_preparar( array( av_item( 1, 'Marcela', 'Palomo' ) ), array( av_socia( 5, 'Marcela Palomo', array( 'fecha_fin_trial' => null, 'plan' => 'basico' ) ) ) );
+$r = CN_Autovincular::procesar();
+t( 'manual con el nombre exacto: sin candidata, cero escrituras, alerta (decide una persona)', 1 === $r['sin_candidata'] && 0 === $r['vinculadas'] && ! $w->escrituras( 'cn_miembros' ) && in_array( 'autovincular_sin_candidata', $w->log_mp_tipos(), true ) );
+
+seccion( 'punto 1: homónimas de cualquier tipo frenan la vinculación por nombre' );
+$w = av_preparar( array( av_item( 1, 'Ana', 'López' ) ), array( av_socia( 5, 'Ana Lopez' ), av_socia( 6, 'Ana López', array( 'fecha_fin_trial' => null ) ) ) );
+$r = CN_Autovincular::procesar();
+t( 'trial "Ana López" + MANUAL "Ana López": ambigua, no vincula (podría ser la manual)', 1 === $r['ambiguas'] && 0 === $r['vinculadas'] && ! $w->escrituras( 'cn_miembros' ) );
+t( 'la alerta lista las dos fichas enmascaradas, la homónima marcada como tal', false !== strpos( av_payload( $w, 'autovincular_ambigua' ), '"ficha_id":5' ) && false !== strpos( av_payload( $w, 'autovincular_ambigua' ), '"ficha_id":6' ) && false !== strpos( av_payload( $w, 'autovincular_ambigua' ), 'homonima' ) && false === stripos( av_payload( $w, 'autovincular_ambigua' ), 'Ana Lopez' ) );
+$w = av_preparar( array( av_item( 1, 'Ana', 'López' ) ), array( av_socia( 5, 'Ana Lopez' ), av_socia( 6, 'Ana López', array( 'preapproval_id' => av_id( 77 ), 'plan' => 'basico' ) ) ) );
+$r = CN_Autovincular::procesar();
+t( 'trial + homónima YA SUSCRIPTA: tampoco vincula (podría ser un cobro de la ya suscripta)', 1 === $r['ambiguas'] && ! $w->escrituras( 'cn_miembros' ) );
+$w = av_preparar( array( av_item( 1, 'Ana', 'López', 7200, 15500, array( 'payer_email' => 'ana@gmail.com' ) ) ), array( av_socia( 5, 'Ana Lopez', array( 'email' => 'ana@gmail.com' ) ), av_socia( 6, 'Ana López', array( 'fecha_fin_trial' => null ) ) ) );
+$r = CN_Autovincular::procesar();
+t( 'con email EXACTO la homónima no frena (el email identifica): vincula a la del email', 1 === $r['vinculadas'] && 5 === (int) av_updates( $w )[0][3]['id'] );
+t( 'un nombre de una sola palabra jamás genera homónimas (ni frena ni vincula)', array() === CN_Autovincular::homonimas( av_item( 1, 'Ana', '' ), array( av_socia( 5, 'Ana' ), av_socia( 6, 'Ana López' ) ), 99 ) );
+
+// =====================================================================================================================
+// punto 2: zona horaria de fecha_alta / fecha_modificacion
+// =====================================================================================================================
+seccion( 'punto 2: el plugin guarda fecha_alta y fecha_modificacion en UTC y se leen como UTC' );
+$raiz_inc = dirname( __DIR__ ) . '/includes/';
+$locales  = array();
+foreach ( glob( $raiz_inc . '*.php' ) as $archivo_php ) {
+	$codigo = file_get_contents( $archivo_php );
+	if ( preg_match( "/current_time\\(\\s*'mysql'\\s*\\)|current_time\\(\\s*\"mysql\"\\s*\\)|current_time\\(\\s*'mysql'\\s*,\\s*(false|0)\\s*\\)|\\bNOW\\(\\)|(?<![A-Za-z_])date\\(\\s*'Y-m-d H:i:s'/", $codigo ) ) {
+		$locales[] = basename( $archivo_php );
+	}
+}
+t( 'ningún archivo del plugin escribe fechas con hora LOCAL (current_time sin gmt, NOW(), date()): contrato UTC fijado', array() === $locales, implode( ',', $locales ) );
+$fuentes_alta = file_get_contents( $raiz_inc . 'class-cn-webhook.php' ) . file_get_contents( $raiz_inc . 'class-cn-admin.php' ) . file_get_contents( $raiz_inc . 'class-cn-vinculo-manual.php' ) . file_get_contents( $raiz_inc . 'class-cn-colaboradora.php' );
+t( 'las altas de fichas (webhook, trial, admin, vinculación manual, colaboradora) toman la hora de current_time(mysql, true) o de un $ahora definido así', 6 <= preg_match_all( "/'fecha_alta'\\s*=>\\s*(current_time\\(\\s*'mysql'\\s*,\\s*true\\s*\\)|\\\$ahora)/", $fuentes_alta, $m_alta ) );
+$tz_antes         = date_default_timezone_get();
+$resultado_por_tz = array();
+foreach ( array( 'UTC', 'America/Argentina/Buenos_Aires', 'Pacific/Auckland' ) as $tz ) {
+	date_default_timezone_set( $tz );
+	$pago_tz = 1793887000; // instante fijo
+	$mk      = function ( $delta ) use ( $pago_tz ) {
+		$f = gmdate( 'Y-m-d H:i:s', $pago_tz + $delta );
+		return av_socia( 5, 'Marcela Palomo', array( 'fecha_alta' => $f, 'fecha_modificacion' => $f ) );
+	};
+	$it = av_item( 1, 'Marcela', 'Palomo' );
+	$resultado_por_tz[ $tz ] = array(
+		count( CN_Autovincular::candidatas( $it, '', array( $mk( -60 ) ), $pago_tz ) ),
+		count( CN_Autovincular::candidatas( $it, '', array( $mk( 60 ) ), $pago_tz ) ),
+		count( CN_Autovincular::candidatas( $it, '', array( $mk( -30 * 86400 - 60 ) ), $pago_tz ) ),
+		count( CN_Autovincular::candidatas( $it, '', array( $mk( -30 * 86400 + 60 ) ), $pago_tz ) ),
+	);
+}
+date_default_timezone_set( $tz_antes );
+t( 'el resultado NO depende de la zona horaria de PHP (UTC, Buenos Aires y Auckland dan lo mismo)', $resultado_por_tz['UTC'] === $resultado_por_tz['America/Argentina/Buenos_Aires'] && $resultado_por_tz['UTC'] === $resultado_por_tz['Pacific/Auckland'] );
+t( 'bordes exactos: 1 min antes del pago = candidata; 1 min después = no; 30 días + 1 min atrás = no; 30 días - 1 min atrás = sí', array( 1, 0, 0, 1 ) === $resultado_por_tz['UTC'], json_encode( $resultado_por_tz ) );
+t( 'el date_created de MP (con offset -04:00) se lee como el instante real: 09:08:32-04:00 = 13:08:32 UTC = 10:08 en Argentina', gmmktime( 13, 8, 32, 11, 5, 2026 ) === strtotime( '2026-11-05T09:08:32.000-04:00' ) );
+
+// =====================================================================================================================
+// punto 3: mail de acceso a la socia vinculada, SIN evento Meta
+// =====================================================================================================================
+seccion( 'punto 3: mail de acceso al email REGISTRADO de la ficha, sin evento Meta, una sola vez' );
+$mail_celular = '1155556605';
+$fila_mail    = function ( $celular ) {
+	return array( cn_fila( array( 'nombre_apellido' => 'Marcela Palomo', 'celular_texto_plano' => $celular ) ) );
+};
+$w = av_preparar( array( av_item( 1, 'Marcela', 'Palomo', 7200, 15500, array( 'payer_email' => 'otro.mail@hotmail.com' ) ) ), array( av_socia( 5, 'Marcela Palomo', array( 'email' => 'marcela@gmail.com' ) ) ) );
+$w->on( '/SELECT nombre_apellido, celular_texto_plano FROM wp_cn_miembros WHERE id = 5/', $fila_mail( $mail_celular ) );
+$r    = CN_Autovincular::procesar();
+$mail = $GLOBALS['cn_mails'][0] ?? array();
+t( 'vincula y manda UN mail', 1 === $r['vinculadas'] && 1 === $r['mails'] && 1 === count( $GLOBALS['cn_mails'] ) );
+t( 'va al email REGISTRADO en la ficha, NO al del pagador de MP (cuando difieren)', 'marcela@gmail.com' === ( $mail['to'] ?? '' ) && false === stripos( json_encode( $GLOBALS['cn_mails'] ), 'hotmail' ) );
+t( 'es el mail de bienvenida de la suscripción (datos de acceso: nombre y celular de la ficha, plan, link al Club)', false !== strpos( (string) ( $mail['asunto'] ?? '' ), 'datos de acceso' ) && false !== strpos( (string) ( $mail['cuerpo'] ?? '' ), 'Marcela Palomo' ) && false !== strpos( (string) ( $mail['cuerpo'] ?? '' ), $mail_celular ) && false !== strpos( (string) ( $mail['cuerpo'] ?? '' ), '/club-natureza-miembros/' ) );
+t( 'CERO eventos Meta (no hay Subscribe duplicado)', array() === $GLOBALS['cn_capi'] );
+t( 'el camino manual sigue con notificar=false (el rastro sub_vinculada_admin lo dice)', false !== strpos( av_payload( $w, 'sub_vinculada_admin' ), '"notificar":false' ) );
+t( 'rastro autovincular_mail: destino ENMASCARADO, pagador conocido, no coincide, Meta no enviado; sin celular ni email completos', ( function () use ( $w, $mail_celular ) {
+	$p = av_payload( $w, 'autovincular_mail' );
+	return false !== strpos( $p, 'ma***@gmail.com' ) && false !== strpos( $p, '"pagador_conocido":true' ) && false !== strpos( $p, '"coincide_pagador":false' ) && false !== strpos( $p, '"meta":"no_enviado"' )
+		&& false === strpos( $p, 'marcela@gmail.com' ) && false === strpos( $p, $mail_celular ) && false === strpos( $p, 'hotmail' );
+} )() );
+$w2 = av_preparar( array( av_item( 1, 'Marcela', 'Palomo' ) ), array( av_socia( 5, 'Marcela Palomo', array( 'email' => 'marcela@gmail.com', 'preapproval_id' => av_id( 1 ), 'plan' => 'basico', 'fecha_fin_trial' => null ) ) ) );
+$r2 = CN_Autovincular::procesar();
+t( 'la corrida siguiente (la ficha ya figura vinculada) no evalúa, no vincula y no manda: UN solo mail por vinculación', 0 === $r2['evaluadas'] && 0 === $r2['vinculadas'] && ! $GLOBALS['cn_mails'] && ! $w2->escrituras( 'cn_miembros' ) );
+
+$w = av_preparar( array( av_item( 1, 'Marcela', 'Palomo', 7200, 15500, array( 'payer_email' => 'pagadora@hotmail.com' ) ) ), array( av_socia( 5, 'Marcela Palomo', array( 'email' => null ) ) ) );
+$w->on( '/SELECT nombre_apellido, celular_texto_plano FROM wp_cn_miembros WHERE id = 5/', $fila_mail( $mail_celular ) );
+$r = CN_Autovincular::procesar();
+t( 'ficha SIN email aunque el email del pagador sea conocido: vincula pero NO manda (el mail lleva el celular completo; no se lo damos a un email sin verificar)', 1 === $r['vinculadas'] && 0 === $r['mails'] && ! $GLOBALS['cn_mails'] && array() === $GLOBALS['cn_capi'] );
+t( 'queda el rastro autovincular_mail_omitido (ficha_sin_email), con pagador_conocido true y sin ningún email', ( function () use ( $w ) {
+	$p = av_payload( $w, 'autovincular_mail_omitido' );
+	return false !== strpos( $p, '"motivo":"ficha_sin_email"' ) && false !== strpos( $p, '"pagador_conocido":true' ) && false === strpos( $p, '@' );
+} )() );
+
+$w = av_preparar( array( av_item( 1, 'Marcela', 'Palomo' ) ), array( av_socia( 5, 'Marcela Palomo', array( 'email' => 'marcela@gmail.com' ) ) ) );
+$w->on( '/SELECT nombre_apellido, celular_texto_plano FROM wp_cn_miembros WHERE id = 5/', $fila_mail( '' ) );
+$r = CN_Autovincular::procesar();
+t( 'ficha con email pero SIN celular guardado: vincula, no manda (saldría sin la clave) y lo deja anotado', 1 === $r['vinculadas'] && ! $GLOBALS['cn_mails'] && false !== strpos( av_payload( $w, 'autovincular_mail_omitido' ), '"motivo":"ficha_sin_celular"' ) );
+
+$w = av_preparar( array( av_item( 1, 'Marcela', 'Palomo' ) ), array( av_socia( 5, 'Marcela Palomo', array( 'email' => 'marcela@gmail.com' ) ) ), 'solo_alertar' );
+CN_Autovincular::procesar();
+t( 'solo_alertar: ni mail ni Meta ni escritura', ! $GLOBALS['cn_mails'] && array() === $GLOBALS['cn_capi'] && ! $w->escrituras( 'cn_miembros' ) );
+
+$w = av_preparar( array( av_item( 1, 'Marcela', 'Palomo' ) ), array( av_socia( 5, 'Marcela Palomo', array( 'email' => 'marcela@gmail.com' ) ) ) );
+$w->on( '/WHERE id = 5 FOR UPDATE/', array( av_socia( 5, 'Marcela Palomo', array( 'email' => 'marcela@gmail.com', 'preapproval_id' => 'GANADA00000000000000000000000000' ) ) ) );
+CN_Autovincular::procesar();
+t( 'si el camino manual rechaza (conflicto/carrera): no se manda ningún mail', ! $GLOBALS['cn_mails'] && array() === $GLOBALS['cn_capi'] );
+
+$w = av_preparar( array( av_item( 1, 'Marcela', 'Palomo' ) ), array( av_socia( 5, 'Marcela Palomo', array( 'email' => 'marcela@gmail.com' ) ) ) );
+$w->on( '/SELECT nombre_apellido, celular_texto_plano FROM wp_cn_miembros WHERE id = 5/', $fila_mail( $mail_celular ) );
+$GLOBALS['cn_mail_falla'] = true;
+$r = CN_Autovincular::procesar();
+t( 'si wp_mail falla, la vinculación ya hecha NO se toca (el mail es accesorio)', 1 === $r['vinculadas'] && 1 === count( av_updates( $w ) ) );
+$GLOBALS['cn_mail_falla'] = false;
+
+t( 'el wrapper público del webhook solo manda el mail: no llama a sub_post_alta (que es quien manda el Subscribe)', ( function () {
+	$src    = file_get_contents( dirname( __DIR__ ) . '/includes/class-cn-webhook.php' );
+	$ini    = strpos( $src, 'public static function enviar_mail_acceso_sub' );
+	$fin    = strpos( $src, 'protected static function enviar_mail_bienvenida_suscripcion' );
+	$cuerpo = ( false !== $ini && false !== $fin ) ? substr( $src, $ini, $fin - $ini ) : 'x';
+	return false !== strpos( $cuerpo, 'self::enviar_mail_bienvenida_suscripcion(' ) && false === strpos( $cuerpo, 'sub_post_alta' ) && false === strpos( $cuerpo, 'CN_Meta_Capi' );
+} )() );
+t( 'class-cn-autovincular.php sigue sin SQL de escritura propio, sin sub_post_alta ni CN_Meta_Capi', ( function () {
+	$src = file_get_contents( dirname( __DIR__ ) . '/includes/class-cn-autovincular.php' );
+	return false === strpos( $src, '->update(' ) && false === strpos( $src, '->insert(' ) && false === strpos( $src, '->delete(' ) && false === strpos( $src, 'sub_post_alta(' ) && false === strpos( $src, 'CN_Meta_Capi::' );
+} )() );
