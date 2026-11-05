@@ -201,9 +201,11 @@ $r1 = CN_Autovincular::correr();
 $r2 = CN_Autovincular::correr();
 t( 'corre una vez y la siguiente (dentro del espaciado de 25 min) no: convive con el sync de 5 min del PR 36', is_array( $r1 ) && null === $r2 && false === get_transient( CN_Autovincular::LOCK ) );
 cn_test_reset();
+$av_hooks_antes      = $GLOBALS['cn_hooks'] ?? array(); // los hooks del bootstrap se restauran al final (otros tests los verifican).
 $GLOBALS['cn_hooks'] = array();
 CN_Autovincular::registrar();
 t( 'registrar() engancha correr al hook del sync (cn_cron_sync_mp)', array( array( 'CN_Autovincular', 'correr' ) ) === ( $GLOBALS['cn_hooks']['cn_cron_sync_mp'] ?? array() ) );
+$GLOBALS['cn_hooks'] = $av_hooks_antes;
 $main = file_get_contents( dirname( __DIR__ ) . '/club-natureza-miembros.php' );
 t( 'el plugin carga la clase con guard (deploy archivo por archivo) y la registra', false !== strpos( $main, "class-cn-autovincular.php" ) && false !== strpos( $main, 'CN_Autovincular::registrar();' ) );
 
