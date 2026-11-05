@@ -142,6 +142,138 @@ class CN_Admin {
 		}
 		return implode( ' · ', $partes );
 	}
+	/* ---------------------------------------------------------------------
+	 * BUSCADOR DE FICHAS (para vincular sin escribir el celular completo)
+	 * ------------------------------------------------------------------- */
+	/**
+	 * Busca fichas por nombre (LIKE, 3+ caracteres) o por los últimos 4 dígitos del celular (exactamente 4 números =
+	 * celular_hint). Solo lectura, máximo 21 filas (se muestran 20 y se avisa si hay más). Devuelve id, nombre, estado,
+	 * plan, preapproval_id (para marcar las ya vinculadas), hint y fechas; nunca el celular completo ni el email.
+	 */
+	public static function buscar_fichas( $termino ) {
+		global $wpdb;
+		$termino = trim( (string) $termino );
+		if ( '' === $termino || mb_strlen( $termino ) > 80 ) {
+			return array();
+		}
+		$cols = 'id, nombre_apellido, estado, plan, preapproval_id, celular_hint, fecha_alta, fecha_fin_trial';
+		$t    = CN_DB::tabla( 'miembros' );
+		if ( preg_match( '/^[0-9]{4}$/', $termino ) ) {
+			$sql = $wpdb->prepare( "SELECT {$cols} FROM {$t} WHERE celular_hint = %s ORDER BY fecha_alta DESC, id DESC LIMIT 21", $termino );
+		} else {
+			if ( mb_strlen( $termino ) < 3 ) {
+				return array(); // muy corto: una letra matchearía media tabla.
+			}
+			$sql = $wpdb->prepare( "SELECT {$cols} FROM {$t} WHERE nombre_apellido LIKE %s ORDER BY fecha_alta DESC, id DESC LIMIT 21", '%' . $wpdb->esc_like( $termino ) . '%' );
+		}
+		$filas = $wpdb->get_results( $sql );
+		return ( '' === (string) $wpdb->last_error && is_array( $filas ) ) ? $filas : array();
+	}
+
+	/** Procesa el POST del buscador (nonce + manage_options). El término viaja por POST, nunca en la URL. */
+	protected static function procesar_buscar_ficha() {
+		if ( ! isset( $_POST['cn_bf_buscar'] ) ) {
+			return null;
+		}
+		$res = array( 'error' => '', 'termino' => '', 'pre' => '', 'filas' => array() );
+		if ( ! current_user_can( 'manage_options' ) ) {
+			$res['error'] = 'No tenés permisos para esto.';
+			return $res;
+		}
+		if ( ! check_admin_referer( 'cn_buscar_ficha', 'cn_bf_nonce' ) ) {
+			$res['error'] = 'Hubo un problema, recargá la página e intentá de nuevo.';
+			return $res;
+		}
+		$res['termino'] = trim( sanitize_text_field( wp_unslash( $_POST['cn_bf_termino'] ?? '' ) ) );
+		$pre            = trim( sanitize_text_field( wp_unslash( $_POST['cn_bf_pre'] ?? '' ) ) );
+		if ( preg_match( '/^[A-Za-z0-9_-]{16,64}$/', $pre ) ) {
+			$res['pre'] = $pre;
+		}
+		$res['filas'] = self::buscar_fichas( $res['termino'] );
+		return $res;
+	}
+
+	/**
+	 * Bloque visual del buscador. "Elegir" precarga el bloque "Vincular suscripción de Mercado Pago" de arriba
+	 * (cn_vincular_socia + cn_vincular_id, el mecanismo que ya usa el Cruce): la vinculación sigue siendo
+	 * Verificar → Confirmar por el MISMO camino de siempre, pero sin escribir el celular completo.
+	 */
+	protected static function bloque_buscar_ficha( $res ) {
+		$termino = is_array( $res ) ? (string) $res['termino'] : '';
+		$pre     = is_array( $res ) ? (string) $res['pre'] : '';
+		if ( '' === $pre && isset( $_GET['cn_vincular_id'] ) ) {
+			$pre_get = trim( sanitize_text_field( wp_unslash( $_GET['cn_vincular_id'] ) ) );
+			if ( preg_match( '/^[A-Za-z0-9_-]{16,64}$/', $pre_get ) ) {
+				$pre = $pre_get;
+			}
+		}
+		?>
+		<h3 id="cn-buscar-ficha">Buscar la ficha sin el celular completo</h3>
+		<p style="max-width:720px;" class="description">Buscá por <strong>nombre</strong> o por los <strong>últimos 4 dígitos</strong> del celular, y elegí la ficha: se precarga en "Vincular suscripción de Mercado Pago" (arriba) para Verificar y recién después Confirmar. Solo lectura: elegir no vincula nada.</p>
+		<?php
+		if ( is_array( $res ) && '' !== $res['error'] ) {
+			self::aviso( $res['error'], 'error' );
+		}
+		?>
+		<form method="post" style="max-width:720px;margin-bottom:8px;" action="<?php echo esc_url( '#cn-buscar-ficha' ); ?>">
+			<?php wp_nonce_field( 'cn_buscar_ficha', 'cn_bf_nonce' ); ?>
+			<input type="hidden" name="cn_bf_pre" value="<?php echo esc_attr( $pre ); ?>">
+			<label>Nombre o últimos 4 del celular:
+				<input type="text" name="cn_bf_termino" class="regular-text" autocomplete="off" value="<?php echo esc_attr( $termino ); ?>"></label>
+			<button type="submit" name="cn_bf_buscar" value="1" class="button button-secondary">Buscar ficha</button>
+			<?php if ( '' !== $pre ) : ?>
+				<span class="description">Suscripción a vincular: <code><?php echo esc_html( substr( $pre, 0, 8 ) ); ?>…</code></span>
+			<?php endif; ?>
+		</form>
+		<?php
+		if ( ! is_array( $res ) || '' !== $res['error'] ) {
+			return;
+		}
+		if ( ! $res['filas'] ) {
+			if ( '' !== $termino ) {
+				self::aviso( 'No se encontró ninguna ficha con eso (mínimo 3 letras, o exactamente 4 dígitos). Probá con parte del nombre.', 'warning' );
+			}
+			return;
+		}
+		$filas    = array_slice( $res['filas'], 0, 20 );
+		$hay_mas  = count( $res['filas'] ) > 20;
+		?>
+		<table class="widefat striped" style="max-width:860px;margin-bottom:16px;">
+			<thead><tr><th>Ficha</th><th>Nombre</th><th>Tipo</th><th>Plan actual</th><th>Celular</th><th>Estado</th><th>Alta</th><th></th></tr></thead>
+			<tbody>
+			<?php foreach ( $filas as $f ) :
+				$vinculada = '' !== trim( (string) $f->preapproval_id );
+				$tipo      = $vinculada ? 'suscripta' : ( ! empty( $f->fecha_fin_trial ) ? 'trial' : 'manual' );
+				$args      = array( 'page' => 'cn-socias', 'cn_vincular_socia' => (int) $f->id );
+				if ( '' !== $pre ) {
+					$args['cn_vincular_id'] = $pre;
+				}
+				?>
+				<tr>
+					<td>#<?php echo (int) $f->id; ?></td>
+					<td><?php echo esc_html( (string) $f->nombre_apellido ); ?></td>
+					<td><?php echo esc_html( $tipo ); ?></td>
+					<td><?php echo esc_html( '' !== (string) $f->plan ? (string) $f->plan : '—' ); ?></td>
+					<td><?php echo esc_html( CN_Vinculo::mascara_celular( (string) $f->celular_hint ) ); ?></td>
+					<td><?php echo esc_html( (string) $f->estado ); ?></td>
+					<td><?php echo esc_html( mysql2date( 'd/m/Y', (string) $f->fecha_alta ) ); ?></td>
+					<td>
+						<?php if ( $vinculada ) : ?>
+							<span class="description">ya tiene suscripción vinculada</span>
+						<?php else : ?>
+							<a class="button button-small" href="<?php echo esc_url( add_query_arg( $args, admin_url( 'admin.php' ) ) . '#cn-vincular-mp' ); ?>">Elegir</a>
+						<?php endif; ?>
+					</td>
+				</tr>
+			<?php endforeach; ?>
+			</tbody>
+		</table>
+		<?php if ( $hay_mas ) : ?>
+			<p class="description">Hay más de 20 resultados: afiná la búsqueda.</p>
+		<?php endif; ?>
+		<?php
+	}
+
 	/**
 	 * Lee y limpia los campos del bloque "Vincular suscripción de Mercado Pago" (Fase 5). La socia se elige de la
 	 * lista (el texto empieza con "#id"); en el paso de confirmación el id viaja en un campo oculto.
@@ -484,6 +616,7 @@ class CN_Admin {
 		$tabla = CN_DB::tabla( 'miembros' );
 		$cn_link_res = self::procesar_generar_link(); // Fase 2C: solo actúa si se envió su propio formulario.
 		$cn_vm_res   = self::procesar_vincular_mp(); // Fase 4-G: solo actúa si se envió su propio formulario.
+		$cn_bf_res   = self::procesar_buscar_ficha(); // Buscador de fichas (para vincular sin el celular completo): ídem.
 		$cn_vm2_res  = CN_Vinculo_Manual::procesar(); // Vincular por celular: solo actúa si se envió su propio formulario.
 		$cn_vl_res   = CN_Vinculo_Lote::procesar(); // Vincular en lote: ídem (previsualiza o confirma de a pocos).
 		// Alta rápida.
@@ -587,6 +720,7 @@ class CN_Admin {
 			</form>
 			<?php self::bloque_generar_link( $cn_link_res ); ?>
 			<?php self::bloque_vincular_mp( $cn_vm_res ); ?>
+			<?php self::bloque_buscar_ficha( $cn_bf_res ); ?>
 			<?php CN_Vinculo_Manual::render( $cn_vm2_res ); ?>
 			<?php CN_Vinculo_Lote::render( $cn_vl_res ); ?>
 			<?php self::bloque_duplicados( $socias ); // Fase 5: solo lectura, sobre el listado completo (antes de filtrar). ?>
@@ -1423,6 +1557,11 @@ class CN_Admin {
 				$cn_espejo_nuevo = sanitize_key( wp_unslash( $_POST['cn_espejo_mp_modo'] ) );
 				update_option( CN_Espejo_MP::OPT_MODO, in_array( $cn_espejo_nuevo, array( 'log', 'on' ), true ) ? $cn_espejo_nuevo : 'off' );
 			}
+			// Auto-vinculación por candidata única (CN_Autovincular): off|solo_alertar|on. Apagada por defecto.
+			if ( isset( $_POST['cn_autovincular_modo'] ) && class_exists( 'CN_Autovincular' ) ) {
+				$cn_av_nuevo = sanitize_key( wp_unslash( $_POST['cn_autovincular_modo'] ) );
+				update_option( CN_Autovincular::OPT_MODO, in_array( $cn_av_nuevo, array( 'solo_alertar', 'on' ), true ) ? $cn_av_nuevo : 'off' );
+			}
 			// Página de retorno de suscripciones por link directo ([cn_retorno_suscripcion]). Apagada por defecto.
 			update_option( 'cn_retorno_activo', isset( $_POST['cn_retorno_activo'] ) ? '1' : '0' );
 			update_option( CN_Retorno::OPT_WHATSAPP, preg_replace( '/\D+/', '', sanitize_text_field( wp_unslash( $_POST['cn_retorno_whatsapp'] ?? '' ) ) ) ); // solo dígitos
@@ -1452,6 +1591,7 @@ class CN_Admin {
 		$retorno_activo   = '1' === (string) get_option( 'cn_retorno_activo', '0' );
 		$alta_modo        = CN_Alta_Mail::modo();
 		$espejo_modo      = CN_Espejo_MP::modo();
+		$autovincular_modo = class_exists( 'CN_Autovincular' ) ? CN_Autovincular::modo() : 'off';
 		$alta_url         = (string) get_option( CN_Alta_Mail::OPT_URL, '' );
 		$alta_desde       = (int) get_option( CN_Alta_Mail::OPT_DESDE, 0 );
 		$retorno_wa       = (string) get_option( CN_Retorno::OPT_WHATSAPP, '' );
@@ -1544,6 +1684,19 @@ class CN_Admin {
 							<p class="description">Apagado por defecto. Solo fichas ya vinculadas a una suscripción. "Solo registrar" anota en el registro (<code>espejo_mp_simulado</code>) qué haría y lo cuenta en el cartel de Socias. En "Activo", una pausa o cancelación en Mercado Pago programa la baja para el fin del período pagado + 7 días (nadie pierde el acceso antes), y se cancela sola si Mercado Pago vuelve a autorizar. No manda mails.</p>
 						</td>
 					</tr>
+					<?php if ( class_exists( 'CN_Autovincular' ) ) : ?>
+					<tr>
+						<th><label>Auto-vincular suscripciones sin vincular</label></th>
+						<td>
+							<select name="cn_autovincular_modo">
+								<option value="off" <?php selected( $autovincular_modo, 'off' ); ?>>Apagado (no hace nada)</option>
+								<option value="solo_alertar" <?php selected( $autovincular_modo, 'solo_alertar' ); ?>>Solo registrar (anota a quién vincularía, NO vincula)</option>
+								<option value="on" <?php selected( $autovincular_modo, 'on' ); ?>>Activo (vincula solo con candidata única)</option>
+							</select>
+							<p class="description">Apagado por defecto. Corre después del sync y vincula una suscripción sin vincular SOLO cuando hay exactamente UNA ficha segura: sin suscripción vinculada, con actividad en los 30 días previos al pago, y nombre igual al del pagador (2+ palabras, sin importar el orden) o email exacto. Con 0 o varias candidatas no toca nada y avisa. Máximo 3 por corrida. Usa el mismo camino que "Vincular suscripción de Mercado Pago" (sin mail ni evento Meta) y deja en el registro (<code>autovincular_*</code>) el estado previo de la ficha para revertir a mano. Recomendado: una semana en "Solo registrar" antes de pasar a Activo.</p>
+						</td>
+					</tr>
+					<?php endif; ?>
 					<tr>
 						<th><label>Alta por mail (suscripción sin ficha)</label></th>
 						<td>
