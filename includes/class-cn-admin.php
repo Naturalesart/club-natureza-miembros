@@ -1425,6 +1425,10 @@ class CN_Admin {
 			}
 			// Página de retorno de suscripciones por link directo ([cn_retorno_suscripcion]). Apagada por defecto.
 			update_option( 'cn_retorno_activo', isset( $_POST['cn_retorno_activo'] ) ? '1' : '0' );
+			// FASE 2: endpoint ?cn_suscribir= (link firmado por ficha desde los mails). off por defecto; el secreto se genera en su bloque, más abajo.
+			if ( isset( $_POST['cn_suscribir_modo'] ) && class_exists( 'CN_Suscribir' ) ) {
+				update_option( CN_Suscribir::OPT_MODO, 'on' === sanitize_key( wp_unslash( $_POST['cn_suscribir_modo'] ) ) ? 'on' : 'off' );
+			}
 			update_option( CN_Retorno::OPT_WHATSAPP, preg_replace( '/\D+/', '', sanitize_text_field( wp_unslash( $_POST['cn_retorno_whatsapp'] ?? '' ) ) ) ); // solo dígitos
 			// API de solo lectura del panel de socias (CN_Panel_API). Apagada por defecto.
 			update_option( CN_Panel_API::OPT_ACTIVO, isset( $_POST['cn_panel_api_activo'] ) ? '1' : '0' );
@@ -1436,6 +1440,8 @@ class CN_Admin {
 			self::aviso( 'Configuración guardada.' );
 		}
 		$panel_token_nuevo = CN_Panel_API::procesar_generar_token(); // botón "Generar/rotar token": se muestra una sola vez.
+		$suscribir_cfg     = class_exists( 'CN_Suscribir' ) ? CN_Suscribir::procesar_config() : array(); // botones "Generar secreto" / "Armar link": se muestran una sola vez.
+		$suscribir_modo    = class_exists( 'CN_Suscribir' ) ? CN_Suscribir::modo() : 'off';
 		$panel_activo      = CN_Panel_API::activo();
 		$token        = CN_MP::get_access_token();
 		$token_trial  = CN_MP::get_access_token_trial();
@@ -1524,6 +1530,18 @@ class CN_Admin {
 							<p class="description">Tildado por defecto. Cada 30 minutos revisa hasta 20 suscripciones: renovaciones y reanudaciones se aplican; cancelaciones y pausas solo programan la baja (sin cortar el acceso) si el Modo seguro está destildado. También deja un aviso de las suscripciones autorizadas sin vincular hace más de 1 hora (no vincula nada).</p>
 						</td>
 					</tr>
+					<?php if ( class_exists( 'CN_Suscribir' ) ) : ?>
+					<tr>
+						<th><label>Suscribirse desde los mails (link firmado)</label></th>
+						<td>
+							<select name="cn_suscribir_modo">
+								<option value="off" <?php selected( 'off', $suscribir_modo ); ?>>Apagado (todo va a /planes-club/)</option>
+								<option value="on" <?php selected( 'on', $suscribir_modo ); ?>>Encendido (crea la suscripción de la ficha y manda a pagar)</option>
+							</select>
+							<p class="description">Apagado por defecto. Con el endpoint apagado o sin secreto, el link <code>?cn_suscribir=</code> solo redirige a /planes-club/. El secreto y los links de prueba están más abajo, en su bloque. Marcha atrás: Apagado.</p>
+						</td>
+					</tr>
+					<?php endif; ?>
 					<tr>
 						<th><label>Página de retorno de suscripción</label></th>
 						<td>
@@ -1617,6 +1635,7 @@ class CN_Admin {
 				<?php submit_button( 'Guardar configuración', 'primary', 'cn_admin_guardar_config' ); ?>
 			</form>
 			<?php CN_Panel_API::bloque_config( $panel_token_nuevo ); ?>
+			<?php if ( class_exists( 'CN_Suscribir' ) ) { CN_Suscribir::bloque_config( $suscribir_cfg ); } ?>
 			<h2>Webhooks de Mercado Pago</h2>
 			<p>Suscripciones — pegá esta URL en la app de Suscripciones → Webhooks:</p>
 			<input type="text" readonly class="regular-text" style="width:100%;max-width:600px;" onclick="this.select();" value="<?php echo esc_url( CN_MP::webhook_url() ); ?>">

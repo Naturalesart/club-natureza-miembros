@@ -180,6 +180,8 @@ class CN_MP {
 	 * Devuelve el init_point (string) o un WP_Error. Si falta el ID del plan en las
 	 * opciones, devuelve WP_Error SIN llamar a MP. Si MP falla, no deja fila pendiente.
 	 */
+	/** Orígenes válidos de una suscripción pendiente: panel y landing (de siempre) + los caminos de los mails (FASE 2, CN_Suscribir). */
+	const ORIGENES_SUSCRIPCION = array( 'panel', 'landing', 'mail_d5', 'mail_d6', 'mail_d7', 'winback', 'upsell' );
 	public static function crear_suscripcion_link( $plan, $nombre, $celular, $email = '', $origen = 'panel', $meta = array() ) {
 		global $wpdb;
 		$planes = self::get_planes();
@@ -190,7 +192,7 @@ class CN_MP {
 		if ( '' === $token ) {
 			return new WP_Error( 'cn_sin_token', 'Falta configurar el access token de Mercado Pago (Suscripciones).' );
 		}
-		if ( ! is_string( $origen ) || ! in_array( $origen, array( 'panel', 'landing' ), true ) ) {
+		if ( ! is_string( $origen ) || ! in_array( $origen, self::ORIGENES_SUSCRIPCION, true ) ) {
 			return new WP_Error( 'cn_origen_invalido', 'Origen inválido.' );
 		}
 		$nombre = mb_substr( trim( sanitize_text_field( (string) $nombre ) ), 0, 191 );
@@ -282,6 +284,10 @@ class CN_MP {
 			$mensaje = ( is_array( $data ) && isset( $data['message'] ) && is_string( $data['message'] ) ) ? $data['message'] : 'Mercado Pago rechazó la solicitud.';
 			return new WP_Error( 'cn_mp_rechazo', $mensaje );
 		}
+		// FASE 2: se guarda el init_point en la pendiente (columna aditiva, DB 2.10.0) para que un segundo clic en 24 h reuse la misma.
+		// Si la columna todavía no existe (deploy a medias) el UPDATE falla en silencio y no cambia nada.
+		$wpdb->update( $t_pend, array( 'init_point' => mb_substr( (string) $data['init_point'], 0, 500 ) ), array( 'external_reference' => $external_reference ), array( '%s' ), array( '%s' ) );
+		$wpdb->last_error = '';
 		return (string) $data['init_point'];
 	}
 	public static function obtener_preapproval( $id ) {
