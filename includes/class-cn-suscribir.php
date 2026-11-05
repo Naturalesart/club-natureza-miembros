@@ -24,8 +24,9 @@ if ( ! defined( 'ABSPATH' ) ) exit;
  * Reglas: token inválido/vencido → 302 a /planes-club/ (ahí está el formulario con identidad), nunca una pantalla de
  * error. Ficha con suscripción ACTIVA ya vinculada → NO se crea otra: 302 a /planes-club/ + rastro suscribir_ya_activa
  * (mp_log + cartel). Ficha sin suscripción activa → se reusa la pendiente de las últimas 24 h de ese celular+plan si la
- * hay (doble clic / dos pestañas = un solo preapproval); si no, crear_suscripcion_link con nombre/celular/email de la
- * ficha y el origen del token. Rate limit por IP (8 cada 10 min, como el formulario de planes).
+ * hay (doble clic / dos pestañas = un solo preapproval); si no, crear_suscripcion_link con nombre y celular de la ficha
+ * y el origen del token, SIN email (como la landing: un payer_email que no coincide con la cuenta de Mercado Pago de la
+ * socia puede trabar el checkout). Rate limit por IP (8 cada 10 min, como el formulario de planes).
  *
  * Mercado Pago: GET nunca (todo sale de la base) y POST SOLO a /preapproval vía crear_suscripcion_link (suscripción
  * pendiente sin card_token). Jamás cancela, pausa ni cobra. Cero UPDATE/DELETE en wp_cn_miembros. Ningún dato personal
@@ -229,15 +230,14 @@ class CN_Suscribir {
 			CN_Webhook::registrar_log_mp( 'suscribir_reusada', $base );
 			return $out;
 		}
-		$email = isset( $ficha->email ) ? trim( (string) $ficha->email ) : '';
-		$email = ( '' !== $email && is_email( $email ) ) ? $email : '';
-		$meta  = array(
+		$meta = array(
 			'fbp'        => isset( $_COOKIE['_fbp'] ) && is_string( $_COOKIE['_fbp'] ) ? sanitize_text_field( wp_unslash( $_COOKIE['_fbp'] ) ) : '',
 			'fbc'        => isset( $_COOKIE['_fbc'] ) && is_string( $_COOKIE['_fbc'] ) ? sanitize_text_field( wp_unslash( $_COOKIE['_fbc'] ) ) : '',
 			'ip'         => CN_Helpers::get_client_ip(),
 			'user_agent' => isset( $_SERVER['HTTP_USER_AGENT'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_USER_AGENT'] ) ) : '',
 		);
-		$res = CN_MP::crear_suscripcion_link( $plan, (string) $ficha->nombre_apellido, $celular, $email, $origen, $meta );
+		// Email SIEMPRE vacío, igual que la landing (class-cn-shortcodes.php, procesar_planes_form): MP no recibe payer_email.
+		$res = CN_MP::crear_suscripcion_link( $plan, (string) $ficha->nombre_apellido, $celular, '', $origen, $meta );
 		if ( is_wp_error( $res ) ) {
 			$out['caso'] = 'fallo';
 			CN_Webhook::registrar_log_mp( 'suscribir_fallo', $base + array( 'error' => mb_substr( (string) $res->get_error_message(), 0, 200 ) ) );
@@ -245,7 +245,7 @@ class CN_Suscribir {
 		}
 		$out['caso']     = 'creada';
 		$out['redirect'] = (string) $res;
-		CN_Webhook::registrar_log_mp( 'suscribir_creada', $base + array( 'email' => '' !== $email ? CN_Alta_Mail::mascara_email( $email ) : '' ) );
+		CN_Webhook::registrar_log_mp( 'suscribir_creada', $base );
 		return $out;
 	}
 

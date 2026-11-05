@@ -155,11 +155,11 @@ t( 'redirect 302 al init_point de MP, caso creada', 'https://www.mercadopago.com
 t( 'UNA sola pendiente', 1 === count( $p ) );
 $fila = $p ? $p[0][2] : array();
 t( 'external_reference sub_<celular>_<hash>', 0 === strpos( (string) ( $fila['external_reference'] ?? '' ), 'sub_' . SP_CEL . '_' ) );
-t( 'origen = el del token (mail_d5), plan basico, nombre y email de la ficha, celular normalizado', 'mail_d5' === ( $fila['origen'] ?? '' ) && 'basico' === ( $fila['plan'] ?? '' ) && 'Socia Prueba' === ( $fila['nombre_apellido'] ?? '' ) && 'socia.prueba@gmail.com' === ( $fila['email'] ?? '' ) && SP_CEL === ( $fila['celular'] ?? '' ) );
+t( 'origen = el del token (mail_d5), plan basico, nombre de la ficha, celular normalizado y email vacío (null)', 'mail_d5' === ( $fila['origen'] ?? '' ) && 'basico' === ( $fila['plan'] ?? '' ) && 'Socia Prueba' === ( $fila['nombre_apellido'] ?? '' ) && array_key_exists( 'email', $fila ) && null === $fila['email'] && SP_CEL === ( $fila['celular'] ?? '' ) );
 t( 'ip, user_agent y fbp del navegador (como el formulario de planes)', '190.1.2.3' === ( $fila['ip'] ?? '' ) && 'Mozilla/5.0 (test)' === ( $fila['user_agent'] ?? '' ) && 'fb.1.1700000000000.111' === ( $fila['fbp'] ?? '' ) );
 $mp = cn_http_calls( '#/preapproval$#' );
 $body = $mp ? json_decode( $mp[0]['body'], true ) : array();
-t( 'UN solo POST a MP: /preapproval sin plan (sin preapproval_plan_id), con external_reference sub_, status pending, payer_email de la ficha', 1 === count( $mp ) && 'POST' === $mp[0]['metodo'] && ! isset( $body['preapproval_plan_id'] ) && ( $body['external_reference'] ?? '' ) === $fila['external_reference'] && 'pending' === ( $body['status'] ?? '' ) && 'socia.prueba@gmail.com' === ( $body['payer_email'] ?? '' ) && 15500.0 === (float) $body['auto_recurring']['transaction_amount'] );
+t( 'UN solo POST a MP: /preapproval sin plan (sin preapproval_plan_id), con external_reference sub_, status pending, SIN payer_email aunque la ficha tenga un email válido', 1 === count( $mp ) && 'POST' === $mp[0]['metodo'] && ! isset( $body['preapproval_plan_id'] ) && ( $body['external_reference'] ?? '' ) === $fila['external_reference'] && 'pending' === ( $body['status'] ?? '' ) && ! array_key_exists( 'payer_email', $body ) && false === strpos( $mp[0]['body'], '@' ) && false === strpos( $mp[0]['body'], 'socia.prueba' ) && 15500.0 === (float) $body['auto_recurring']['transaction_amount'] );
 t( 'ningún GET a MP ni otro POST (nunca cancelar/pausar/cobrar)', 1 === count( array_filter( $GLOBALS['cn_http_log'], function ( $c ) {
 	return false !== strpos( $c['url'], 'mercadopago' );
 } ) ) );
@@ -172,11 +172,11 @@ t( 'guarda el init_point en la pendiente (columna aditiva) para poder reusarla',
 	}
 	return false;
 } )() );
-t( 'rastro suscribir_creada con ficha_id, plan y origen; email enmascarado, celular ausente', in_array( 'suscribir_creada', $w->log_mp_tipos(), true ) && ( function () use ( $w ) {
+t( 'rastro suscribir_creada con ficha_id, plan y origen; sin email (ni enmascarado) ni celular', in_array( 'suscribir_creada', $w->log_mp_tipos(), true ) && ( function () use ( $w ) {
 	foreach ( $w->log as $l ) {
 		if ( 'insert' === $l[0] && false !== strpos( $l[1], 'mp_log' ) && 'suscribir_creada' === $l[2]['tipo'] ) {
 			$p = (string) $l[2]['payload'];
-			return false !== strpos( $p, '"ficha_id":21' ) && false !== strpos( $p, '"origen":"mail_d5"' ) && false !== strpos( $p, 'so***@gmail.com' ) && false === strpos( $p, 'socia.prueba@gmail.com' ) && false === strpos( $p, SP_CEL );
+			return false !== strpos( $p, '"ficha_id":21' ) && false !== strpos( $p, '"origen":"mail_d5"' ) && false === strpos( $p, '"email"' ) && false === strpos( $p, 'so***' ) && false === strpos( $p, 'socia.prueba' ) && false === strpos( $p, SP_CEL );
 		}
 	}
 	return false;
@@ -190,6 +190,14 @@ foreach ( array( 'mail_d6', 'mail_d7', 'winback', 'upsell' ) as $o ) {
 $w = sp_preparar( sp_ficha( array( 'email' => 'no-es-email' ) ) );
 $r = CN_Suscribir::procesar( sp_token() );
 t( 'ficha con email inválido: se crea igual, sin payer_email', 'creada' === $r['caso'] && null === sp_pendientes( $w )[0][2]['email'] && ! isset( json_decode( cn_http_calls( '#/preapproval$#' )[0]['body'], true )['payer_email'] ) );
+foreach ( array( 'basico' => 'mail_d5', 'full' => 'winback' ) as $plan_e => $origen_e ) {
+	$w = sp_preparar( sp_ficha( array( 'email' => 'Otra.Cuenta+club@Hotmail.com' ) ) );
+	$r = CN_Suscribir::procesar( sp_token( 21, $plan_e, $origen_e ) );
+	$mp_e = cn_http_calls( '#/preapproval$#' );
+	t( "ficha con email válido ({$plan_e}/{$origen_e}): se crea y el email se envía VACÍO (ni a MP ni a la pendiente)", 'creada' === $r['caso'] && 1 === count( $mp_e ) && ! array_key_exists( 'payer_email', json_decode( $mp_e[0]['body'], true ) ) && false === stripos( $mp_e[0]['body'], 'hotmail' ) && 1 === count( sp_pendientes( $w ) ) && null === sp_pendientes( $w )[0][2]['email'] );
+}
+$fuente_e = file_get_contents( dirname( __DIR__ ) . '/includes/class-cn-suscribir.php' );
+t( 'el código llama a crear_suscripcion_link con email literal vacío y no usa mascara_email', false !== strpos( $fuente_e, '$celular, ' . "''" . ', $origen, $meta )' ) && false === strpos( $fuente_e, 'mascara_email' ) );
 $w = sp_preparar( sp_ficha( array( 'estado' => 'cancelada', 'preapproval_id' => 'PRE_VIEJA', 'baja_en' => null ) ) );
 $r = CN_Suscribir::procesar( sp_token( 21, 'basico', 'winback' ) );
 t( 'win-back: ficha cancelada con una suscripción vieja vinculada NO cuenta como activa: se crea la nueva', 'creada' === $r['caso'] && 1 === count( sp_pendientes( $w ) ) );
