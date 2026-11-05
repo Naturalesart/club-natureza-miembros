@@ -5,7 +5,7 @@ class CN_DB {
 		global $wpdb;
 		return $wpdb->prefix . 'cn_' . $nombre;
 	}
-	const DB_VERSION = '2.9.0'; // 2.9.0: tablas nuevas cn_cuentas y cn_cuenta_tokens (acceso con email + contraseña; aditivas, no tocan las existentes).
+	const DB_VERSION = '2.10.0'; // 2.10.0: columna aditiva init_point en cn_suscripciones_pendientes (FASE 2: reusar la pendiente de 24 h). 2.9.0: tablas nuevas cn_cuentas y cn_cuenta_tokens (acceso con email + contraseña; aditivas, no tocan las existentes).
 	public static function maybe_upgrade() {
 		if ( get_option( 'cn_db_version' ) !== self::DB_VERSION ) {
 			self::instalar();
@@ -152,6 +152,7 @@ class CN_DB {
 			user_agent text DEFAULT NULL,
 			creado datetime NOT NULL,
 			usado tinyint(1) NOT NULL DEFAULT 0,
+			init_point varchar(500) DEFAULT NULL,
 			PRIMARY KEY  (id),
 			UNIQUE KEY external_reference (external_reference),
 			KEY celular (celular)

@@ -67,6 +67,10 @@ if ( file_exists( CN_PATH . 'includes/class-cn-mail-cuenta.php' ) ) { // mismo g
 	add_action( 'init', array( 'CN_Mail_Cuenta', 'registrar' ) );
 }
 add_action( 'init', array( 'CN_Retorno', 'registrar' ) );
+if ( file_exists( CN_PATH . 'includes/class-cn-suscribir.php' ) ) { // mismo guard: el deploy por SFTP sube archivo por archivo.
+	require_once CN_PATH . 'includes/class-cn-suscribir.php'; // FASE 2: ?cn_suscribir=<token> (link firmado por ficha desde los mails). Inerte con cn_suscribir_modo 'off' (default) o sin secreto.
+	add_action( 'init', array( 'CN_Suscribir', 'registrar' ) );
+}
 CN_Planes_MP::registrar();
 // Rol "Colaboradora Club": acceso acotado (solo cargar contenido), sin permisos de administrador.
 add_action( 'init', array( 'CN_Colaboradora', 'registrar_rol' ) );
