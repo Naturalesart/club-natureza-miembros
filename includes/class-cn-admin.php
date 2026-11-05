@@ -1405,6 +1405,21 @@ class CN_Admin {
 			update_option( 'cn_sub_modo_seguro', isset( $_POST['cn_sub_modo_seguro'] ) ? '1' : '0' );
 			// Fase 5: sync con Mercado Pago cada 30 min. Tildado por defecto.
 			update_option( 'cn_sync_mp_activo', isset( $_POST['cn_sync_mp_activo'] ) ? '1' : '0' );
+			// Frecuencia del sync y espera del mail "completá tus datos" (minutos). Vacío = valor por defecto (30 y 45): se borra la opción.
+			foreach ( array( 'cn_sync_intervalo_min', 'cn_mail_recuperacion_min' ) as $cn_opt_min ) {
+				if ( ! isset( $_POST[ $cn_opt_min ] ) ) {
+					continue;
+				}
+				$cn_val_min = trim( sanitize_text_field( wp_unslash( $_POST[ $cn_opt_min ] ) ) );
+				if ( '' === $cn_val_min || ! ctype_digit( $cn_val_min ) ) {
+					delete_option( $cn_opt_min );
+				} else {
+					update_option( $cn_opt_min, (int) $cn_val_min );
+				}
+			}
+			if ( method_exists( 'CN_Sync', 'programar' ) ) {
+				CN_Sync::programar(); // si cambió el intervalo, reprograma el cron ahora (si no, no toca nada).
+			}
 			// Fase 5: guarda del cron de trials (mira en MP si pagó por link directo antes de cancelar). Tildado por defecto.
 			update_option( 'cn_guarda_trial_mp', isset( $_POST['cn_guarda_trial_mp'] ) ? '1' : '0' );
 			// Guarda de trials en modo solo-log: tildado por defecto. Tildado = registra su decisión y no cambia nada.
@@ -1447,6 +1462,8 @@ class CN_Admin {
 		$sub_auto_activar = '1' === (string) get_option( 'cn_sub_auto_activar', '0' );
 		$sub_modo_seguro  = '1' === (string) get_option( 'cn_sub_modo_seguro', '1' );
 		$sync_mp_activo   = '1' === (string) get_option( 'cn_sync_mp_activo', '1' );
+		$sync_intervalo   = get_option( 'cn_sync_intervalo_min', '' );
+		$mail_espera      = get_option( 'cn_mail_recuperacion_min', '' );
 		$guarda_trial_mp  = '1' === (string) get_option( 'cn_guarda_trial_mp', '1' );
 		$guarda_solo_log  = '1' === (string) get_option( 'cn_guarda_trial_solo_log', '1' );
 		$retorno_activo   = '1' === (string) get_option( 'cn_retorno_activo', '0' );
@@ -1522,6 +1539,10 @@ class CN_Admin {
 						<td>
 							<label><input type="checkbox" name="cn_sync_mp_activo" value="1" <?php checked( $sync_mp_activo ); ?>> Revisar en Mercado Pago las suscripciones ya vinculadas, sin depender de los webhooks</label>
 							<p class="description">Tildado por defecto. Cada 30 minutos revisa hasta 20 suscripciones: renovaciones y reanudaciones se aplican; cancelaciones y pausas solo programan la baja (sin cortar el acceso) si el Modo seguro está destildado. También deja un aviso de las suscripciones autorizadas sin vincular hace más de 1 hora (no vincula nada).</p>
+							<p style="margin-top:10px;"><label>Cada cuántos minutos corre el sync: <input type="number" name="cn_sync_intervalo_min" min="5" max="1440" step="1" value="<?php echo esc_attr( is_scalar( $sync_intervalo ) ? (string) $sync_intervalo : '' ); ?>" style="width:80px;" placeholder="30"></label></p>
+							<p class="description">Vacío = 30 (como siempre). Mínimo 5. Con menos de 30, el barrido de las suscripciones vinculadas, el aviso de sin vincular y el reemplazo automático siguen corriendo una vez cada 30 minutos: en los ticks intermedios solo corre el alta por mail (abajo). Si Mercado Pago responde 429, esa corrida termina y espera a la siguiente. Al guardar se reprograma el cron solo.</p>
+							<p style="margin-top:10px;"><label>Minutos de espera desde el pago para el mail "completá tus datos": <input type="number" name="cn_mail_recuperacion_min" min="5" max="1440" step="1" value="<?php echo esc_attr( is_scalar( $mail_espera ) ? (string) $mail_espera : '' ); ?>" style="width:80px;" placeholder="45"></label></p>
+							<p class="description">Vacío = 45 (como siempre). Mínimo 5. Solo aplica con el alta por mail en "Solo registrar" o "Mandar el mail". Sigue siendo máximo 1 mail por suscripción.</p>
 						</td>
 					</tr>
 					<tr>

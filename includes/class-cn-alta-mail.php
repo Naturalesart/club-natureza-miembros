@@ -2,9 +2,11 @@
 if ( ! defined( 'ABSPATH' ) ) exit;
 /**
  * Alta por mail: una suscripción pagada por el link directo del plan, de alguien sin ficha, no trae email ni referencia y
- * MP no devuelve a la clienta con el preapproval_id. El sync (cada 30 min) la detecta, saca el email del pagador del
- * cobro aprobado y le manda a esa casilla un link FIRMADO a la página de retorno ([cn_retorno_suscripcion]) para que
- * complete celular y nombre. La página (CN_Retorno) hace todo lo demás con sus protecciones de siempre.
+ * MP no devuelve a la clienta con el preapproval_id. El sync (cada 30 min, o cada cn_sync_intervalo_min minutos) la
+ * detecta, saca el email del pagador del cobro aprobado y le manda a esa casilla un link FIRMADO a la página de retorno
+ * ([cn_retorno_suscripcion]) para que complete celular y nombre. La página (CN_Retorno) hace todo lo demás con sus
+ * protecciones de siempre. El mail sale recién pasados cn_mail_recuperacion_min minutos del pago (45 si la opción no
+ * existe): ver espera_seg().
  *
  * Modos (opción cn_alta_mail_modo, por defecto 'off'):
  *  - 'off': no hace nada (ni una consulta a MP).
@@ -27,7 +29,10 @@ class CN_Alta_Mail {
 	const OPT_INTENTOS  = 'cn_alta_mail_intentos'; // preapproval_id => intentos de envío del mail
 	const MAX_ACCIONES  = 3;    // suscripciones por corrida a las que se les manda (o simula) el mail
 	const MAX_CONSULTAS = 10;   // suscripciones NUEVAS (<= 72 hs) por corrida a las que se les consulta el cobro (acota los pedidos)
-	const EDAD_MIN_SEG  = 2700; // 45 min: antes de eso no se manda ni se simula (la clienta puede estar completando sus datos en la página de retorno)
+	const EDAD_MIN_SEG  = 2700; // 45 min: antes de eso no se manda ni se simula (la clienta puede estar completando sus datos en la página de retorno). Es el valor por defecto de la opción cn_mail_recuperacion_min: ver espera_seg().
+	const OPT_ESPERA_MIN = 'cn_mail_recuperacion_min'; // minutos de espera desde el pago; vacía/ausente/no numérica = 45
+	const ESPERA_MIN_MIN = 5;    // piso: nunca menos de 5 min (la clienta puede estar completando sus datos en la página de retorno)
+	const ESPERA_MAX_MIN = 1440;
 	const RECHEQUEO_SEG = 21600; // 6 hs: una vieja (> 72 hs) sin cobro aprobado se re-chequea como máximo 1 vez cada tanto
 	const MAX_ENVIOS    = 3;    // intentos de envío por suscripción; después solo queda el aviso en el cartel
 	const MAX_PAGOS_POR_SUB = 3;
@@ -43,6 +48,19 @@ class CN_Alta_Mail {
 	public static function modo() {
 		$m = (string) get_option( self::OPT_MODO, 'off' );
 		return in_array( $m, array( 'log', 'on' ), true ) ? $m : 'off';
+	}
+
+	/**
+	 * Segundos que tienen que pasar desde el pago para mandar (o simular) el mail. ÚNICO lugar que lee
+	 * cn_mail_recuperacion_min: vacía, ausente o no numérica = EDAD_MIN_SEG (45 min, lo de siempre); un número se acota
+	 * entre ESPERA_MIN_MIN y ESPERA_MAX_MIN minutos.
+	 */
+	public static function espera_seg() {
+		$v = get_option( self::OPT_ESPERA_MIN, '' );
+		if ( ! is_scalar( $v ) || '' === trim( (string) $v ) || ! is_numeric( $v ) ) {
+			return self::EDAD_MIN_SEG;
+		}
+		return 60 * (int) min( self::ESPERA_MAX_MIN, max( self::ESPERA_MIN_MIN, (int) $v ) );
 	}
 
 	/** Lo llama Config al guardar: al salir de 'off' fija el corte (solo suscripciones nuevas desde ahora). */
@@ -186,6 +204,7 @@ class CN_Alta_Mail {
 		} );
 		$chequeos = self::mapa( self::OPT_CHEQUEOS );
 		$intentos = self::mapa( self::OPT_INTENTOS );
+		$espera   = self::espera_seg();
 		$res['candidatas'] = count( $candidatas );
 
 		foreach ( $candidatas as $id => $c ) {
@@ -197,7 +216,7 @@ class CN_Alta_Mail {
 			if ( ! $vieja && $res['consultadas'] >= self::MAX_CONSULTAS ) {
 				continue; // tope de consultas de las nuevas; las viejas no entran en esta cuenta.
 			}
-			if ( $edad < self::EDAD_MIN_SEG ) {
+			if ( $edad < $espera ) {
 				continue; // muy reciente: todavía no se manda ni se simula.
 			}
 			if ( isset( $intentos[ $id ] ) && (int) $intentos[ $id ] >= self::MAX_ENVIOS ) {
@@ -216,6 +235,11 @@ class CN_Alta_Mail {
 				$res['consultadas']++;
 			}
 			$email = self::email_del_pagador( $id, $token, $pres );
+			if ( ! empty( $pres['corte_429'] ) ) {
+				// MP devolvió 429 y los reintentos de siempre no alcanzaron: esta corrida termina acá y lo que falta espera a la próxima (nunca martillar).
+				$res['motivo'] = 'corte_429';
+				break;
+			}
 			if ( null === $email ) {
 				if ( $vieja ) {
 					$chequeos[ $id ] = time();
@@ -340,9 +364,8 @@ class CN_Alta_Mail {
 		return true;
 	}
 
-	/** Mail con la marca de los demás (Georgia, verde #2f3b2c, crema #f5f3ef). Sin contraseñas ni datos sensibles. */
+	/** Mail con la marca de los demás (Georgia, verde #2f3b2c, crema #f5f3ef). Sin contraseñas ni datos sensibles. Contacto: responder el mail o hola@naturalesart.com (nada más). */
 	public static function enviar_mail( $email, $link ) {
-		$wa      = defined( 'CN_WA_SOPORTE' ) ? 'https://wa.me/' . CN_WA_SOPORTE : '';
 		$asunto  = 'Tu suscripción al Club Natureza está activa: completá tus datos';
 		$cuerpo  = '<!DOCTYPE html><html><body style="margin:0;padding:0;background:#f5f3ef;font-family:Georgia,serif;">';
 		$cuerpo .= '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f5f3ef;padding:32px 16px;">';
@@ -358,7 +381,7 @@ class CN_Alta_Mail {
 		$cuerpo .= '</td></tr></table>';
 		$cuerpo .= '<p style="font-size:14px;color:#555;line-height:1.6;margin:0 0 16px;">Si ya eras socia, usá el mismo celular con el que entrabas.</p>';
 		$cuerpo .= '<p style="font-size:14px;color:#555;line-height:1.6;margin:0 0 16px;">El link es personal y vale ' . (int) self::TOKEN_DIAS . ' días.</p>';
-		$cuerpo .= '<p style="font-size:14px;color:#555;line-height:1.6;margin:20px 0 0;">Cualquier duda, escribinos por WhatsApp' . ( '' !== $wa ? ': <a href="' . esc_url( $wa ) . '" style="color:#2f3b2c;">' . esc_html( $wa ) . '</a>' : '.' ) . '</p>';
+		$cuerpo .= '<p style="font-size:14px;color:#555;line-height:1.6;margin:20px 0 0;">Cualquier duda, respondé este mail o escribinos a <a href="mailto:hola@naturalesart.com" style="color:#2f3b2c;">hola@naturalesart.com</a>.</p>';
 		$cuerpo .= '<p style="font-size:15px;color:#2f3b2c;margin:20px 0 0;">¡Bienvenida! 🌿</p>';
 		$cuerpo .= '</td></tr></table></td></tr></table></body></html>';
 		return (bool) wp_mail( $email, $asunto, $cuerpo, array( 'Content-Type: text/html; charset=UTF-8' ) );

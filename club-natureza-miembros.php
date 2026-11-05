@@ -137,9 +137,14 @@ add_action( 'init', function () {
 	}
 } );
 // Fase 5: sync con Mercado Pago cada 30 min (sin webhooks) + aviso de suscripciones sin vincular. Se apaga con la opción cn_sync_mp_activo.
+// La frecuencia se puede acortar con la opción cn_sync_intervalo_min (minutos; vacía = 30): CN_Sync::programar reprograma el evento si cambió.
 add_filter( 'cron_schedules', array( 'CN_Sync', 'registrar_intervalo' ) );
 add_action( 'cn_cron_sync_mp', array( 'CN_Sync', 'correr' ) );
 add_action( 'init', function () {
+	if ( method_exists( 'CN_Sync', 'programar' ) ) { // el guard cubre una CN_Sync vieja (deploy por SFTP archivo por archivo).
+		CN_Sync::programar();
+		return;
+	}
 	if ( ! wp_next_scheduled( 'cn_cron_sync_mp' ) ) {
 		wp_schedule_event( time() + 300, 'cn_30min', 'cn_cron_sync_mp' );
 	}

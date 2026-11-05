@@ -3,9 +3,12 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 /**
  * Fase 5: sincronización con Mercado Pago SIN depender de webhooks, y guarda del cron de trials.
  *
- *  - correr(): cron cada 30 min. (a) Lote de hasta LOTE suscripciones ya vinculadas: consulta GET /preapproval/{id}
- *    y aplica el MISMO CN_Webhook::gestionar_ciclo_sub() que el webhook. (b) Aviso de suscripciones
- *    authorized en MP sin vincular hace más de 1 hora. NUNCA vincula nada solo.
+ *  - correr(): cron cada 30 min (o cada cn_sync_intervalo_min minutos, si esa opción está cargada). (a) Lote de hasta
+ *    LOTE suscripciones ya vinculadas: consulta GET /preapproval/{id} y aplica el MISMO CN_Webhook::gestionar_ciclo_sub()
+ *    que el webhook. (b) Aviso de suscripciones authorized en MP sin vincular hace más de 1 hora. NUNCA vincula nada solo.
+ *    (c) Reemplazo automático. (d) Alta por mail (CN_Alta_Mail).
+ *    Con un intervalo más corto que 30 min, (a), (b) y (c) siguen corriendo UNA vez cada 30 min (ciclo completo); en los
+ *    ticks intermedios solo corre (d), que es lo que acorta el alta de un pago sin identidad. Así no se barre todo cada 5 min.
  *  - guarda_trial(): antes de cancelar un trial vencido sin suscripción, mira si pagó por link directo.
  *
  * Regla común: si MP falla (red, 4xx/5xx, respuesta rara) NO se cambia el estado de nadie; se reintenta en la
@@ -19,19 +22,99 @@ class CN_Sync {
 	const MAX_INTENTOS_ITEM = 5;       // corridas seguidas en que un ítem puede fallar antes de salir de la cola de reintento
 	const MAX_COLA         = 200;
 	const OPT_FALLIDOS     = 'cn_sync_mp_fallidos'; // cola de ítems fallidos: id de socia => array( preapproval_id, intentos, desde )
-	const LOCK_SEG         = 1500;     // una corrida no pisa a la anterior (25 min)
+	const LOCK_SEG         = 1500;     // una corrida no pisa a la anterior (25 min; con intervalo configurado ver lock_seg())
+	// Frecuencia del cron: opción cn_sync_intervalo_min (minutos). Sin la opción (o con un valor no numérico) = 30, como siempre.
+	const OPT_INTERVALO         = 'cn_sync_intervalo_min';
+	const INTERVALO_DEFECTO_MIN = 30;
+	const INTERVALO_MIN_MIN     = 5;    // piso: nunca más seguido que cada 5 min
+	const INTERVALO_MAX_MIN     = 1440;
+	const CICLO_COMPLETO_SEG    = 1800; // el barrido de las vinculadas, el aviso de sin vincular y el reemplazo auto siguen cada 30 min aunque el cron corra más seguido
+	const OPT_CICLO_TS          = 'cn_sync_ciclo_completo_ts'; // timestamp del último ciclo completo (solo se escribe con intervalo < 30 min)
 	const MIN_SIN_VINCULAR = 3600;     // una suscripción authorized sin vincular se avisa pasada 1 hora
 	const REAVISO_SEG      = 86400;    // y se vuelve a avisar como máximo 1 vez por día
 	const MAX_ITEMS_ALERTA = 20;
 	const MONTO_MIN_PLAN   = 15500;    // cobro "de plan" para la guarda del trial
 	/** Pausa entre llamadas a MP dentro de un lote, en microsegundos (0,3 s). Propiedad y no constante solo para poder probar sin esperar. */
 	public static $pausa_us = 300000;
-	/** Agrega el intervalo de 30 minutos al cron de WordPress (filtro cron_schedules). */
+	/** Agrega el intervalo de 30 minutos al cron de WordPress (filtro cron_schedules) y, si hay uno distinto configurado, también ese. */
 	public static function registrar_intervalo( $schedules ) {
 		if ( ! isset( $schedules['cn_30min'] ) ) {
 			$schedules['cn_30min'] = array( 'interval' => 1800, 'display' => 'Cada 30 minutos (Club Natureza)' );
 		}
+		$nombre = self::nombre_intervalo();
+		if ( 'cn_30min' !== $nombre && ! isset( $schedules[ $nombre ] ) ) {
+			$schedules[ $nombre ] = array( 'interval' => self::intervalo_seg(), 'display' => 'Cada ' . self::intervalo_min() . ' minutos (Club Natureza)' );
+		}
 		return $schedules;
+	}
+	/**
+	 * Minutos entre corridas del cron. ÚNICO lugar que lee cn_sync_intervalo_min: vacía, ausente o no numérica = 30
+	 * (el comportamiento de siempre); un número se acota entre INTERVALO_MIN_MIN y INTERVALO_MAX_MIN.
+	 */
+	public static function intervalo_min() {
+		$v = get_option( self::OPT_INTERVALO, '' );
+		if ( ! is_scalar( $v ) || '' === trim( (string) $v ) || ! is_numeric( $v ) ) {
+			return self::INTERVALO_DEFECTO_MIN;
+		}
+		return (int) min( self::INTERVALO_MAX_MIN, max( self::INTERVALO_MIN_MIN, (int) $v ) );
+	}
+	public static function intervalo_seg() {
+		return 60 * self::intervalo_min();
+	}
+	/** Nombre del intervalo en el cron de WP: 'cn_30min' con el valor por defecto (igual que siempre); 'cn_sync_{n}min' con otro. */
+	public static function nombre_intervalo() {
+		$m = self::intervalo_min();
+		return self::INTERVALO_DEFECTO_MIN === $m ? 'cn_30min' : 'cn_sync_' . $m . 'min';
+	}
+	/** ¿El cron corre más seguido que el ciclo completo de 30 min? */
+	public static function frecuencia_alta() {
+		return self::intervalo_seg() < self::CICLO_COMPLETO_SEG;
+	}
+	/** Vida del lock: 25 min como siempre; con un intervalo corto, el intervalo mismo (mínimo 5 min), para que un corte abrupto no frene varias corridas. */
+	public static function lock_seg() {
+		return (int) min( self::LOCK_SEG, max( 300, self::intervalo_seg() ) );
+	}
+	/**
+	 * Programa (o reprograma) el evento cn_cron_sync_mp con el intervalo configurado. La llama el init del plugin en cada
+	 * carga; solo toca el cron cuando el evento no existe o quedó con otro intervalo (cambió la opción). Sin la opción,
+	 * hace exactamente lo de siempre: si no está programado, cn_30min dentro de 5 minutos.
+	 *
+	 * @return bool true si programó o reprogramó algo.
+	 */
+	public static function programar() {
+		if ( ! function_exists( 'wp_get_scheduled_event' ) ) { // WordPress anterior a 5.1 (no es el caso): lo de siempre, sin reprogramar.
+			if ( wp_next_scheduled( 'cn_cron_sync_mp' ) ) {
+				return false;
+			}
+			wp_schedule_event( time() + 300, 'cn_30min', 'cn_cron_sync_mp' );
+			return true;
+		}
+		$deseado = self::nombre_intervalo();
+		$evento  = wp_get_scheduled_event( 'cn_cron_sync_mp' );
+		if ( $evento && isset( $evento->schedule ) && $evento->schedule === $deseado ) {
+			return false; // ya está con el intervalo pedido.
+		}
+		if ( $evento ) {
+			wp_clear_scheduled_hook( 'cn_cron_sync_mp' );
+		}
+		wp_schedule_event( time() + 300, $deseado, 'cn_cron_sync_mp' );
+		return true;
+	}
+	/**
+	 * ¿Esta corrida hace el ciclo completo (lote + aviso de sin vincular + reemplazo auto)? Con el intervalo de siempre (30 min)
+	 * SIEMPRE. Con uno más corto, solo cuando pasaron ~30 min desde el último (con medio intervalo de tolerancia por el
+	 * desfasaje natural del cron de WP); en el resto de los ticks solo corre el alta por mail.
+	 */
+	public static function toca_ciclo_completo() {
+		if ( ! self::frecuencia_alta() ) {
+			return true;
+		}
+		$ultimo = (int) get_option( self::OPT_CICLO_TS, 0 );
+		return ( time() - $ultimo ) >= self::CICLO_COMPLETO_SEG - (int) floor( self::intervalo_seg() / 2 );
+	}
+	/** Con el cron más seguido que 30 min, un 429 que persiste tras los reintentos de siempre TERMINA la corrida (lo que falta queda en cola para la próxima). Con 30 min, como siempre: sigue con la fila que sigue. */
+	public static function corta_ante_429() {
+		return self::frecuencia_alta();
 	}
 	/** Opción en '1'/'0' con valor por defecto. */
 	protected static function flag( $nombre, $defecto ) {
@@ -48,26 +131,29 @@ class CN_Sync {
 		if ( get_transient( 'cn_sync_mp_lock' ) ) {
 			return; // la corrida anterior sigue en curso.
 		}
-		set_transient( 'cn_sync_mp_lock', 1, self::LOCK_SEG );
-		CN_Alertas::chequear_sync(); // heartbeat: alerta GRAVE si hace más de 24 hs que no hay una corrida completa y exitosa.
-		$ok = true;
-		try {
-			self::sincronizar_lote();
-		} catch ( Throwable $e ) {
-			$ok = false;
-			CN_Webhook::registrar_log_mp( 'sub_error', array( 'paso' => 'sync_lote', 'mensaje' => mb_substr( $e->getMessage(), 0, 300 ) ) );
-			CN_Webhook::sub_avisar_una_vez_por_hora( 'sub_error', 'sync_lote', array( 'paso' => 'sync_lote', 'mensaje' => mb_substr( $e->getMessage(), 0, 300 ) ) );
-		}
-		try {
-			self::alertar_sin_vincular();
-		} catch ( Throwable $e ) {
-			$ok = false;
-			CN_Webhook::registrar_log_mp( 'sub_error', array( 'paso' => 'sync_alerta', 'mensaje' => mb_substr( $e->getMessage(), 0, 300 ) ) );
-		}
-		try {
-			CN_Reemplazo_Auto::correr(); // modo 'log' por defecto: solo registra en mp_log. Solo GET a MP; nunca lanza (y no afecta el heartbeat).
-		} catch ( Throwable $e ) {
-			CN_Webhook::registrar_log_mp( 'sub_error', array( 'paso' => 'reemplazo_auto', 'mensaje' => mb_substr( $e->getMessage(), 0, 300 ) ) );
+		set_transient( 'cn_sync_mp_lock', 1, self::lock_seg() );
+		$completa = self::toca_ciclo_completo(); // con el intervalo de siempre (30 min) es true en toda corrida.
+		$ok       = true;
+		if ( $completa ) {
+			CN_Alertas::chequear_sync(); // heartbeat: alerta GRAVE si hace más de 24 hs que no hay una corrida completa y exitosa.
+			try {
+				self::sincronizar_lote();
+			} catch ( Throwable $e ) {
+				$ok = false;
+				CN_Webhook::registrar_log_mp( 'sub_error', array( 'paso' => 'sync_lote', 'mensaje' => mb_substr( $e->getMessage(), 0, 300 ) ) );
+				CN_Webhook::sub_avisar_una_vez_por_hora( 'sub_error', 'sync_lote', array( 'paso' => 'sync_lote', 'mensaje' => mb_substr( $e->getMessage(), 0, 300 ) ) );
+			}
+			try {
+				self::alertar_sin_vincular();
+			} catch ( Throwable $e ) {
+				$ok = false;
+				CN_Webhook::registrar_log_mp( 'sub_error', array( 'paso' => 'sync_alerta', 'mensaje' => mb_substr( $e->getMessage(), 0, 300 ) ) );
+			}
+			try {
+				CN_Reemplazo_Auto::correr(); // modo 'log' por defecto: solo registra en mp_log. Solo GET a MP; nunca lanza (y no afecta el heartbeat).
+			} catch ( Throwable $e ) {
+				CN_Webhook::registrar_log_mp( 'sub_error', array( 'paso' => 'reemplazo_auto', 'mensaje' => mb_substr( $e->getMessage(), 0, 300 ) ) );
+			}
 		}
 		try {
 			CN_Alta_Mail::correr(); // 'off' por defecto: no hace nada. Solo GET a MP; nunca vincula ni crea socias.
@@ -76,8 +162,11 @@ class CN_Sync {
 			CN_Webhook::registrar_log_mp( 'sub_error', array( 'paso' => 'alta_mail', 'mensaje' => mb_substr( $e->getMessage(), 0, 300 ) ) );
 			CN_Webhook::avisar_error_n8n( 'alta_mail_error', array( 'mensaje' => mb_substr( $e->getMessage(), 0, 300 ) ) );
 		}
-		if ( $ok ) {
-			CN_Alertas::sync_ok(); // corrida completa y sin excepciones: late el heartbeat.
+		if ( $completa && self::frecuencia_alta() ) {
+			update_option( self::OPT_CICLO_TS, time(), false ); // el próximo ciclo completo, en ~30 min; mientras tanto, solo alta por mail.
+		}
+		if ( $completa && $ok ) {
+			CN_Alertas::sync_ok(); // corrida completa y sin excepciones: late el heartbeat. (Un tick intermedio nunca lo hace latir.)
 		}
 		delete_transient( 'cn_sync_mp_lock' );
 	}
@@ -94,8 +183,9 @@ class CN_Sync {
 	 * (sync_item_fallido) y en la cola para reintentar en la próxima corrida, y la corrida SIGUE con las demás. El
 	 * cursor avanza siempre. Si se llega a un tope (pedidos, espera o tiempo) el resto del lote se encola igual.
 	 *
-	 * @return array{procesadas:int,fallos:int,omitidas_modo_seguro:int,abortada:bool,reintentadas:int,en_cola:int}
-	 *         abortada = true si un tope cortó la corrida antes de terminar (lo pendiente quedó en la cola).
+	 * @return array{procesadas:int,fallos:int,omitidas_modo_seguro:int,abortada:bool,corte_429:bool,reintentadas:int,en_cola:int}
+	 *         abortada = true si un tope cortó la corrida antes de terminar (lo pendiente quedó en la cola);
+	 *         corte_429 = true si la cortó un 429 persistente de MP (solo con el cron más seguido que 30 min).
 	 */
 	public static function sincronizar_lote() {
 		global $wpdb;
@@ -125,7 +215,7 @@ class CN_Sync {
 			}
 		}
 		$trabajo = array_values( $trabajo );
-		$res     = array( 'procesadas' => 0, 'fallos' => 0, 'omitidas_modo_seguro' => 0, 'abortada' => false, 'reintentadas' => $reintentadas, 'en_cola' => 0 );
+		$res     = array( 'procesadas' => 0, 'fallos' => 0, 'omitidas_modo_seguro' => 0, 'abortada' => false, 'corte_429' => false, 'reintentadas' => $reintentadas, 'en_cola' => 0 );
 		$modo_seguro = self::flag( 'cn_sub_modo_seguro', '1' );
 		$presupuesto = array( 'requests' => self::TOPE_REQUESTS, 'espera' => self::TOPE_ESPERA_SEG, 'hasta' => time() + self::TOPE_TIEMPO_SEG );
 		$ahora       = time();
@@ -147,11 +237,13 @@ class CN_Sync {
 				$motivo = $r['ok'] ? 'respuesta de MP inválida o de otra suscripción' : $r['motivo'];
 				self::marcar_fallido( $cola, $cola_nueva, $id, $pid, $motivo, $r['intentos'], $ahora );
 				$res['fallos']++;
-				if ( 'tope' === $r['http'] ) {
-					// Se acabaron los pedidos/tiempo de la corrida: lo que falta no se pidió; queda en la cola, no se saltea.
-					$res['abortada'] = true;
+				$corte_429 = 429 === $r['http'] && self::corta_ante_429(); // solo con el cron más seguido que 30 min: un 429 que persiste termina la corrida (nunca martillar).
+				if ( 'tope' === $r['http'] || $corte_429 ) {
+					// Se acabaron los pedidos/tiempo de la corrida (o MP pide frenar): lo que falta no se pidió; queda en la cola, no se saltea.
+					$res['abortada']  = true;
+					$res['corte_429'] = $corte_429;
 					foreach ( array_slice( $trabajo, $i + 1 ) as $resto ) {
-						self::marcar_fallido( $cola, $cola_nueva, (int) $resto->id, (string) $resto->preapproval_id, 'no se llegó: tope de la corrida', 0, $ahora );
+						self::marcar_fallido( $cola, $cola_nueva, (int) $resto->id, (string) $resto->preapproval_id, $corte_429 ? 'no se llegó: 429 de Mercado Pago, la corrida termina' : 'no se llegó: tope de la corrida', 0, $ahora );
 						$res['fallos']++;
 					}
 					break;
@@ -185,7 +277,7 @@ class CN_Sync {
 		if ( $res['fallos'] || $res['abortada'] ) {
 			CN_Webhook::registrar_log_mp( 'sync_mp_lote', $res + array( 'tamano_lote' => count( $filas ) ) );
 		}
-		if ( $res['abortada'] ) {
+		if ( $res['abortada'] && ! $res['corte_429'] ) { // el corte por 429 ya dejó su rastro mp_api_error (y su aviso, máx. 1/hora): no se duplica.
 			CN_Webhook::sub_avisar_una_vez_por_hora( 'sub_error', 'sync_abortada', array( 'paso' => 'sync_lote', 'mensaje' => 'La corrida llegó a su tope de pedidos/tiempo con Mercado Pago; lo pendiente queda en cola para la próxima, sin cambiar nada.' ) );
 		}
 		return $res;
