@@ -430,6 +430,8 @@ class CN_MP {
 	 * 'requests' (pedidos que quedan), 'espera' (segundos de espera que quedan) y 'hasta' (timestamp límite).
 	 * Respeta Retry-After; sin él, espera 2 s, 4 s, 8 s. Si el tope no alcanza para esperar, se rinde en ese pedido.
 	 * Solo GET. Deja el rastro mp_api_error del último intento fallido (igual que get()).
+	 * Si se rinde por un 429 (reintentos agotados o sin tiempo para esperar) marca $presupuesto['corte_429'] = true: quien
+	 * llama puede terminar su corrida ahí en vez de seguir pidiendo. No cambia nada más de lo que ya hacía.
 	 *
 	 * @return array{ok:bool,http:mixed,data:?array,intentos:int,motivo:string}
 	 */
@@ -465,13 +467,17 @@ class CN_MP {
 			$res['motivo'] = 'HTTP ' . $codigo;
 			if ( 429 !== $codigo || $n >= self::REINTENTOS_429 ) {
 				self::registrar_error_api( $path, $codigo, wp_remote_retrieve_body( $respuesta ) );
+				if ( 429 === $codigo ) {
+					$presupuesto['corte_429'] = true;
+				}
 				return $res;
 			}
 			$pedida = self::segundos_retry_after( function_exists( 'wp_remote_retrieve_header' ) ? wp_remote_retrieve_header( $respuesta, 'retry-after' ) : '' );
 			$espera = null !== $pedida ? min( $pedida, self::ESPERA_MAX_SEG ) : 2 * ( 2 ** $n ); // 2, 4, 8
 			if ( $espera > $presupuesto['espera'] || time() + $espera >= $presupuesto['hasta'] ) {
 				self::registrar_error_api( $path, $codigo, '429 y sin tiempo de espera en esta corrida' );
-				$res['motivo'] = 'HTTP 429 (sin tiempo de espera en la corrida)';
+				$res['motivo']            = 'HTTP 429 (sin tiempo de espera en la corrida)';
+				$presupuesto['corte_429'] = true;
 				return $res;
 			}
 			$presupuesto['espera'] -= $espera;

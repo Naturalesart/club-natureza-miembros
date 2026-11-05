@@ -41,6 +41,9 @@ function cn_test_reset() {
 	$GLOBALS['cn_mails']      = array();
 	$GLOBALS['cn_mail_falla'] = false;
 	$GLOBALS['cn_capi']       = array();
+	$GLOBALS['cn_cron']       = array();
+	$GLOBALS['cm_cron']       = array();
+	$GLOBALS['cn_cron_log']   = array();
 	$GLOBALS['wpdb']         = new CN_Fake_Wpdb();
 }
 // ---------------------------------------------------------------- funciones de WordPress
@@ -72,6 +75,29 @@ function get_option( $k, $def = false ) {
 function update_option( $k, $v ) {
 	$GLOBALS['cn_opts'][ $k ] = $v;
 	return true;
+}
+function delete_option( $k ) {
+	unset( $GLOBALS['cn_opts'][ $k ] );
+	return true;
+}
+// Cron de WordPress (mínimo): un evento por hook. $GLOBALS['cn_cron'][ hook ] = array( 'timestamp', 'schedule' ); $GLOBALS['cm_cron'][ hook ] = schedule
+// (la vista que ya usaban test_cuentas_mail / test_zcuentas_altas, que la resetean por su cuenta: por eso un evento vale solo si está en las dos).
+function wp_next_scheduled( $hook ) {
+	return isset( $GLOBALS['cn_cron'][ $hook ], $GLOBALS['cm_cron'][ $hook ] ) ? $GLOBALS['cn_cron'][ $hook ]['timestamp'] : false;
+}
+function wp_get_scheduled_event( $hook ) {
+	return isset( $GLOBALS['cn_cron'][ $hook ], $GLOBALS['cm_cron'][ $hook ] ) ? (object) ( $GLOBALS['cn_cron'][ $hook ] + array( 'hook' => $hook ) ) : false;
+}
+function wp_schedule_event( $ts, $schedule, $hook ) {
+	$GLOBALS['cn_cron'][ $hook ] = array( 'timestamp' => (int) $ts, 'schedule' => (string) $schedule );
+	$GLOBALS['cm_cron'][ $hook ] = (string) $schedule;
+	$GLOBALS['cn_cron_log'][]    = array( 'schedule', $hook, (string) $schedule, (int) $ts );
+	return true;
+}
+function wp_clear_scheduled_hook( $hook ) {
+	unset( $GLOBALS['cn_cron'][ $hook ], $GLOBALS['cm_cron'][ $hook ] );
+	$GLOBALS['cn_cron_log'][] = array( 'clear', $hook );
+	return 1;
 }
 function get_transient( $k ) {
 	return $GLOBALS['cn_transients'][ $k ] ?? false;
