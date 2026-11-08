@@ -180,6 +180,8 @@ class CN_MP {
 	 * Devuelve el init_point (string) o un WP_Error. Si falta el ID del plan en las
 	 * opciones, devuelve WP_Error SIN llamar a MP. Si MP falla, no deja fila pendiente.
 	 */
+	/** Orígenes válidos de una suscripción pendiente: panel y landing (de siempre) + los caminos de los mails (FASE 2, CN_Suscribir). */
+	const ORIGENES_SUSCRIPCION = array( 'panel', 'landing', 'mail_d5', 'mail_d6', 'mail_d7', 'winback', 'upsell' );
 	public static function crear_suscripcion_link( $plan, $nombre, $celular, $email = '', $origen = 'panel', $meta = array() ) {
 		global $wpdb;
 		$planes = self::get_planes();
@@ -190,7 +192,7 @@ class CN_MP {
 		if ( '' === $token ) {
 			return new WP_Error( 'cn_sin_token', 'Falta configurar el access token de Mercado Pago (Suscripciones).' );
 		}
-		if ( ! is_string( $origen ) || ! in_array( $origen, array( 'panel', 'landing' ), true ) ) {
+		if ( ! is_string( $origen ) || ! in_array( $origen, self::ORIGENES_SUSCRIPCION, true ) ) {
 			return new WP_Error( 'cn_origen_invalido', 'Origen inválido.' );
 		}
 		$nombre = mb_substr( trim( sanitize_text_field( (string) $nombre ) ), 0, 191 );
@@ -282,6 +284,10 @@ class CN_MP {
 			$mensaje = ( is_array( $data ) && isset( $data['message'] ) && is_string( $data['message'] ) ) ? $data['message'] : 'Mercado Pago rechazó la solicitud.';
 			return new WP_Error( 'cn_mp_rechazo', $mensaje );
 		}
+		// FASE 2: se guarda el init_point en la pendiente (columna aditiva, DB 2.10.0) para que un segundo clic en 24 h reuse la misma.
+		// Si la columna todavía no existe (deploy a medias) el UPDATE falla en silencio y no cambia nada.
+		$wpdb->update( $t_pend, array( 'init_point' => mb_substr( (string) $data['init_point'], 0, 500 ) ), array( 'external_reference' => $external_reference ), array( '%s' ), array( '%s' ) );
+		$wpdb->last_error = '';
 		return (string) $data['init_point'];
 	}
 	public static function obtener_preapproval( $id ) {
@@ -297,11 +303,42 @@ class CN_MP {
 	// (null = "no sé", nunca "no hay resultados": quien llama no debe cambiar estado de nadie ante un null).
 	/** Una página de suscripciones por estado ('authorized', 'paused', 'cancelled'). */
 	public static function listar_preapprovals( $status, $offset = 0, $limit = 100 ) {
-		return self::get( '/preapproval/search?status=' . rawurlencode( (string) $status ) . '&limit=' . (int) $limit . '&offset=' . (int) $offset, self::get_access_token() );
+		$path = '/preapproval/search?status=' . rawurlencode( (string) $status ) . '&limit=' . (int) $limit . '&offset=' . (int) $offset;
+		if ( '1' !== (string) get_option( self::OPT_LISTAR_REINTENTOS, '1' ) ) {
+			return self::get( $path, self::get_access_token() ); // flag apagado: el comportamiento anterior (un solo intento).
+		}
+		// Con reintentos ante 429 (Retry-After o 2/4/8 s) y un presupuesto CHICO por página, porque también lo llaman pantallas del admin.
+		$pres = array( 'requests' => self::LISTAR_MAX_PEDIDOS, 'espera' => self::LISTAR_MAX_ESPERA_SEG, 'hasta' => time() + self::LISTAR_MAX_TIEMPO_SEG );
+		$r    = self::get_con_reintentos( $path, self::get_access_token(), $pres );
+		return ! empty( $r['ok'] ) && is_array( $r['data'] ) ? $r['data'] : null;
 	}
 	/** Suscripciones autorizadas de un email (quien llama igual compara payer_email: no se confía en el filtro). */
 	public static function buscar_preapprovals_por_email( $email ) {
 		return self::get( '/preapproval/search?status=authorized&limit=100&payer_email=' . rawurlencode( (string) $email ), self::get_access_token() );
+	}
+	/**
+	 * GUARDA DE TRIALS (solo lectura): el cobro del trial, para leer payer.id. Se pide con el token del trial (Checkout Pro,
+	 * la app que lo creó) y, si falla, con el de suscripciones. null = MP no respondió (no es "no existe").
+	 */
+	public static function obtener_pago_para_guarda( $id ) {
+		foreach ( array( self::get_access_token_trial(), self::get_access_token() ) as $token ) {
+			if ( '' === $token ) {
+				continue;
+			}
+			$data = self::get( '/v1/payments/' . rawurlencode( (string) $id ), $token );
+			if ( is_array( $data ) ) {
+				return $data;
+			}
+		}
+		return null;
+	}
+	/**
+	 * Suscripciones de un pagador por su id de usuario de MP: GET /preapproval/search?payer_id=… (parámetro documentado
+	 * en la referencia de Suscripciones → Search in subscriptions; ahí NO figura `status`, por eso no se manda: quien llama
+	 * filtra por status en los resultados). Solo lectura; null si MP falló.
+	 */
+	public static function buscar_preapprovals_por_payer_id( $payer_id ) {
+		return self::get( '/preapproval/search?limit=100&payer_id=' . rawurlencode( (string) $payer_id ), self::get_access_token() );
 	}
 	/** Cobros aprobados recientes de un email, del más nuevo al más viejo. Prueba el token de suscripciones y, si falla, el del trial. */
 	public static function buscar_pagos_aprobados_por_email( $email ) {
@@ -355,12 +392,108 @@ class CN_MP {
 			self::registrar_error_api( $path, $codigo, wp_remote_retrieve_body( $respuesta ) );
 			return array( 'ok' => false, 'http' => $codigo, 'data' => null );
 		}
+		CN_Alertas::token_ok();
 		$data = json_decode( wp_remote_retrieve_body( $respuesta ), true );
 		if ( ! is_array( $data ) ) {
 			self::registrar_error_api( $path, $codigo, 'respuesta no JSON' );
 			return array( 'ok' => false, 'http' => $codigo, 'data' => null );
 		}
 		return array( 'ok' => true, 'http' => $codigo, 'data' => $data );
+	}
+	/** Opción: '1' (por defecto) = los listados /preapproval/search reintentan ante 429; '0' = un solo intento, como antes. */
+	const OPT_LISTAR_REINTENTOS    = 'cn_listar_reintentos';
+	const LISTAR_MAX_PEDIDOS       = 4;  // por página: 1 + hasta 3 reintentos
+	const LISTAR_MAX_ESPERA_SEG    = 6;  // espera total por página: corto a propósito, porque el sync encadena varias páginas y también lo llaman pantallas del admin.
+	const LISTAR_MAX_TIEMPO_SEG    = 20;
+	// ---- Sync de 30 min: GET con reintentos ante 429 (solo lectura) ----
+	/** Reintentos máximos ante 429 por pedido (esperas de 2 s, 4 s, 8 s si MP no manda Retry-After). */
+	const REINTENTOS_429 = 3;
+	/** Espera máxima de UN reintento, aunque Retry-After pida más. */
+	const ESPERA_MAX_SEG = 30;
+	/** Función de espera (segundos); null = sleep(). Propiedad solo para poder probar sin esperar. */
+	public static $dormir = null;
+	protected static function dormir( $seg ) {
+		if ( is_callable( self::$dormir ) ) {
+			call_user_func( self::$dormir, $seg );
+			return;
+		}
+		sleep( (int) ceil( $seg ) );
+	}
+	/** Segundos que pide el encabezado Retry-After (número o fecha HTTP); null si no viene o no se entiende. */
+	public static function segundos_retry_after( $valor ) {
+		$valor = trim( (string) $valor );
+		if ( '' === $valor ) {
+			return null;
+		}
+		if ( ctype_digit( $valor ) ) {
+			return (int) $valor;
+		}
+		$ts = strtotime( $valor );
+		return false === $ts ? null : max( 0, $ts - time() );
+	}
+	/**
+	 * GET con reintentos ante 429 para el sync. $presupuesto (por referencia) lleva los topes de la corrida:
+	 * 'requests' (pedidos que quedan), 'espera' (segundos de espera que quedan) y 'hasta' (timestamp límite).
+	 * Respeta Retry-After; sin él, espera 2 s, 4 s, 8 s. Si el tope no alcanza para esperar, se rinde en ese pedido.
+	 * Solo GET. Deja el rastro mp_api_error del último intento fallido (igual que get()).
+	 * Si se rinde por un 429 (reintentos agotados o sin tiempo para esperar) marca $presupuesto['corte_429'] = true: quien
+	 * llama puede terminar su corrida ahí en vez de seguir pidiendo. No cambia nada más de lo que ya hacía.
+	 *
+	 * @return array{ok:bool,http:mixed,data:?array,intentos:int,motivo:string}
+	 */
+	public static function get_con_reintentos( $path, $token, &$presupuesto ) {
+		$res = array( 'ok' => false, 'http' => 'sin_token', 'data' => null, 'intentos' => 0, 'motivo' => 'sin token' );
+		if ( ! $token ) {
+			return $res;
+		}
+		for ( $n = 0; $n <= self::REINTENTOS_429; $n++ ) {
+			if ( $presupuesto['requests'] <= 0 || time() >= $presupuesto['hasta'] ) {
+				$res['http']   = 'tope';
+				$res['motivo'] = 'tope de la corrida (pedidos o tiempo)';
+				return $res;
+			}
+			$presupuesto['requests']--;
+			$res['intentos']++;
+			$respuesta = wp_remote_get( self::API_BASE . $path, array( 'timeout' => 20, 'headers' => array( 'Authorization' => 'Bearer ' . $token ) ) );
+			if ( is_wp_error( $respuesta ) ) {
+				self::registrar_error_api( $path, 'wp_error', $respuesta->get_error_message() );
+				return array( 'http' => 'wp_error', 'motivo' => 'sin respuesta de MP' ) + $res;
+			}
+			$codigo = (int) wp_remote_retrieve_response_code( $respuesta );
+			if ( $codigo >= 200 && $codigo < 300 ) {
+				CN_Alertas::token_ok();
+				$data = json_decode( wp_remote_retrieve_body( $respuesta ), true );
+				if ( ! is_array( $data ) ) {
+					self::registrar_error_api( $path, $codigo, 'respuesta no JSON' );
+					return array( 'http' => $codigo, 'motivo' => 'respuesta no JSON' ) + $res;
+				}
+				return array( 'ok' => true, 'http' => $codigo, 'data' => $data, 'motivo' => '' ) + $res;
+			}
+			$res['http']   = $codigo;
+			$res['motivo'] = 'HTTP ' . $codigo;
+			if ( 429 !== $codigo || $n >= self::REINTENTOS_429 ) {
+				self::registrar_error_api( $path, $codigo, wp_remote_retrieve_body( $respuesta ) );
+				if ( 429 === $codigo ) {
+					$presupuesto['corte_429'] = true;
+				}
+				return $res;
+			}
+			$pedida = self::segundos_retry_after( function_exists( 'wp_remote_retrieve_header' ) ? wp_remote_retrieve_header( $respuesta, 'retry-after' ) : '' );
+			$espera = null !== $pedida ? min( $pedida, self::ESPERA_MAX_SEG ) : 2 * ( 2 ** $n ); // 2, 4, 8
+			if ( $espera > $presupuesto['espera'] || time() + $espera >= $presupuesto['hasta'] ) {
+				self::registrar_error_api( $path, $codigo, '429 y sin tiempo de espera en esta corrida' );
+				$res['motivo']            = 'HTTP 429 (sin tiempo de espera en la corrida)';
+				$presupuesto['corte_429'] = true;
+				return $res;
+			}
+			$presupuesto['espera'] -= $espera;
+			self::dormir( $espera );
+		}
+		return $res;
+	}
+	/** GET /preapproval/{id} para el sync (con reintentos ante 429). */
+	public static function obtener_preapproval_con_reintentos( $id, &$presupuesto ) {
+		return self::get_con_reintentos( '/preapproval/' . rawurlencode( (string) $id ), self::get_access_token(), $presupuesto );
 	}
 	protected static function get( $path, $token ) {
 		if ( ! $token ) {
@@ -381,18 +514,22 @@ class CN_MP {
 			self::registrar_error_api( $path, $codigo, wp_remote_retrieve_body( $respuesta ) );
 			return null;
 		}
+		CN_Alertas::token_ok();
 		return json_decode( wp_remote_retrieve_body( $respuesta ), true );
 	}
 	/**
-	 * Deja rastro de un error de la API de MP (mp_log + aviso a n8n, máx. 1/hora por
-	 * ruta+código). Nunca lanza ni cambia lo que devuelve get().
+	 * Deja rastro de un error de la API de MP (mp_log + línea en el cartel "Avisos", máx. 1/hora por
+	 * ruta+código; ya no manda nada a n8n). Nunca lanza ni cambia lo que devuelve get().
 	 */
 	protected static function registrar_error_api( $path, $http, $cuerpo ) {
 		try {
 			$ruta   = (string) strtok( (string) $path, '?' );
 			$cuerpo = mb_substr( preg_replace( '/APP_USR-[A-Za-z0-9\-]+/', '[oculto]', (string) $cuerpo ), 0, 300 );
 			CN_Webhook::registrar_log_mp( 'mp_api_error', array( 'ruta' => $ruta, 'http' => $http, 'cuerpo' => $cuerpo ) );
-			// Solo avisa a n8n por errores de acceso/servicio; 404 y otros 4xx quedan solo en el log.
+			if ( is_numeric( $http ) && in_array( (int) $http, array( 401, 403 ), true ) ) {
+				CN_Alertas::token_invalido( $ruta, (int) $http ); // alerta GRAVE (mail), máx. 1 por día mientras siga.
+			}
+			// Solo avisa (cartel Avisos) por errores de acceso/servicio; 404 y otros 4xx quedan solo en el log.
 			$avisar = ( 'wp_error' === $http )
 				|| ( is_numeric( $http ) && ( in_array( (int) $http, array( 401, 403, 429 ), true ) || (int) $http >= 500 ) );
 			// El id va al final de la ruta: se normaliza para que 39 eventos con 401 no manden 39 avisos.

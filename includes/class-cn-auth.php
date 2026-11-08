@@ -42,13 +42,13 @@ class CN_Auth {
 					$tabla = CN_DB::tabla( 'miembros' );
 					$candidatos = $wpdb->get_results(
 									$wpdb->prepare(
-													"SELECT id, nombre_apellido, celular_hash, estado, fecha_fin_trial FROM {$tabla} WHERE LOWER(TRIM(nombre_apellido)) = LOWER(TRIM(%s))",
+													"SELECT id, nombre_apellido, celular_hash, estado, fecha_fin_trial, preapproval_id FROM {$tabla} WHERE LOWER(TRIM(nombre_apellido)) = LOWER(TRIM(%s))",
 													$nombre
 												)
 									);
 					foreach ( $candidatos as $candidato ) {
 									if ( CN_Helpers::verificar_celular( $celular_normalizado, $candidato->celular_hash ) ) {
-													if ( self::trial_vencido( $candidato->fecha_fin_trial ) ) {
+													if ( self::trial_vence_el_acceso( $candidato ) ) { // con suscripción (preapproval_id) la fecha del trial no decide: manda el estado.
 																	self::marcar_cancelada_si_hace_falta( (int) $candidato->id, $candidato->estado );
 																	self::limpiar_intentos();
 																	return array( 'ok' => false, 'motivo' => 'vencido' );
@@ -111,7 +111,7 @@ class CN_Auth {
 					$t_miembros = CN_DB::tabla( 'miembros' );
 					$miembro = $wpdb->get_row(
 									$wpdb->prepare(
-													"SELECT m.id, m.nombre_apellido, m.estado, m.fecha_fin_trial
+													"SELECT m.id, m.nombre_apellido, m.estado, m.fecha_fin_trial, m.preapproval_id
 																 FROM {$t_sesiones} s
 																 				 INNER JOIN {$t_miembros} m ON m.id = s.miembro_id
 																 				 				 WHERE s.token = %s AND s.expira > UTC_TIMESTAMP()",
@@ -121,7 +121,7 @@ class CN_Auth {
 					if ( ! $miembro ) {
 									return null;
 					}
-					if ( self::trial_vencido( $miembro->fecha_fin_trial ) ) {
+					if ( self::trial_vence_el_acceso( $miembro ) ) {
 									self::marcar_cancelada_si_hace_falta( (int) $miembro->id, $miembro->estado );
 									self::logout();
 									return null;
@@ -158,21 +158,26 @@ class CN_Auth {
 					}
 					return strtotime( $fecha_fin_trial . ' UTC' ) < time();
 		}
+		/**
+		 * ¿El vencimiento del trial le corta el acceso a esta ficha? Solo si NO tiene suscripción: con preapproval_id (comparación
+		 * ESTRICTA contra '', igual que el cron: NULL y '' son "sin suscripción", '0' cuenta como un valor) la fecha del trial no
+		 * decide nada y el acceso lo manda únicamente `estado` (webhook, sync y modo seguro).
+		 */
+		protected static function trial_vence_el_acceso( $ficha ) {
+					return '' === (string) ( isset( $ficha->preapproval_id ) ? $ficha->preapproval_id : '' )
+									&& self::trial_vencido( isset( $ficha->fecha_fin_trial ) ? $ficha->fecha_fin_trial : null );
+		}
+		/** Cancela por trial vencido SOLO si la ficha no tiene preapproval_id (la condición va también en el UPDATE, por si la fila cambió). */
 		protected static function marcar_cancelada_si_hace_falta( $miembro_id, $estado_actual ) {
 					global $wpdb;
 					if ( 'cancelada' === $estado_actual ) {
 									return;
 					}
-					$wpdb->update(
-									CN_DB::tabla( 'miembros' ),
-									array(
-													'estado'             => 'cancelada',
-													'fecha_modificacion' => current_time( 'mysql', true ),
-												),
-									array( 'id' => $miembro_id ),
-									array( '%s', '%s' ),
-									array( '%d' )
-								);
+					$wpdb->query( $wpdb->prepare(
+									'UPDATE ' . CN_DB::tabla( 'miembros' ) . " SET estado = 'cancelada', fecha_modificacion = %s WHERE id = %d AND (preapproval_id IS NULL OR preapproval_id = '')",
+									current_time( 'mysql', true ),
+									$miembro_id
+								) );
 		}
 		/**
 		 * Cron diario (cn_cron_revocar_trials): da de baja los trials vencidos que NO se convirtieron en suscripción.
@@ -180,10 +185,13 @@ class CN_Auth {
 		 *    "sin suscripción"; el texto '0' cuenta como un valor, o sea que tampoco se cancela: decisión conservadora,
 		 *    nunca se baja a alguien por un valor raro en esa columna).
 		 *  - Sin preapproval_id y con la guarda activa (opción cn_guarda_trial_mp, activada por defecto): antes de
-		 *    cancelar se busca en Mercado Pago si pagó por fuera del trial (CN_Sync::guarda_trial). Si pagó, NO se
-		 *    cancela: se limpia fecha_fin_trial y se avisa por n8n ("pagó por link directo, vincular"). Si MP falla, NO
+		 *    cancelar se consulta en Mercado Pago si tiene una suscripción authorized (CN_Sync::guarda_trial: payer.id del cobro
+		 *    del trial cruzado con /preapproval/search?payer_id). Con cn_guarda_trial_solo_log = '1' (por defecto) solo se REGISTRA
+		 *    la decisión (mp_log trial_guarda_decision) y el cron se comporta como siempre con la guarda fallida: no cancela.
+		 *    Con '0': si hay suscripción, NO se
+		 *    cancela: se limpia fecha_fin_trial y queda un aviso en el cartel "Avisos" ("pagó por link directo, vincular"). Si MP falla, NO
 		 *    se cancela y fecha_fin_trial queda como está, así la próxima corrida lo reintenta.
-		 *  - Si no pagó (o no hay email para verificar) se cancela y se manda el mail de fin de trial, como siempre. La
+		 *  - Si no tiene suscripción (o la guarda está apagada) se cancela y se manda el mail de fin de trial, como siempre. La
 		 *    cancelación vuelve a leer la fila con FOR UPDATE: si en el medio se vinculó una suscripción, no se toca.
 		 */
 		public static function revocar_trials_vencidos() {
@@ -209,12 +217,30 @@ class CN_Auth {
 					continue;
 				}
 				if ( $guarda_activa ) {
-					$g = class_exists( 'CN_Sync' )
-						? CN_Sync::guarda_trial( $miembro )
-						: array( 'resultado' => 'error', 'detalle' => 'CN_Sync no está cargada' );
-					if ( 'error' === $g['resultado'] ) {
-						// MP falló: no se cancela a nadie; fecha_fin_trial sigue vencida y la próxima corrida lo reintenta.
-						CN_Webhook::registrar_log_mp( 'trial_guarda_error', array( 'miembro_id' => (int) $miembro->id, 'detalle' => $g['detalle'] ) );
+					$g = array( 'resultado' => 'error', 'detalle' => 'CN_Sync no está cargada' );
+					try {
+						if ( class_exists( 'CN_Sync' ) ) {
+							$g = CN_Sync::guarda_trial( $miembro );
+						}
+					} catch ( Throwable $e ) {
+						$g = array( 'resultado' => 'error', 'detalle' => mb_substr( $e->getMessage(), 0, 200 ) );
+					}
+					$solo_log = class_exists( 'CN_Sync' ) ? CN_Sync::guarda_trial_solo_log() : true;
+					CN_Webhook::registrar_log_mp( 'trial_guarda_decision', array(
+						'miembro_id' => (int) $miembro->id,
+						'resultado'  => $g['resultado'],
+						'motivo'     => isset( $g['motivo'] ) && '' !== $g['motivo'] ? $g['motivo'] : ( isset( $g['detalle'] ) ? $g['detalle'] : '' ),
+						'solo_log'   => $solo_log,
+					) );
+					if ( $solo_log ) {
+						// MODO SOLO-LOG: la decisión quedó registrada y NADA más cambia. Esto es lo que hacía el cron cuando la
+						// guarda fallaba (siempre, por el 400 de MP): no cancelar, dejar fecha_fin_trial vencida y reintentar en la próxima corrida.
+						CN_Webhook::registrar_log_mp( 'trial_guarda_error', array( 'miembro_id' => (int) $miembro->id, 'detalle' => 'modo solo-log: la guarda no actúa (decisión: ' . $g['resultado'] . ')' ) );
+						continue;
+					}
+					if ( 'error' === $g['resultado'] || 'indeterminado' === $g['resultado'] ) {
+						// MP falló o no hay forma confiable de decidir: no se cancela a nadie; fecha_fin_trial sigue vencida y la próxima corrida lo reintenta.
+						CN_Webhook::registrar_log_mp( 'trial_guarda_error', array( 'miembro_id' => (int) $miembro->id, 'detalle' => isset( $g['detalle'] ) ? $g['detalle'] : '' ) );
 						continue;
 					}
 					if ( 'pago' === $g['resultado'] ) {

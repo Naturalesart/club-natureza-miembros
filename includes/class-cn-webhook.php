@@ -433,6 +433,13 @@ class CN_Webhook {
 			// Ya confirmado: mail de bienvenida y CAPI quedan FUERA de la transacción y nunca afectan el alta.
 			if ( $es_alta ) {
 				self::sub_post_alta( $fila, $plan, $planes );
+				try { // PASO E: cuenta con email + contraseña (la ficha se busca por preapproval_id; nunca afecta el alta).
+					if ( class_exists( 'CN_Cuentas' ) && method_exists( 'CN_Cuentas', 'enganche_preapproval' ) ) {
+						CN_Cuentas::enganche_preapproval( $preapproval_id, 'sub' );
+					}
+				} catch ( Throwable $e ) {
+					self::registrar_log_mp( 'cuenta_enganche_error', array( 'ruta' => 'sub', 'mensaje' => mb_substr( $e->getMessage(), 0, 200 ) ) );
+				}
 			}
 			return true;
 		} catch ( Throwable $e ) {
@@ -467,16 +474,19 @@ class CN_Webhook {
 		}
 		try {
 			if ( null !== $plan && isset( $planes[ $plan ] ) ) {
+				// Si el alta llegó sin fbp/fbc (link directo de MP, vinculación manual), se completan
+				// desde el trial que hizo antes la misma persona. Solo lectura: nunca frena el evento.
+				$meta = self::sub_meta_desde_trial( $fila );
 				CN_Meta_Capi::enviar_subscribe(
 					(string) $fila->external_reference,
 					(float) $planes[ $plan ]['precio'],
 					$email,
 					$celular,
 					$nombre_p,
-					(string) $fila->fbp,
-					(string) $fila->fbc,
-					(string) $fila->ip,
-					(string) $fila->user_agent
+					$meta['fbp'],
+					$meta['fbc'],
+					$meta['ip'],
+					$meta['user_agent']
 				);
 			}
 		} catch ( Throwable $e ) {
@@ -484,10 +494,82 @@ class CN_Webhook {
 		}
 	}
 	/**
+	 * fbp/fbc/ip/user_agent para el evento Subscribe. Devuelve los de $fila y, si fbp o fbc vienen
+	 * vacíos, completa lo que falte desde trial_pendientes de la MISMA persona (mismo celular ya
+	 * normalizado, como lo guardan los tres caminos de alta). Se toma UNA sola fila para que fbp, fbc,
+	 * ip y user_agent sean coherentes (misma sesión de navegador): la más reciente que tenga fbc (el
+	 * identificador del clic en el anuncio) y, si ninguna lo tiene, la más reciente con fbp. Lo que la
+	 * fila ya trae no se pisa. Sin match, o ante cualquier error, queda como hoy (vacío) y el evento
+	 * sale igual. No toca event_id, mail, alta ni cobro; no escribe en ninguna tabla de datos
+	 * (solo deja un rastro en mp_log, sin celular ni email).
+	 *
+	 * @return array{fbp:string,fbc:string,ip:string,user_agent:string}
+	 */
+	protected static function sub_meta_desde_trial( $fila ) {
+		global $wpdb;
+		$meta = array(
+			'fbp'        => isset( $fila->fbp ) ? (string) $fila->fbp : '',
+			'fbc'        => isset( $fila->fbc ) ? (string) $fila->fbc : '',
+			'ip'         => isset( $fila->ip ) ? (string) $fila->ip : '',
+			'user_agent' => isset( $fila->user_agent ) ? (string) $fila->user_agent : '',
+		);
+		if ( '' !== $meta['fbp'] && '' !== $meta['fbc'] ) {
+			return $meta;
+		}
+		$celular = isset( $fila->celular ) ? trim( (string) $fila->celular ) : '';
+		if ( '' === $celular ) {
+			return $meta;
+		}
+		try {
+			$trial = $wpdb->get_row( $wpdb->prepare(
+				'SELECT id, fbp, fbc, ip, user_agent FROM ' . CN_DB::tabla( 'trial_pendientes' )
+				. " WHERE celular = %s AND ( ( fbc IS NOT NULL AND fbc <> '' ) OR ( fbp IS NOT NULL AND fbp <> '' ) )"
+				. " ORDER BY ( fbc IS NOT NULL AND fbc <> '' ) DESC, id DESC LIMIT 1",
+				$celular
+			) );
+			if ( '' !== (string) $wpdb->last_error ) {
+				throw new RuntimeException( mb_substr( (string) $wpdb->last_error, 0, 200 ) );
+			}
+			if ( ! $trial ) {
+				return $meta;
+			}
+			$completados = array();
+			foreach ( array( 'fbp', 'fbc', 'ip', 'user_agent' ) as $k ) {
+				$v = isset( $trial->{$k} ) ? trim( (string) $trial->{$k} ) : '';
+				if ( '' === $meta[ $k ] && '' !== $v ) {
+					$meta[ $k ]    = $v;
+					$completados[] = $k;
+				}
+			}
+			if ( $completados ) {
+				// Mismo event_id (hash) que deja capi_subscribe en mp_log: se cruzan sin exponer el celular
+				// que viaja en claro dentro del external_reference.
+				self::registrar_log_mp( 'sub_meta_desde_trial', array(
+					'event_id'           => self::sub_event_id_meta( $fila ),
+					'trial_pendiente_id' => (int) $trial->id,
+					'completados'        => $completados,
+				) );
+			}
+		} catch ( Throwable $e ) {
+			self::registrar_log_mp( 'sub_post_alta_error', array(
+				'paso'     => 'meta_trial',
+				'event_id' => self::sub_event_id_meta( $fila ),
+				'mensaje'  => mb_substr( $e->getMessage(), 0, 200 ),
+			) );
+		}
+		return $meta;
+	}
+	/** event_id tal como lo manda CN_Meta_Capi::enviar_subscribe() (hash del external_reference, 32 hex). */
+	protected static function sub_event_id_meta( $fila ) {
+		$ref = isset( $fila->external_reference ) ? (string) $fila->external_reference : '';
+		return '' === $ref ? '' : substr( hash( 'sha256', $ref ), 0, 32 );
+	}
+	/**
 	 * Mail de bienvenida de una socia que se suscribió (no es el del trial: sin "7 días" ni "nunca se te cobra").
 	 * Mismo wrapper HTML que enviar_mail_bienvenida(). El usuario es el nombre y la contraseña el celular.
 	 */
 	protected static function enviar_mail_bienvenida_suscripcion( $nombre, $celular, $email, $plan_nombre ) {
+		if ( class_exists( 'CN_Cuentas' ) && method_exists( 'CN_Cuentas', 'reemplaza_bienvenida_datos' ) && CN_Cuentas::reemplaza_bienvenida_datos( $nombre, $celular, 'sub' ) ) { return; } // PASO E: con cn_cuentas_modo=on el mail de cuenta reemplaza a este (nunca si algo falla).
 		if ( '' === $email ) {
 			return;
 		}
@@ -538,13 +620,8 @@ class CN_Webhook {
 		}
 		return gmdate( 'Y-m-d H:i:s', $ts );
 	}
-	/** Aviso a n8n con tope de 1 por hora por motivo + referencia. */
+	/** Antes: aviso a n8n con tope de 1 por hora. Ahora: queda en el cartel "Avisos" del panel (deduplicado, con contador); no manda nada afuera. */
 	public static function sub_avisar_una_vez_por_hora( $motivo, $external_reference, $detalle ) {
-		$clave = 'cn_sub_av_' . md5( $motivo . '|' . $external_reference );
-		if ( get_transient( $clave ) ) {
-			return;
-		}
-		set_transient( $clave, 1, HOUR_IN_SECONDS );
 		self::avisar_error_n8n( $motivo, $detalle );
 	}
 	/**
@@ -668,7 +745,7 @@ class CN_Webhook {
 		global $wpdb;
 		try {
 			$t_miembros = CN_DB::tabla( 'miembros' );
-			$donde = "baja_en IS NOT NULL AND acceso_hasta IS NOT NULL AND acceso_hasta < UTC_TIMESTAMP() AND preapproval_id IS NOT NULL AND preapproval_id <> '' AND plan IS NOT NULL AND estado <> 'cancelada'";
+			$donde = "baja_en IS NOT NULL AND baja_en <= UTC_TIMESTAMP() AND acceso_hasta IS NOT NULL AND acceso_hasta < UTC_TIMESTAMP() AND preapproval_id IS NOT NULL AND preapproval_id <> '' AND plan IS NOT NULL AND estado <> 'cancelada'";
 			$filas = $wpdb->get_results( "SELECT id FROM {$t_miembros} WHERE {$donde}" );
 			if ( '' !== (string) $wpdb->last_error ) {
 				throw new RuntimeException( 'error buscando bajas vencidas: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
@@ -918,6 +995,13 @@ class CN_Webhook {
 				self::sub_post_alta( $fila_post, $mp['plan'], CN_MP::get_planes() ); // try/catch propio: nunca afecta lo ya guardado.
 				$res['notificacion'] = array( 'mail' => ( '' !== $aviso['email'] ), 'capi' => true );
 			}
+		}
+		try { // PASO E: cuenta con email + contraseña. Solo si se pidió avisar (notificar=false no crea cuenta); nunca afecta lo ya guardado.
+			if ( $es_alta && $notificar && ! empty( $res['miembro_id'] ) && class_exists( 'CN_Cuentas' ) && method_exists( 'CN_Cuentas', 'enganche_ficha' ) ) {
+				CN_Cuentas::enganche_ficha( (int) $res['miembro_id'], 'vinculo_admin' );
+			}
+		} catch ( Throwable $e ) {
+			self::registrar_log_mp( 'cuenta_enganche_error', array( 'ruta' => 'vinculo_admin', 'mensaje' => mb_substr( $e->getMessage(), 0, 200 ) ) );
 		}
 		return $res;
 	}
@@ -1274,6 +1358,13 @@ class CN_Webhook {
 			}
 		}
 		self::enviar_mail_bienvenida( $nombre, $celular, $email );
+		try { // PASO E: cuenta con email + contraseña (solo con cn_cuentas_modo distinto de off; idempotente; nunca afecta el alta).
+			if ( class_exists( 'CN_Cuentas' ) && method_exists( 'CN_Cuentas', 'enganche_trial' ) ) {
+				CN_Cuentas::enganche_trial( $id );
+			}
+		} catch ( Throwable $e ) {
+			self::registrar_log_mp( 'cuenta_enganche_error', array( 'ruta' => 'trial', 'mensaje' => mb_substr( $e->getMessage(), 0, 200 ) ) );
+		}
 		// Registro en la sheet de seguimiento (no bloqueante, nunca rompe el alta).
 		self::registrar_alta_en_sheet( $nombre, $celular, $email, $monto, $id, $fecha_fin_trial, $ahora );
 		// CAPI Purchase — mismo event_id (external_reference) que el Pixel dispara
@@ -1356,21 +1447,60 @@ class CN_Webhook {
 			array( '%s', '%s', '%s' )
 		);
 	}
+	/** Tipo de fila de mp_log con que se registran los avisos técnicos (los lee el cartel "Avisos" de Club Natureza → Socias). */
+	const TIPO_AVISO = 'aviso_error';
+	/** Motivos de "una socia pagó y no pudo recibir acceso": se anotan como caso (CN_Alertas) y, si pasan 72 hs sin resolverse, entran en el resumen diario. Ya no mandan mail inmediato. */
+	const MOTIVOS_PAGO_SIN_ACCESO = array( 'excepcion_trial_alta', 'metadata_incompleta', 'preapproval_sin_match' );
 	/**
-	 * Aviso fire-and-forget a n8n. Nunca bloquea ni hace fallar el alta —
-	 * timeout corto y sin esperar respuesta (regla #2 del proyecto).
+	 * Aviso técnico: NO manda mail ni webhook. Deja una fila en mp_log (tipo aviso_error) que el cartel "Avisos" muestra
+	 * agrupada: mismo motivo + mismo detalle = una línea con contador. Nunca lanza ni bloquea (es accesorio).
+	 * El nombre se mantiene porque lo llaman muchos lugares; ya no habla con n8n. Las únicas tres alertas con mail viven en CN_Alertas.
 	 */
 	public static function avisar_error_n8n( $motivo, $detalle ) {
-		wp_remote_post( self::N8N_ALERTA_URL, array(
-			'timeout'  => 5,
-			'blocking' => false,
-			'headers'  => array( 'Content-Type' => 'application/json' ),
-			'body'     => wp_json_encode( array(
-				'motivo'  => $motivo,
+		try {
+			self::registrar_log_mp( self::TIPO_AVISO, array(
+				'motivo'  => (string) $motivo,
 				'detalle' => $detalle,
-				'fecha'   => current_time( 'mysql', true ),
-			) ),
+				'clave'   => md5( $motivo . '|' . wp_json_encode( $detalle ) ),
+			) );
+			if ( in_array( $motivo, self::MOTIVOS_PAGO_SIN_ACCESO, true ) ) {
+				CN_Alertas::registrar_caso( $motivo, $detalle ); // solo anota; el mail (si corresponde) sale del resumen diario a las 72 hs.
+			}
+		} catch ( Throwable $e ) {
+			// Accesorio: si el registro falla, no debe afectar el flujo que lo llamó.
+		}
+	}
+	/**
+	 * Avisos para el cartel: últimos $max_filas registros de tipo aviso_error, agrupados por clave (motivo + detalle).
+	 *
+	 * @return array{total:int,distintos:int,lineas:array<int,array{motivo:string,detalle:string,veces:int,ultima:string}>}
+	 */
+	public static function listar_avisos( $max_lineas = 50, $max_filas = 1000 ) {
+		global $wpdb;
+		$filas = $wpdb->get_results( $wpdb->prepare(
+			"SELECT payload, fecha FROM " . CN_DB::tabla( 'mp_log' ) . " WHERE tipo = %s ORDER BY id DESC LIMIT %d",
+			self::TIPO_AVISO,
+			(int) $max_filas
 		) );
+		$filas  = is_array( $filas ) ? $filas : array();
+		$grupos = array();
+		foreach ( $filas as $f ) {
+			$p = json_decode( (string) $f->payload, true );
+			if ( ! is_array( $p ) ) {
+				continue;
+			}
+			$clave = isset( $p['clave'] ) ? (string) $p['clave'] : md5( (string) $f->payload );
+			if ( ! isset( $grupos[ $clave ] ) ) {
+				$det = isset( $p['detalle'] ) ? ( is_scalar( $p['detalle'] ) ? (string) $p['detalle'] : (string) wp_json_encode( $p['detalle'], JSON_UNESCAPED_UNICODE ) ) : '';
+				$grupos[ $clave ] = array( 'motivo' => (string) ( $p['motivo'] ?? '' ), 'detalle' => mb_substr( $det, 0, 400 ), 'veces' => 0, 'ultima' => (string) $f->fecha );
+			}
+			$grupos[ $clave ]['veces']++; // las filas vienen de la más nueva a la más vieja: la primera de cada grupo es la última vez.
+		}
+		return array(
+			'total'     => count( $filas ),
+			'distintos' => count( $grupos ),
+			'lineas'    => array_slice( array_values( $grupos ), 0, (int) $max_lineas ),
+		);
 	}
 	/**
 	 * Aviso fire-and-forget a n8n con cada evento de suscripción de Mercado Pago, para verlo
@@ -1430,6 +1560,7 @@ class CN_Webhook {
 	 * el alta si falla (wp_mail devuelve false silenciosamente, no lanza excepción).
 	 */
 	protected static function enviar_mail_bienvenida( $nombre, $celular, $email ) {
+		if ( class_exists( 'CN_Cuentas' ) && method_exists( 'CN_Cuentas', 'reemplaza_bienvenida_datos' ) && CN_Cuentas::reemplaza_bienvenida_datos( $nombre, $celular, 'trial' ) ) { return; } // PASO E: con cn_cuentas_modo=on el mail de cuenta reemplaza a este (nunca si algo falla).
 		if ( '' === $email ) {
 			return; // Sin mail no hay a quién mandarle nada — no es un error, solo no llegó el dato.
 		}

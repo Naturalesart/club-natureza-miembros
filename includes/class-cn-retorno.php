@@ -25,6 +25,8 @@ class CN_Retorno extends CN_Vinculo_Manual {
 
 	/** Caso que mostró la última vista: 'formulario' | 'generico' | 'error_mp'. */
 	protected static $caso = 'generico';
+	/** Token firmado de "alta por mail" (CN_Alta_Mail) con el que se abrió la página; '' si llegó por el camino de siempre (preapproval_id de MP). */
+	protected static $token = '';
 	const MSG_REVISAR    = 'Revisá que el nombre, el celular y el email sean los de tu inscripción.';
 	const MAX_ENVIOS_CEL = 5;    // envíos del formulario por celular
 	const VENTANA_LARGA  = 3600; // 1 hora (topes por preapproval_id y por celular)
@@ -90,12 +92,36 @@ class CN_Retorno extends CN_Vinculo_Manual {
 		}
 		$id_raw = isset( $_POST['cn_ret_id'] ) ? $_POST['cn_ret_id'] : ( isset( $_GET['preapproval_id'] ) ? $_GET['preapproval_id'] : '' );
 		$id     = strtolower( trim( sanitize_text_field( wp_unslash( $id_raw ) ) ) );
-		self::$caso = 'generico';
+		self::$caso  = 'generico';
+		self::$token = '';
+		// Alta por mail: el preapproval_id sale del token firmado (nunca de lo que mande el navegador). Token inválido, vencido o ya usado: nada se muestra ni se escribe.
+		$tok_raw = isset( $_POST['cn_ret_tok'] ) ? $_POST['cn_ret_tok'] : ( isset( $_GET['cn_alta'] ) ? $_GET['cn_alta'] : '' );
+		$tok     = trim( sanitize_text_field( wp_unslash( $tok_raw ) ) );
+		if ( '' !== $tok ) {
+			$v = CN_Alta_Mail::verificar( $tok );
+			if ( empty( $v['ok'] ) ) {
+				return self::token_invalido( $v['motivo'] );
+			}
+			$id          = $v['id'];
+			self::$token = $tok;
+		}
 		$html = self::vista( $id );
 		if ( ! isset( $_POST['cn_ret_submit'] ) ) { // solo las visitas (GET); los envíos del formulario no se registran acá.
 			self::registrar_visita( self::id_valido( $id ) ? $id : '', self::$caso );
 		}
 		return $html;
+	}
+
+	/** Link del mail inválido: vencido, alterado o ya usado. Sin detalles técnicos; si la suscripción ya está activa, el camino al login. */
+	protected static function token_invalido( $motivo ) {
+		if ( 'vinculado' === $motivo ) {
+			return self::envolver(
+				self::caja( 'Tu suscripción ya está activada.' )
+				. '<p>Ingresá al área de socias con tu <strong>nombre y apellido</strong> y tu <strong>celular</strong>.</p>'
+				. '<p><a class="cn-boton" href="' . esc_url( home_url( '/club-natureza-miembros/' ) ) . '">Entrar al Club →</a></p>'
+			);
+		}
+		return self::envolver( self::caja( 'Este link venció o no es válido. ' . self::TEXTO_CONTACTO, 'error' ) );
 	}
 
 	protected static function vista( $id ) {
@@ -285,6 +311,7 @@ class CN_Retorno extends CN_Vinculo_Manual {
 			</div>
 			<div style="position:absolute;left:-9999px;" aria-hidden="true"><label>No completar <input type="text" name="cn_ret_web" tabindex="-1" autocomplete="off"></label></div>
 			<input type="hidden" name="cn_ret_id" value="<?php echo esc_attr( $id ); ?>">
+			<?php if ( '' !== self::$token ) : ?><input type="hidden" name="cn_ret_tok" value="<?php echo esc_attr( self::$token ); ?>"><?php endif; ?>
 			<?php wp_nonce_field( self::NONCE_R, 'cn_ret_nonce' ); ?>
 			<button type="submit" name="cn_ret_submit" value="1" class="cn-boton">Activar mi acceso</button>
 		</form>

@@ -504,6 +504,13 @@ class CN_Vinculo_Manual extends CN_Webhook {
 		if ( $es_alta && $d['notificar'] && is_array( $aviso ) ) {
 			$res['notificacion'] = self::notificar( $id, $aviso, $mp['plan'] );
 		}
+		try { // PASO E: cuenta con email + contraseña. Solo con notificar (sin avisar no hay cuenta) y no para el lote; nunca afecta lo ya guardado.
+			if ( $es_alta && $d['notificar'] && ! empty( $res['ok'] ) && ! empty( $res['socia_id'] ) && class_exists( 'CN_Cuentas' ) && method_exists( 'CN_Cuentas', 'enganche_ficha' ) && method_exists( 'CN_Cuentas', 'origen_de_log_tipo' ) ) {
+				CN_Cuentas::enganche_ficha( (int) $res['socia_id'], CN_Cuentas::origen_de_log_tipo( $log_tipo ) );
+			}
+		} catch ( Throwable $e ) {
+			self::registrar_log_mp( 'cuenta_enganche_error', array( 'ruta' => 'vinculo_manual', 'mensaje' => mb_substr( $e->getMessage(), 0, 200 ) ) );
+		}
 		return $res;
 	}
 

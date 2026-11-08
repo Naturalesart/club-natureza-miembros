@@ -52,9 +52,7 @@ $u = $w->escrituras( 'cn_miembros' );
 t( 'authorized + email de UNA socia: la activa y le guarda el preapproval_id (link fijo)', 1 === count( $u ) && 'activo' === $u[0][2]['estado'] && $PRE === $u[0][2]['preapproval_id'] && array( 'id' => 5 ) === $u[0][3] );
 $w = reg_prep();
 cn_llamar( 'CN_Webhook', 'aplicar_estado', 'authorized', '', $PRE, 'nadie@example.com' );
-t( 'authorized sin match: no escribe y avisa preapproval_sin_match', ! $w->escrituras( 'cn_miembros' ) && 1 === count( array_filter( cn_http_calls( '#club-trial-alerta#' ), function ( $c ) {
-	return false !== strpos( (string) $c['body'], 'preapproval_sin_match' );
-} ) ) );
+t( 'authorized sin match: no escribe, queda preapproval_sin_match en el cartel y anotado como caso (sin mail inmediato)', ! $w->escrituras( 'cn_miembros' ) && ! cn_http_calls( '#club-trial-alerta#' ) && in_array( CN_Webhook::TIPO_AVISO, $w->log_mp_tipos(), true ) && isset( get_option( CN_Alertas::OPT_CASOS )[ 'preapproval|' . $PRE ] ) );
 $w = reg_prep();
 $w->on( "/SELECT id FROM wp_cn_miembros WHERE email = 'dup@example.com'/", array( cn_fila( array( 'id' => 1 ) ), cn_fila( array( 'id' => 2 ) ) ) );
 cn_llamar( 'CN_Webhook', 'aplicar_estado', 'authorized', '', $PRE, 'dup@example.com' );

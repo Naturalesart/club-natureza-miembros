@@ -10,6 +10,24 @@ class CN_Admin {
 		add_submenu_page( 'cn-socias', 'Videos', 'Videos', 'manage_options', 'cn-videos', array( __CLASS__, 'pagina_videos' ) );
 		add_submenu_page( 'cn-socias', 'Config', 'Config', 'manage_options', 'cn-config', array( __CLASS__, 'pagina_config' ) );
 	}
+	/**
+	 * Cartel "Avisos": los errores técnicos que antes salían por mail/n8n, ahora acá. Contador + últimas 50 líneas
+	 * (motivo, última fecha, detalle), con lo repetido agrupado en una sola línea con contador. Solo lectura.
+	 */
+	public static function cartel_avisos() {
+		$a = CN_Webhook::listar_avisos( 50 );
+		if ( ! $a['total'] ) {
+			return '<div class="notice notice-success inline"><p><strong>Avisos:</strong> sin errores técnicos registrados.</p></div>';
+		}
+		$h  = '<div class="notice notice-warning inline" style="padding:6px 12px;"><details>';
+		$h .= '<summary style="cursor:pointer;"><strong>Avisos:</strong> ' . (int) $a['distintos'] . ' distintos (' . (int) $a['total'] . ' en total, últimos registros). Tocá para ver.</summary>';
+		$h .= '<table class="widefat striped" style="margin:8px 0;"><thead><tr><th>Tipo</th><th>Última vez (UTC)</th><th>Veces</th><th>Detalle</th></tr></thead><tbody>';
+		foreach ( $a['lineas'] as $l ) {
+			$h .= '<tr><td><code>' . esc_html( $l['motivo'] ) . '</code></td><td>' . esc_html( $l['ultima'] ) . '</td><td>' . (int) $l['veces'] . '</td><td style="word-break:break-word;">' . esc_html( $l['detalle'] ) . '</td></tr>';
+		}
+		$h .= '</tbody></table></details></div>';
+		return $h;
+	}
 	protected static function aviso( $texto, $tipo = 'success' ) {
 		echo '<div class="notice notice-' . esc_attr( $tipo ) . ' is-dismissible"><p>' . esc_html( $texto ) . '</p></div>';
 	}
@@ -416,6 +434,50 @@ class CN_Admin {
 		}
 		echo '</tbody></table>';
 	}
+	/**
+	 * Buscador del listado de socias (solo lectura). Devuelve los id que coinciden con $q.
+	 * LIKE sobre la collation de la tabla (insensible a mayúsculas y tildes). Nunca toca ni expone el hash del celular.
+	 */
+	public static function ids_busqueda( $q ) {
+		global $wpdb;
+		$q = trim( (string) $q );
+		if ( '' === $q ) {
+			return array();
+		}
+		$tabla = CN_DB::tabla( 'miembros' );
+		$like  = function ( $v ) use ( $wpdb ) {
+			return '%' . $wpdb->esc_like( $v ) . '%';
+		};
+		$cond = array( 'nombre_apellido LIKE %s', 'email LIKE %s', 'preapproval_id LIKE %s' );
+		$args = array( $like( $q ), $like( $q ), $like( $q ) );
+		if ( preg_match( '/^#?\s*(\d+)$/', $q, $m ) ) {
+			$cond[] = 'id = %d';
+			$args[] = (int) $m[1];
+		}
+		$digitos = preg_replace( '/\D+/', '', $q );
+		if ( '#' !== substr( $q, 0, 1 ) && strlen( $digitos ) >= 4 ) {
+			if ( strlen( $digitos ) >= 8 ) {
+				// Número largo: se normaliza igual que en el alta y se busca también tal cual.
+				$norm = CN_Helpers::normalizar_celular( $q );
+				foreach ( array_unique( array( $norm['normalizado'], $digitos ) ) as $c ) {
+					$cond[] = 'celular_texto_plano LIKE %s';
+					$args[] = $like( $c );
+				}
+				// Fichas sin celular en texto plano: solo queda el hint (últimos 4).
+				$cond[] = "(celular_hint = %s AND (celular_texto_plano IS NULL OR celular_texto_plano = ''))";
+				$args[] = substr( $norm['normalizado'], -4 );
+			} else {
+				$cond[] = 'celular_texto_plano LIKE %s';
+				$args[] = $like( $digitos );
+				if ( 4 === strlen( $digitos ) ) {
+					$cond[] = 'celular_hint = %s';
+					$args[] = $digitos;
+				}
+			}
+		}
+		$sql = "SELECT id FROM {$tabla} WHERE " . implode( ' OR ', $cond );
+		return array_map( 'intval', (array) $wpdb->get_col( $wpdb->prepare( $sql, $args ) ) );
+	}
 	public static function pagina_socias() {
 		if ( ! current_user_can( 'manage_options' ) ) return;
 		global $wpdb;
@@ -487,6 +549,8 @@ class CN_Admin {
 		<div class="wrap">
 			<h1>Socias</h1>
 			<?php echo CN_Retorno::cartel_pendientes(); // vacío si no hay clientas esperando acceso. ?>
+			<?php echo self::cartel_avisos(); // errores técnicos registrados (sin mails ni n8n). ?>
+			<?php echo CN_Espejo_MP::cartel(); // contador del espejo de Mercado Pago (vacío si está apagado). ?>
 			<?php if ( $socia_editar ) : ?>
 				<h2>Editar socia</h2>
 				<form method="post" style="max-width:480px;">
@@ -567,7 +631,12 @@ class CN_Admin {
 				return ! empty( $s->fecha_fin_trial ) ? 'trial' : 'manual';
 			};
 			$cn_total_listado = count( (array) $socias );
-			$cn_filtradas = array_values( array_filter( (array) $socias, function ( $s ) use ( $cn_tipo_sel, $cn_tipo_de ) {
+			$cn_q     = isset( $_GET['q'] ) ? sanitize_text_field( wp_unslash( $_GET['q'] ) ) : '';
+			$cn_q_ids = '' !== $cn_q ? self::ids_busqueda( $cn_q ) : null;
+			$cn_filtradas = array_values( array_filter( (array) $socias, function ( $s ) use ( $cn_tipo_sel, $cn_tipo_de, $cn_q_ids ) {
+				if ( null !== $cn_q_ids && ! in_array( (int) $s->id, $cn_q_ids, true ) ) {
+					return false;
+				}
 				$t = $cn_tipo_de( $s );
 				if ( 'activas' === $cn_tipo_sel ) {
 					return in_array( $t, array( 'suscripta', 'manual' ), true );
@@ -611,6 +680,13 @@ class CN_Admin {
 			</div>
 			<form method="get" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 12px;">
 				<input type="hidden" name="page" value="cn-socias">
+				<label>Buscar
+					<input type="search" name="q" value="<?php echo esc_attr( $cn_q ); ?>" class="regular-text" placeholder="Nombre, email, #id, celular o preapproval">
+				</label>
+				<button type="submit" class="button">Buscar</button>
+				<?php if ( '' !== $cn_q ) : ?>
+					<a href="<?php echo esc_url( add_query_arg( array( 'page' => 'cn-socias', 'cn_tipo' => $cn_tipo_sel, 'cn_orden' => $cn_orden_sel ), admin_url( 'admin.php' ) ) ); ?>">Limpiar</a>
+				<?php endif; ?>
 				<label>Mostrar
 					<select name="cn_tipo">
 						<?php foreach ( $cn_tipos_ok as $cn_k => $cn_v ) : ?>
@@ -629,14 +705,19 @@ class CN_Admin {
 				<a href="<?php echo esc_url( admin_url( 'admin.php?page=cn-socias' ) ); ?>">Quitar filtros</a>
 				<span style="color:#50575e;">Mostrando <?php echo (int) count( $socias ); ?> de <?php echo (int) $cn_total_listado; ?></span>
 			</form>
+			<?php if ( '' !== $cn_q ) : ?>
+				<p><strong><?php echo (int) count( $socias ); ?> <?php echo 1 === count( $socias ) ? 'resultado' : 'resultados'; ?></strong> para &laquo;<?php echo esc_html( $cn_q ); ?>&raquo;<?php echo 0 === count( $socias ) ? ' &mdash; no se encontró ninguna socia (probá con menos letras, o revisá que "Mostrar" no esté filtrando por tipo).' : ''; ?></p>
+			<?php endif; ?>
 			<table class="widefat striped">
 				<thead>
 					<tr>
 						<th>Nombre y Apellido</th>
+						<?php if ( '' !== $cn_q ) : ?><th>Email</th><?php endif; ?>
 						<th>Celular</th>
 						<th>Estado</th>
 						<th>Tipo</th>
 						<th>Alta</th>
+						<?php if ( '' !== $cn_q ) : ?><th>Plan / acceso hasta</th><?php endif; ?>
 						<th>Acciones</th>
 					</tr>
 				</thead>
@@ -647,6 +728,7 @@ class CN_Admin {
 					<?php foreach ( $socias as $socia ) : ?>
 						<tr>
 							<td><?php echo esc_html( $socia->nombre_apellido ); ?></td>
+							<?php if ( '' !== $cn_q ) : ?><td><?php echo esc_html( (string) $socia->email ); ?></td><?php endif; ?>
 							<td>****<?php echo esc_html( $socia->celular_hint ); ?></td>
 							<td><?php echo 'activo' === $socia->estado ? '<span style="color:#2e7d32;">Activo</span>' : ( 'cancelada' === $socia->estado ? '<span style="color:#c62828;">Cancelada</span>' : '<span style="color:#c62828;">Pausado</span>' ); ?></td>
 							<td><?php
@@ -657,6 +739,7 @@ class CN_Admin {
 							}
 							?></td>
 							<td><?php echo esc_html( mysql2date( 'd/m/Y', $socia->fecha_alta ) ); ?></td>
+							<?php if ( '' !== $cn_q ) : ?><td><?php echo esc_html( trim( (string) $socia->plan . ( ! empty( $socia->acceso_hasta ) ? ' · hasta ' . mysql2date( 'd/m/Y', $socia->acceso_hasta ) : '' ) ) ); ?></td><?php endif; ?>
 							<td>
 								<a href="<?php echo esc_url( add_query_arg( array( 'page' => 'cn-socias', 'editar' => $socia->id ) ) ); ?>">Editar</a> |
 								<?php if ( 'activo' === $socia->estado ) : ?>
@@ -1322,17 +1405,59 @@ class CN_Admin {
 			update_option( 'cn_sub_modo_seguro', isset( $_POST['cn_sub_modo_seguro'] ) ? '1' : '0' );
 			// Fase 5: sync con Mercado Pago cada 30 min. Tildado por defecto.
 			update_option( 'cn_sync_mp_activo', isset( $_POST['cn_sync_mp_activo'] ) ? '1' : '0' );
+			// Frecuencia del sync y espera del mail "completá tus datos" (minutos). Vacío = valor por defecto (30 y 45): se borra la opción.
+			foreach ( array( 'cn_sync_intervalo_min', 'cn_mail_recuperacion_min' ) as $cn_opt_min ) {
+				if ( ! isset( $_POST[ $cn_opt_min ] ) ) {
+					continue;
+				}
+				$cn_val_min = trim( sanitize_text_field( wp_unslash( $_POST[ $cn_opt_min ] ) ) );
+				if ( '' === $cn_val_min || ! ctype_digit( $cn_val_min ) ) {
+					delete_option( $cn_opt_min );
+				} else {
+					update_option( $cn_opt_min, (int) $cn_val_min );
+				}
+			}
+			if ( method_exists( 'CN_Sync', 'programar' ) ) {
+				CN_Sync::programar(); // si cambió el intervalo, reprograma el cron ahora (si no, no toca nada).
+			}
 			// Fase 5: guarda del cron de trials (mira en MP si pagó por link directo antes de cancelar). Tildado por defecto.
 			update_option( 'cn_guarda_trial_mp', isset( $_POST['cn_guarda_trial_mp'] ) ? '1' : '0' );
+			// Guarda de trials en modo solo-log: tildado por defecto. Tildado = registra su decisión y no cambia nada.
+			update_option( 'cn_guarda_trial_solo_log', isset( $_POST['cn_guarda_trial_solo_log'] ) ? '1' : '0' );
+			// Alta por mail (CN_Alta_Mail): modo off|log|on. Al salir de 'off' se fija el corte (solo suscripciones nuevas desde ahora).
+			if ( isset( $_POST['cn_alta_mail_modo'] ) ) {
+				$cn_modo_ant   = CN_Alta_Mail::modo();
+				$cn_modo_nuevo = sanitize_key( wp_unslash( $_POST['cn_alta_mail_modo'] ) );
+				$cn_modo_nuevo = in_array( $cn_modo_nuevo, array( 'log', 'on' ), true ) ? $cn_modo_nuevo : 'off';
+				update_option( CN_Alta_Mail::OPT_MODO, $cn_modo_nuevo );
+				CN_Alta_Mail::al_guardar_modo( $cn_modo_ant, $cn_modo_nuevo );
+				update_option( CN_Alta_Mail::OPT_URL, esc_url_raw( wp_unslash( $_POST['cn_alta_mail_url'] ?? '' ) ) );
+			}
+			// Espejo de pausas/cancelaciones de MP (CN_Espejo_MP): off|log|on. Apagado por defecto.
+			if ( isset( $_POST['cn_espejo_mp_modo'] ) ) {
+				$cn_espejo_nuevo = sanitize_key( wp_unslash( $_POST['cn_espejo_mp_modo'] ) );
+				update_option( CN_Espejo_MP::OPT_MODO, in_array( $cn_espejo_nuevo, array( 'log', 'on' ), true ) ? $cn_espejo_nuevo : 'off' );
+			}
 			// Página de retorno de suscripciones por link directo ([cn_retorno_suscripcion]). Apagada por defecto.
 			update_option( 'cn_retorno_activo', isset( $_POST['cn_retorno_activo'] ) ? '1' : '0' );
+			// FASE 2: endpoint ?cn_suscribir= (link firmado por ficha desde los mails). off por defecto; el secreto se genera en su bloque, más abajo.
+			if ( isset( $_POST['cn_suscribir_modo'] ) && class_exists( 'CN_Suscribir' ) ) {
+				update_option( CN_Suscribir::OPT_MODO, 'on' === sanitize_key( wp_unslash( $_POST['cn_suscribir_modo'] ) ) ? 'on' : 'off' );
+			}
 			update_option( CN_Retorno::OPT_WHATSAPP, preg_replace( '/\D+/', '', sanitize_text_field( wp_unslash( $_POST['cn_retorno_whatsapp'] ?? '' ) ) ) ); // solo dígitos
+			// API de solo lectura del panel de socias (CN_Panel_API). Apagada por defecto.
+			update_option( CN_Panel_API::OPT_ACTIVO, isset( $_POST['cn_panel_api_activo'] ) ? '1' : '0' );
+			update_option( CN_Panel_API::OPT_USO, isset( $_POST['cn_panel_uso_activo'] ) ? '1' : '0' );
 			update_option( 'cn_meta_capi_token', sanitize_text_field( wp_unslash( $_POST['cn_meta_capi_token'] ?? '' ) ) );
 			update_option( 'cn_google_drive_api_key', sanitize_text_field( wp_unslash( $_POST['cn_google_drive_api_key'] ?? '' ) ) );
 			update_option( 'cn_clase_especial_link', esc_url_raw( wp_unslash( $_POST['cn_clase_especial_link'] ?? '' ) ) );
 			update_option( 'cn_admin_alerta_email', sanitize_email( wp_unslash( $_POST['cn_admin_alerta_email'] ?? '' ) ) );
 			self::aviso( 'Configuración guardada.' );
 		}
+		$panel_token_nuevo = CN_Panel_API::procesar_generar_token(); // botón "Generar/rotar token": se muestra una sola vez.
+		$suscribir_cfg     = class_exists( 'CN_Suscribir' ) ? CN_Suscribir::procesar_config() : array(); // botones "Generar secreto" / "Armar link": se muestran una sola vez.
+		$suscribir_modo    = class_exists( 'CN_Suscribir' ) ? CN_Suscribir::modo() : 'off';
+		$panel_activo      = CN_Panel_API::activo();
 		$token        = CN_MP::get_access_token();
 		$token_trial  = CN_MP::get_access_token_trial();
 		$precio       = CN_MP::get_precio_mensual();
@@ -1343,8 +1468,15 @@ class CN_Admin {
 		$sub_auto_activar = '1' === (string) get_option( 'cn_sub_auto_activar', '0' );
 		$sub_modo_seguro  = '1' === (string) get_option( 'cn_sub_modo_seguro', '1' );
 		$sync_mp_activo   = '1' === (string) get_option( 'cn_sync_mp_activo', '1' );
+		$sync_intervalo   = get_option( 'cn_sync_intervalo_min', '' );
+		$mail_espera      = get_option( 'cn_mail_recuperacion_min', '' );
 		$guarda_trial_mp  = '1' === (string) get_option( 'cn_guarda_trial_mp', '1' );
+		$guarda_solo_log  = '1' === (string) get_option( 'cn_guarda_trial_solo_log', '1' );
 		$retorno_activo   = '1' === (string) get_option( 'cn_retorno_activo', '0' );
+		$alta_modo        = CN_Alta_Mail::modo();
+		$espejo_modo      = CN_Espejo_MP::modo();
+		$alta_url         = (string) get_option( CN_Alta_Mail::OPT_URL, '' );
+		$alta_desde       = (int) get_option( CN_Alta_Mail::OPT_DESDE, 0 );
 		$retorno_wa       = (string) get_option( CN_Retorno::OPT_WHATSAPP, '' );
 		$capi_token   = CN_Meta_Capi::get_token();
 		$drive_key    = CN_Drive::get_api_key();
@@ -1412,9 +1544,25 @@ class CN_Admin {
 						<th><label>Sincronizar con Mercado Pago (cada 30 min)</label></th>
 						<td>
 							<label><input type="checkbox" name="cn_sync_mp_activo" value="1" <?php checked( $sync_mp_activo ); ?>> Revisar en Mercado Pago las suscripciones ya vinculadas, sin depender de los webhooks</label>
-							<p class="description">Tildado por defecto. Cada 30 minutos revisa hasta 20 suscripciones: renovaciones y reanudaciones se aplican; cancelaciones y pausas solo programan la baja (sin cortar el acceso) si el Modo seguro está destildado. También avisa por n8n de las suscripciones autorizadas sin vincular hace más de 1 hora (no vincula nada).</p>
+							<p class="description">Tildado por defecto. Cada 30 minutos revisa hasta 20 suscripciones: renovaciones y reanudaciones se aplican; cancelaciones y pausas solo programan la baja (sin cortar el acceso) si el Modo seguro está destildado. También deja un aviso de las suscripciones autorizadas sin vincular hace más de 1 hora (no vincula nada).</p>
+							<p style="margin-top:10px;"><label>Cada cuántos minutos corre el sync: <input type="number" name="cn_sync_intervalo_min" min="5" max="1440" step="1" value="<?php echo esc_attr( is_scalar( $sync_intervalo ) ? (string) $sync_intervalo : '' ); ?>" style="width:80px;" placeholder="30"></label></p>
+							<p class="description">Vacío = 30 (como siempre). Mínimo 5. Con menos de 30, el barrido de las suscripciones vinculadas, el aviso de sin vincular y el reemplazo automático siguen corriendo una vez cada 30 minutos: en los ticks intermedios solo corre el alta por mail (abajo). Si Mercado Pago responde 429, esa corrida termina y espera a la siguiente. Al guardar se reprograma el cron solo.</p>
+							<p style="margin-top:10px;"><label>Minutos de espera desde el pago para el mail "completá tus datos": <input type="number" name="cn_mail_recuperacion_min" min="5" max="1440" step="1" value="<?php echo esc_attr( is_scalar( $mail_espera ) ? (string) $mail_espera : '' ); ?>" style="width:80px;" placeholder="45"></label></p>
+							<p class="description">Vacío = 45 (como siempre). Mínimo 5. Solo aplica con el alta por mail en "Solo registrar" o "Mandar el mail". Sigue siendo máximo 1 mail por suscripción.</p>
 						</td>
 					</tr>
+					<?php if ( class_exists( 'CN_Suscribir' ) ) : ?>
+					<tr>
+						<th><label>Suscribirse desde los mails (link firmado)</label></th>
+						<td>
+							<select name="cn_suscribir_modo">
+								<option value="off" <?php selected( 'off', $suscribir_modo ); ?>>Apagado (todo va a /planes-club/)</option>
+								<option value="on" <?php selected( 'on', $suscribir_modo ); ?>>Encendido (crea la suscripción de la ficha y manda a pagar)</option>
+							</select>
+							<p class="description">Apagado por defecto. Con el endpoint apagado o sin secreto, el link <code>?cn_suscribir=</code> solo redirige a /planes-club/. El secreto y los links de prueba están más abajo, en su bloque. Marcha atrás: Apagado.</p>
+						</td>
+					</tr>
+					<?php endif; ?>
 					<tr>
 						<th><label>Página de retorno de suscripción</label></th>
 						<td>
@@ -1425,10 +1573,45 @@ class CN_Admin {
 						</td>
 					</tr>
 					<tr>
+						<th><label>Espejo de Mercado Pago (pausas y cancelaciones)</label></th>
+						<td>
+							<select name="cn_espejo_mp_modo">
+								<option value="off" <?php selected( $espejo_modo, 'off' ); ?>>Apagado (no hace nada)</option>
+								<option value="log" <?php selected( $espejo_modo, 'log' ); ?>>Solo registrar (NO cambia ninguna ficha)</option>
+								<option value="on" <?php selected( $espejo_modo, 'on' ); ?>>Activo (programa bajas con gracia)</option>
+							</select>
+							<p class="description">Apagado por defecto. Solo fichas ya vinculadas a una suscripción. "Solo registrar" anota en el registro (<code>espejo_mp_simulado</code>) qué haría y lo cuenta en el cartel de Socias. En "Activo", una pausa o cancelación en Mercado Pago programa la baja para el fin del período pagado + 7 días (nadie pierde el acceso antes), y se cancela sola si Mercado Pago vuelve a autorizar. No manda mails.</p>
+						</td>
+					</tr>
+					<tr>
+						<th><label>Alta por mail (suscripción sin ficha)</label></th>
+						<td>
+							<select name="cn_alta_mail_modo">
+								<option value="off" <?php selected( $alta_modo, 'off' ); ?>>Apagado (no hace nada)</option>
+								<option value="log" <?php selected( $alta_modo, 'log' ); ?>>Solo registrar (simula, NO manda mails)</option>
+								<option value="on" <?php selected( $alta_modo, 'on' ); ?>>Activo (manda el mail)</option>
+							</select>
+							<p class="description">Apagado por defecto. Cuando alguien paga por el link directo del plan y no tiene ficha, el sistema toma el email del pago y le manda un link para completar celular y nombre en la página de retorno (que tiene que estar activa, más abajo). <strong>Solo cuentan las suscripciones creadas desde que sale de "Apagado"</strong><?php echo $alta_desde > 0 ? ' (corte actual: ' . esc_html( gmdate( 'd/m/Y H:i', $alta_desde ) ) . ' UTC)' : ''; ?>; las anteriores no se tocan. "Solo registrar" deja en el registro (<code>alta_mail_simulado</code>, con el email enmascarado) lo que haría.</p>
+							<p style="margin-top:8px;"><label>URL de la página con <code>[cn_retorno_suscripcion]</code>: <input type="url" name="cn_alta_mail_url" class="regular-text" value="<?php echo esc_attr( $alta_url ); ?>" placeholder="https://naturalesart.com/..."></label></p>
+							<p class="description">Si la dejás vacía se busca sola la página publicada que tenga ese shortcode.</p>
+						</td>
+					</tr>
+					<tr>
+						<th><label>Panel de socias (API de solo lectura)</label></th>
+						<td>
+							<label><input type="checkbox" name="cn_panel_api_activo" value="1" <?php checked( $panel_activo ); ?>> Activar <code>/wp-json/cn/v1/panel-datos</code> (requiere token, solo HTTPS)</label>
+							<p class="description">Apagado por defecto. Apagado, la dirección no existe (404). Solo lee datos; el token se genera más abajo.</p>
+							<label><input type="checkbox" name="cn_panel_uso_activo" value="1" <?php checked( CN_Panel_API::uso_activo() ); ?>> Incluir email completo y uso del área de socias (último login aproximado, contenidos vistos, última actividad)</label>
+							<p class="description">Apagado por defecto. Solo lectura, uso interno; sin celulares nuevos.</p>
+						</td>
+					</tr>
+					<tr>
 						<th><label>Guarda del cron de trials (Mercado Pago)</label></th>
 						<td>
-							<label><input type="checkbox" name="cn_guarda_trial_mp" value="1" <?php checked( $guarda_trial_mp ); ?>> Antes de cancelar un trial vencido, mirar en Mercado Pago si ya pagó por link directo</label>
-							<p class="description">Tildado por defecto. Si encuentra un cobro de $15.500 o más posterior al de $7.000 (o una suscripción autorizada con ese email), no cancela a la socia y avisa por n8n para vincularla. Si Mercado Pago no responde, tampoco cancela y reintenta en la próxima corrida diaria.</p>
+							<label><input type="checkbox" name="cn_guarda_trial_mp" value="1" <?php checked( $guarda_trial_mp ); ?>> Antes de cancelar un trial vencido, mirar en Mercado Pago si ya tiene una suscripción</label>
+							<p class="description">Tildado por defecto. Toma el id del pagador del cobro del trial y busca si tiene una suscripción autorizada. Si Mercado Pago no responde o no hay forma confiable de saberlo, no cancela y reintenta en la próxima corrida diaria.</p>
+							<p style="margin-top:8px;"><label><input type="checkbox" name="cn_guarda_trial_solo_log" value="1" <?php checked( $guarda_solo_log ); ?>> Modo solo-log: solo registrar lo que decidiría la guarda, sin cambiar nada</label></p>
+							<p class="description">Tildado por defecto. Con esto tildado la guarda anota su decisión en el registro (tipo <code>trial_guarda_decision</code>) y el cron NO cancela a nadie, igual que hasta ahora. Destildarlo hace que la guarda actúe: con suscripción no cancela y deja un aviso; sin suscripción cancela como siempre. Destildalo recién después de revisar las decisiones registradas.</p>
 						</td>
 					</tr>
 					<tr>
@@ -1472,6 +1655,8 @@ class CN_Admin {
 				</table>
 				<?php submit_button( 'Guardar configuración', 'primary', 'cn_admin_guardar_config' ); ?>
 			</form>
+			<?php CN_Panel_API::bloque_config( $panel_token_nuevo ); ?>
+			<?php if ( class_exists( 'CN_Suscribir' ) ) { CN_Suscribir::bloque_config( $suscribir_cfg ); } ?>
 			<h2>Webhooks de Mercado Pago</h2>
 			<p>Suscripciones — pegá esta URL en la app de Suscripciones → Webhooks:</p>
 			<input type="text" readonly class="regular-text" style="width:100%;max-width:600px;" onclick="this.select();" value="<?php echo esc_url( CN_MP::webhook_url() ); ?>">

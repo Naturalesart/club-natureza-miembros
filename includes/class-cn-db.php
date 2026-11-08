@@ -5,7 +5,7 @@ class CN_DB {
 		global $wpdb;
 		return $wpdb->prefix . 'cn_' . $nombre;
 	}
-	const DB_VERSION = '2.8.0';
+	const DB_VERSION = '2.10.0'; // 2.10.0: columna aditiva init_point en cn_suscripciones_pendientes (FASE 2: reusar la pendiente de 24 h). 2.9.0: tablas nuevas cn_cuentas y cn_cuenta_tokens (acceso con email + contraseña; aditivas, no tocan las existentes).
 	public static function maybe_upgrade() {
 		if ( get_option( 'cn_db_version' ) !== self::DB_VERSION ) {
 			self::instalar();
@@ -28,6 +28,8 @@ class CN_DB {
 		$t_susc_pendientes  = self::tabla( 'suscripciones_pendientes' );
 		$t_mp_log           = self::tabla( 'mp_log' );
 		$t_pixel_dedup      = self::tabla( 'pixel_dedup' );
+		$t_cuentas          = self::tabla( 'cuentas' );
+		$t_cuenta_tokens    = self::tabla( 'cuenta_tokens' );
 		$sql = "CREATE TABLE {$t_miembros} (
 			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
 			nombre_apellido varchar(191) NOT NULL,
@@ -150,6 +152,7 @@ class CN_DB {
 			user_agent text DEFAULT NULL,
 			creado datetime NOT NULL,
 			usado tinyint(1) NOT NULL DEFAULT 0,
+			init_point varchar(500) DEFAULT NULL,
 			PRIMARY KEY  (id),
 			UNIQUE KEY external_reference (external_reference),
 			KEY celular (celular)
@@ -165,6 +168,30 @@ class CN_DB {
 			eid varchar(191) NOT NULL,
 			fired_at datetime NOT NULL,
 			PRIMARY KEY  (eid)
+		) {$charset_collate};
+		CREATE TABLE {$t_cuentas} (
+			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+			miembro_id bigint(20) unsigned NOT NULL,
+			email varchar(191) NOT NULL,
+			pass_hash varchar(255) DEFAULT NULL,
+			creada datetime NOT NULL,
+			ultimo_login datetime DEFAULT NULL,
+			intentos int(10) unsigned NOT NULL DEFAULT 0,
+			PRIMARY KEY  (id),
+			UNIQUE KEY miembro_id (miembro_id),
+			UNIQUE KEY email (email)
+		) {$charset_collate};
+		CREATE TABLE {$t_cuenta_tokens} (
+			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+			cuenta_id bigint(20) unsigned NOT NULL,
+			proposito varchar(20) NOT NULL,
+			token_hash char(64) NOT NULL,
+			expira datetime NOT NULL,
+			usado tinyint(1) NOT NULL DEFAULT 0,
+			creado datetime NOT NULL,
+			PRIMARY KEY  (id),
+			UNIQUE KEY token_hash (token_hash),
+			KEY cuenta_proposito (cuenta_id,proposito)
 		) {$charset_collate};";
 		dbDelta( $sql );
 	}

@@ -21,24 +21,67 @@ require_once CN_PATH . 'includes/class-cn-drive.php';
 require_once CN_PATH . 'includes/class-cn-mp.php';
 require_once CN_PATH . 'includes/class-cn-meta-capi.php';
 require_once CN_PATH . 'includes/class-cn-webhook.php';
+require_once CN_PATH . 'includes/class-cn-alertas.php';
+if ( file_exists( CN_PATH . 'includes/class-cn-conciliacion.php' ) ) { // el guard evita un fatal si el deploy por SFTP sube este archivo antes que la clase nueva.
+	require_once CN_PATH . 'includes/class-cn-conciliacion.php'; // D1: conciliación diaria MP<->fichas; modo 'log' por defecto (flag cn_conciliacion_modo).
+}
 require_once CN_PATH . 'includes/class-cn-vinculo.php';
 require_once CN_PATH . 'includes/class-cn-vinculo-manual.php';
 require_once CN_PATH . 'includes/class-cn-retorno.php';
+require_once CN_PATH . 'includes/class-cn-alta-mail.php';
+if ( file_exists( CN_PATH . 'includes/class-cn-mail-carta.php' ) ) { // el guard evita un fatal si el deploy por SFTP sube este archivo antes que la clase nueva.
+	require_once CN_PATH . 'includes/class-cn-mail-carta.php'; // plantilla "carta" (BORRADOR): solo arma HTML+texto, no envía ni registra hooks.
+}
 require_once CN_PATH . 'includes/class-cn-vinculo-lote.php';
+require_once CN_PATH . 'includes/class-cn-para-contactar.php'; // pantalla "Para contactar" (solo lectura; se engancha sola).
+require_once CN_PATH . 'includes/class-cn-espejo-mp.php';
+require_once CN_PATH . 'includes/class-cn-espejo-auditoria.php'; // pantalla "Auditoría del espejo" (solo lectura; se engancha sola).
+require_once CN_PATH . 'includes/class-cn-panel-api.php'; // API REST de solo lectura para el panel de socias (n8n); apagada por defecto (cn_panel_api_activo).
 require_once CN_PATH . 'includes/class-cn-sync.php';
 require_once CN_PATH . 'includes/class-cn-shortcodes.php';
 require_once CN_PATH . 'includes/class-cn-admin.php';
 require_once CN_PATH . 'includes/class-cn-colaboradora.php';
-require_once CN_PATH . 'includes/class-cn-panel-contenido.php';
+if ( file_exists( CN_PATH . 'includes/class-cn-panel-contenido.php' ) ) { // el guard evita un fatal si el deploy por SFTP sube este archivo antes que la clase nueva.
+	require_once CN_PATH . 'includes/class-cn-panel-contenido.php'; // panel de contenido para el celular: shortcode [cn_panel_contenido].
+}
 require_once CN_PATH . 'includes/class-cn-clarity.php';
+require_once CN_PATH . 'includes/class-cn-planes-mp.php';
+require_once CN_PATH . 'includes/class-cn-socias-revisar.php';
+require_once CN_PATH . 'includes/class-cn-sin-vincular.php'; // pantalla "Suscripciones sin vincular" (solo lectura; se engancha sola). // pantalla "Socias a revisar" (se engancha sola).
+require_once CN_PATH . 'includes/class-cn-reemplazo.php'; // pantalla "Reemplazar suscripción" (se engancha sola; solo GET a MP).
+require_once CN_PATH . 'includes/class-cn-reemplazo-auto.php'; // reemplazo automático (re-suscripción): lo llama el sync; modo 'log' por defecto.
+require_once CN_PATH . 'includes/class-cn-extender-acceso.php'; // pantalla "Extender acceso" (se engancha sola; sin MP).
+require_once CN_PATH . 'includes/class-cn-corregir-vinculo.php'; // pantalla "Corregir vínculo" (se engancha sola; solo GET a MP).
+require_once CN_PATH . 'includes/class-cn-diag-pagador.php'; // TEMPORAL (diagnóstico, solo lectura): borrar esta línea y el archivo para quitarla.
+if ( file_exists( CN_PATH . 'includes/class-cn-cuentas.php' ) ) { // el guard evita un fatal si el deploy por SFTP sube este archivo antes que la clase nueva.
+	require_once CN_PATH . 'includes/class-cn-cuentas.php'; // cuentas email + contraseña (PASO B): solo núcleo, sin pantallas ni enganches; flag cn_cuentas_modo apagado.
+	if ( method_exists( 'CN_Cuentas', 'registrar' ) ) { // el guard cubre una CN_Cuentas vieja (sin el método nuevo) por el deploy archivo por archivo.
+		CN_Cuentas::registrar(); // PASO E: solo engancha update/add_option de cn_cuentas_modo (guarda cn_cuentas_desde al salir de off).
+	}
+}
 register_activation_hook( __FILE__, array( 'CN_Activator', 'activar' ) );
 add_action( 'init', array( 'CN_Shortcodes', 'registrar' ) );
+if ( file_exists( CN_PATH . 'includes/class-cn-acceso.php' ) ) { // mismo guard: el deploy por SFTP sube archivo por archivo.
+	require_once CN_PATH . 'includes/class-cn-acceso.php'; // pantallas del acceso con email (PASO C): inertes mientras cn_cuentas_modo no sea 'on'.
+	add_action( 'init', array( 'CN_Acceso_Paginas', 'registrar' ) );
+}
+if ( file_exists( CN_PATH . 'includes/class-cn-mail-cuenta.php' ) ) { // mismo guard.
+	require_once CN_PATH . 'includes/class-cn-mail-cuenta.php'; // mails de cuenta (PASO D): con cn_cuentas_modo apagado no envían ni programan nada.
+	add_action( 'init', array( 'CN_Mail_Cuenta', 'registrar' ) );
+}
 add_action( 'init', array( 'CN_Retorno', 'registrar' ) );
+if ( file_exists( CN_PATH . 'includes/class-cn-suscribir.php' ) ) { // mismo guard: el deploy por SFTP sube archivo por archivo.
+	require_once CN_PATH . 'includes/class-cn-suscribir.php'; // FASE 2: ?cn_suscribir=<token> (link firmado por ficha desde los mails). Inerte con cn_suscribir_modo 'off' (default) o sin secreto.
+	add_action( 'init', array( 'CN_Suscribir', 'registrar' ) );
+}
+CN_Planes_MP::registrar();
 // Rol "Colaboradora Club": acceso acotado (solo cargar contenido), sin permisos de administrador.
 add_action( 'init', array( 'CN_Colaboradora', 'registrar_rol' ) );
 add_filter( 'login_redirect', array( 'CN_Colaboradora', 'redirigir_login' ), 10, 3 );
 // Panel de contenido para el celular: shortcode [cn_panel_contenido] (login propio, noindex, sin cache).
-CN_Panel_Contenido::registrar();
+if ( class_exists( 'CN_Panel_Contenido' ) ) { // mismo guard: el deploy por SFTP sube archivo por archivo.
+	CN_Panel_Contenido::registrar();
+}
 add_action( 'rest_api_init', array( 'CN_Webhook', 'registrar_rutas' ) );
 // maybe_upgrade se dispara en init (todo request) además de admin_init: sin
 // esta línea, cuando cambia DB_VERSION las nuevas columnas no existen hasta
@@ -91,6 +134,13 @@ add_action( 'init', function () {
 		wp_schedule_event( time(), 'daily', 'cn_cron_revocar_trials' );
 	}
 } );
+add_action( 'cn_cron_alertas_graves', array( 'CN_Alertas', 'chequeo_diario' ) );
+add_action( 'wp_mail_failed', array( 'CN_Alertas', 'wp_mail_fallo' ) ); // alerta GRAVE si WordPress no puede enviar mails (3+ fallos en 6 hs).
+add_action( 'init', function () {
+	if ( ! wp_next_scheduled( 'cn_cron_alertas_graves' ) ) {
+		wp_schedule_event( time() + 600, 'daily', 'cn_cron_alertas_graves' );
+	}
+} );
 add_action( 'cn_cron_revocar_bajas_sub', array( 'CN_Webhook', 'revocar_bajas_sub_vencidas' ) );
 add_action( 'init', function () {
 	if ( ! wp_next_scheduled( 'cn_cron_revocar_bajas_sub' ) ) {
@@ -98,9 +148,14 @@ add_action( 'init', function () {
 	}
 } );
 // Fase 5: sync con Mercado Pago cada 30 min (sin webhooks) + aviso de suscripciones sin vincular. Se apaga con la opción cn_sync_mp_activo.
+// La frecuencia se puede acortar con la opción cn_sync_intervalo_min (minutos; vacía = 30): CN_Sync::programar reprograma el evento si cambió.
 add_filter( 'cron_schedules', array( 'CN_Sync', 'registrar_intervalo' ) );
 add_action( 'cn_cron_sync_mp', array( 'CN_Sync', 'correr' ) );
 add_action( 'init', function () {
+	if ( method_exists( 'CN_Sync', 'programar' ) ) { // el guard cubre una CN_Sync vieja (deploy por SFTP archivo por archivo).
+		CN_Sync::programar();
+		return;
+	}
 	if ( ! wp_next_scheduled( 'cn_cron_sync_mp' ) ) {
 		wp_schedule_event( time() + 300, 'cn_30min', 'cn_cron_sync_mp' );
 	}

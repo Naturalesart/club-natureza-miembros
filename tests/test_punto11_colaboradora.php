@@ -118,4 +118,31 @@ t( 'muestra el botón de la carpeta de Drive del curso', false !== strpos( $html
 t( 'no muestra links que no son de Drive', false === strpos( $html, 'evil.com' ) );
 t( 'la pantalla no ofrece borrar ni editar', false === stripos( $html, 'borrar' ) && false === stripos( $html, 'cn_action' ) );
 
+seccion( 'título: tope de 191 caracteres (el máximo indexable en utf8mb4)' );
+t( 'la constante del tope es 191', 191 === CN_Colaboradora::TITULO_MAX );
+$largo = str_repeat( 'á', 250 ); // multibyte a propósito: el corte es por caracteres, no por bytes.
+list( $r, $w ) = cb_run( $CAP, array( 'cn_colab_video' => '1', 'cn_titulo' => $largo, 'cn_link' => 'https://youtu.be/abc' ) );
+$esc = $w->escrituras( 'cn_videos' );
+t( 'video: un título largo se corta en 191 caracteres', 'success' === $r['tipo'] && 191 === mb_strlen( $esc[0][2]['titulo'] ) );
+list( $r, $w ) = cb_run( $CAP, array( 'cn_colab_contenido' => '1', 'cn_curso_id' => '5', 'cn_tipo' => 'pdf', 'cn_titulo' => $largo, 'cn_link' => 'https://drive.google.com/file/d/1abc/view' ) );
+$esc = $w->escrituras( 'cn_contenidos' );
+t( 'contenido: un título largo se corta en 191 caracteres', 'success' === $r['tipo'] && 191 === mb_strlen( $esc[0][2]['titulo'] ) );
+$justo = str_repeat( 'á', 191 );
+list( $r, $w ) = cb_run( $CAP, array( 'cn_colab_video' => '1', 'cn_titulo' => $justo, 'cn_link' => 'https://youtu.be/abc' ) );
+$esc = $w->escrituras( 'cn_videos' );
+t( 'un título de 191 entra entero', $justo === $esc[0][2]['titulo'] );
+
+seccion( 'si el INSERT falla, avisa y NO dice que guardó' );
+$GLOBALS['cn_insert_falla'] = true;
+list( $r, $w ) = cb_run( $CAP, array( 'cn_colab_video' => '1', 'cn_titulo' => 'Clase 1', 'cn_link' => 'https://youtu.be/abc' ) );
+t( 'video: error con el aviso al usuario', 'error' === $r['tipo'] && CN_Colaboradora::ERROR_GUARDAR === $r['texto'] );
+list( $r, $w ) = cb_run( $CAP, array( 'cn_colab_contenido' => '1', 'cn_curso_id' => '5', 'cn_tipo' => 'pdf', 'cn_titulo' => 'Guía', 'cn_link' => 'https://drive.google.com/file/d/1abc/view' ) );
+t( 'contenido: error con el aviso al usuario', 'error' === $r['tipo'] && CN_Colaboradora::ERROR_GUARDAR === $r['texto'] );
+list( $r, $w ) = cb_run( $CAP, array( 'cn_colab_curso' => '1', 'cn_nombre' => 'Orquídea', 'cn_link' => 'https://drive.google.com/drive/folders/1AbC' ) );
+t( 'curso: error con el aviso al usuario', 'error' === $r['tipo'] && CN_Colaboradora::ERROR_GUARDAR === $r['texto'] );
+t( 'el aviso es el texto pedido', 'No se pudo guardar. Probá de nuevo.' === CN_Colaboradora::ERROR_GUARDAR );
+unset( $GLOBALS['cn_insert_falla'] );
+list( $r, $w ) = cb_run( $CAP, array( 'cn_colab_video' => '1', 'cn_titulo' => 'Clase 1', 'cn_link' => 'https://youtu.be/abc' ) );
+t( 'cuando el INSERT anda, vuelve a confirmar el alta', 'success' === $r['tipo'] && 'Video agregado.' === $r['texto'] );
+
 unset( $GLOBALS['cn_caps'] ); // el resto de los tests asume permisos de administrador (stub por defecto).

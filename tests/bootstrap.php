@@ -11,13 +11,23 @@ define( 'HOUR_IN_SECONDS', 3600 );
 define( 'DAY_IN_SECONDS', 86400 );
 // mbstring no siempre está en la máquina local; WordPress trae este respaldo en producción.
 if ( ! function_exists( 'mb_substr' ) ) {
-	function mb_substr( $s, $start, $len = null ) {
-		return null === $len ? substr( $s, $start ) : substr( $s, $start, $len );
+	function mb_substr( $s, $start, $len = null, $enc = null ) { // cuenta CARACTERES UTF-8, como el respaldo de WordPress (no bytes).
+		$chars = preg_split( '//u', (string) $s, -1, PREG_SPLIT_NO_EMPTY );
+		if ( ! is_array( $chars ) ) {
+			return null === $len ? substr( (string) $s, $start ) : substr( (string) $s, $start, $len );
+		}
+		return implode( '', null === $len ? array_slice( $chars, $start ) : array_slice( $chars, $start, $len ) );
 	}
 }
 if ( ! function_exists( 'mb_strlen' ) ) {
-	function mb_strlen( $s ) {
-		return strlen( $s );
+	function mb_strlen( $s, $enc = null ) {
+		$n = preg_match_all( '/./us', (string) $s );
+		return false === $n ? strlen( (string) $s ) : $n;
+	}
+}
+if ( ! function_exists( 'mb_strtoupper' ) ) {
+	function mb_strtoupper( $s, $enc = null ) {
+		return strtoupper( strtr( (string) $s, array( 'á' => 'Á', 'é' => 'É', 'í' => 'Í', 'ó' => 'Ó', 'ú' => 'Ú', 'ñ' => 'Ñ', 'ü' => 'Ü' ) ) );
 	}
 }
 // ---------------------------------------------------------------- estado global de los stubs
@@ -34,7 +44,11 @@ function cn_test_reset() {
 	$GLOBALS['cn_http']       = array();
 	$GLOBALS['cn_http_log']   = array();
 	$GLOBALS['cn_mails']      = array();
+	$GLOBALS['cn_mail_falla'] = false;
 	$GLOBALS['cn_capi']       = array();
+	$GLOBALS['cn_cron']       = array();
+	$GLOBALS['cm_cron']       = array();
+	$GLOBALS['cn_cron_log']   = array();
 	$GLOBALS['wpdb']         = new CN_Fake_Wpdb();
 }
 // ---------------------------------------------------------------- funciones de WordPress
@@ -67,6 +81,29 @@ function update_option( $k, $v ) {
 	$GLOBALS['cn_opts'][ $k ] = $v;
 	return true;
 }
+function delete_option( $k ) {
+	unset( $GLOBALS['cn_opts'][ $k ] );
+	return true;
+}
+// Cron de WordPress (mínimo): un evento por hook. $GLOBALS['cn_cron'][ hook ] = array( 'timestamp', 'schedule' ); $GLOBALS['cm_cron'][ hook ] = schedule
+// (la vista que ya usaban test_cuentas_mail / test_zcuentas_altas, que la resetean por su cuenta: por eso un evento vale solo si está en las dos).
+function wp_next_scheduled( $hook ) {
+	return isset( $GLOBALS['cn_cron'][ $hook ], $GLOBALS['cm_cron'][ $hook ] ) ? $GLOBALS['cn_cron'][ $hook ]['timestamp'] : false;
+}
+function wp_get_scheduled_event( $hook ) {
+	return isset( $GLOBALS['cn_cron'][ $hook ], $GLOBALS['cm_cron'][ $hook ] ) ? (object) ( $GLOBALS['cn_cron'][ $hook ] + array( 'hook' => $hook ) ) : false;
+}
+function wp_schedule_event( $ts, $schedule, $hook ) {
+	$GLOBALS['cn_cron'][ $hook ] = array( 'timestamp' => (int) $ts, 'schedule' => (string) $schedule );
+	$GLOBALS['cm_cron'][ $hook ] = (string) $schedule;
+	$GLOBALS['cn_cron_log'][]    = array( 'schedule', $hook, (string) $schedule, (int) $ts );
+	return true;
+}
+function wp_clear_scheduled_hook( $hook ) {
+	unset( $GLOBALS['cn_cron'][ $hook ], $GLOBALS['cm_cron'][ $hook ] );
+	$GLOBALS['cn_cron_log'][] = array( 'clear', $hook );
+	return 1;
+}
 function get_transient( $k ) {
 	return $GLOBALS['cn_transients'][ $k ] ?? false;
 }
@@ -83,7 +120,7 @@ function home_url( $p = '' ) {
 }
 function wp_mail( $to, $asunto, $cuerpo, $headers = array() ) {
 	$GLOBALS['cn_mails'][] = array( 'to' => $to, 'asunto' => $asunto, 'cuerpo' => $cuerpo, 'headers' => $headers );
-	return true;
+	return empty( $GLOBALS['cn_mail_falla'] ); // $GLOBALS['cn_mail_falla'] = true simula que wp_mail no puede enviar (el intento igual queda registrado).
 }
 function esc_html( $s ) {
 	return htmlspecialchars( (string) $s, ENT_QUOTES );
@@ -131,7 +168,7 @@ function user_can( $u, $c ) {
 	return in_array( $c, $u->caps ?? array(), true );
 }
 function check_admin_referer( $a = '', $b = '' ) {
-	return true;
+	return false !== ( $GLOBALS['cn_nonce_ok'] ?? true );
 }
 function sanitize_textarea_field( $s ) {
 	return trim( strip_tags( (string) $s ) );
@@ -141,6 +178,7 @@ function wp_enqueue_style( $h ) {
 function add_shortcode( $t, $cb ) {
 }
 function add_action( $h, $cb ) {
+	$GLOBALS['cn_hooks'][ $h ][] = $cb;
 }
 function wp_verify_nonce( $n, $a ) {
 	return false !== ( $GLOBALS['cn_nonce_ok'] ?? true );
@@ -159,11 +197,16 @@ function is_wp_error( $x ) {
 }
 class WP_Error {
 	public $msg;
-	public function __construct( $code = '', $msg = '' ) {
-		$this->msg = $msg;
+	public $data;
+	public function __construct( $code = '', $msg = '', $data = null ) {
+		$this->msg  = $msg;
+		$this->data = $data;
 	}
 	public function get_error_message() {
 		return $this->msg;
+	}
+	public function get_error_data() {
+		return $this->data;
 	}
 }
 function wp_remote_retrieve_response_code( $r ) {
@@ -171,6 +214,34 @@ function wp_remote_retrieve_response_code( $r ) {
 }
 function wp_remote_retrieve_body( $r ) {
 	return $r['body'];
+}
+// Contraseñas (WordPress real usa bcrypt/phpass; acá alcanza con password_hash).
+function wp_hash_password( $p ) {
+	return password_hash( (string) $p, PASSWORD_BCRYPT, array( 'cost' => 4 ) );
+}
+function wp_check_password( $p, $h, $uid = '' ) {
+	return password_verify( (string) $p, (string) $h );
+}
+function wp_salt( $s = 'auth' ) {
+	return 'sal-de-prueba-' . $s;
+}
+function get_permalink( $id = 0 ) { // acepta ID u objeto post; los tests del panel fijan $GLOBALS['cn_permalink'].
+	if ( isset( $GLOBALS['cn_permalink'] ) ) {
+		return $GLOBALS['cn_permalink'];
+	}
+	if ( is_object( $id ) ) {
+		$id = isset( $id->ID ) ? $id->ID : 0;
+	}
+	return 'https://naturalesart.com/?p=' . (int) $id;
+}
+function is_ssl() { // los tests lo prenden con $GLOBALS['cn_ssl'] = true (por defecto: HTTP).
+	return ! empty( $GLOBALS['cn_ssl'] );
+}
+function nocache_headers() {
+	$GLOBALS['cn_nocache'] = ( $GLOBALS['cn_nocache'] ?? 0 ) + 1;
+}
+function wp_remote_retrieve_header( $r, $h ) {
+	return $r['headers'][ strtolower( $h ) ] ?? '';
 }
 /**
  * Router HTTP falso. Cada regla: metodo, patron (regex sobre la URL), resp:
@@ -190,6 +261,9 @@ function cn_http_request( $metodo, $url, $args ) {
 			}
 			if ( is_int( $resp ) ) {
 				return array( 'response' => array( 'code' => $resp ), 'body' => '{}' );
+			}
+			if ( isset( $resp['__status'] ) ) { // respuesta con código y encabezados propios: array( '__status' => 429, '__headers' => array( 'retry-after' => '7' ), '__body' => array )
+				return array( 'response' => array( 'code' => $resp['__status'] ), 'headers' => $resp['__headers'] ?? array(), 'body' => json_encode( $resp['__body'] ?? new stdClass() ) );
 			}
 			return array( 'response' => array( 'code' => 200 ), 'body' => json_encode( $resp ) );
 		}
@@ -219,14 +293,17 @@ function is_user_logged_in() {
 function is_singular() {
 	return true;
 }
-function get_post() {
-	return $GLOBALS['cn_post'] ?? (object) array( 'ID' => 50, 'post_content' => '[cn_panel_contenido]' );
+function get_post() { // cada test fija su pagina: cn_post (panel) o ca_post (cuentas/acceso); por defecto, la del panel.
+	if ( isset( $GLOBALS['cn_post'] ) ) {
+		return $GLOBALS['cn_post'];
+	}
+	if ( array_key_exists( 'ca_post', $GLOBALS ) ) {
+		return $GLOBALS['ca_post'];
+	}
+	return (object) array( 'ID' => 50, 'post_content' => '[cn_panel_contenido]' );
 }
-function has_shortcode( $contenido, $tag ) {
-	return false !== strpos( (string) $contenido, '[' . $tag );
-}
-function get_permalink( $p = 0 ) {
-	return 'https://naturalesart.com/panel-contenido/';
+function has_shortcode( $contenido, $tag ) { // como WordPress: [tag], [tag attr] o [tag/], no [tag_otro].
+	return (bool) preg_match( '/\[' . preg_quote( (string) $tag, '/' ) . '[\s\]\/]/', (string) $contenido );
 }
 function wp_login_form( $a = array() ) {
 	echo '<form id="loginform" data-redirect="' . htmlspecialchars( (string) ( $a['redirect'] ?? '' ) ) . '" data-remember="' . ( empty( $a['value_remember'] ) ? '0' : '1' ) . '"></form>';
@@ -240,13 +317,12 @@ function wp_logout_url( $r = '' ) {
 function wp_safe_redirect( $u ) {
 	$GLOBALS['cn_redirect'] = $u;
 }
-function nocache_headers() {
-}
 function add_filter( $h, $cb, $p = 10, $n = 1 ) {
 }
 // ---------------------------------------------------------------- $wpdb falso
 class CN_Fake_Wpdb {
 	public $prefix      = 'wp_';
+	public $posts       = 'wp_posts';
 	public $last_error  = '';
 	public $insert_id   = 0;
 	public $log         = array(); // escrituras y transacciones, en orden
@@ -286,6 +362,10 @@ class CN_Fake_Wpdb {
 		$r = $this->resolver( $sql );
 		return is_array( $r ) ? $r : array();
 	}
+	public function get_col( $sql ) {
+		$r = $this->resolver( $sql );
+		return is_array( $r ) ? $r : array();
+	}
 	public function get_var( $sql ) {
 		$r = $this->resolver( $sql );
 		return is_scalar( $r ) ? $r : null;
@@ -300,6 +380,10 @@ class CN_Fake_Wpdb {
 	}
 	public function insert( $tabla, $data, $f = null ) {
 		$this->log[] = array( 'insert', $tabla, $data );
+		if ( ! empty( $GLOBALS['cn_insert_falla'] ) ) { // los tests simulan un INSERT que falla: wpdb devuelve false.
+			$this->last_error = 'insert simulado que falla';
+			return false;
+		}
 		$this->insert_id = 999;
 		return 1;
 	}
@@ -344,18 +428,47 @@ require_once $cn_raiz . 'includes/class-cn-helpers.php';
 require_once $cn_raiz . 'includes/class-cn-db.php';
 require_once $cn_raiz . 'includes/class-cn-mp.php';
 require_once $cn_raiz . 'includes/class-cn-webhook.php';
+require_once $cn_raiz . 'includes/class-cn-alertas.php';
+require_once $cn_raiz . 'includes/class-cn-conciliacion.php';
 require_once $cn_raiz . 'includes/class-cn-vinculo.php';
 require_once $cn_raiz . 'includes/class-cn-vinculo-manual.php';
 require_once $cn_raiz . 'includes/class-cn-retorno.php';
+require_once $cn_raiz . 'includes/class-cn-alta-mail.php';
+if ( file_exists( $cn_raiz . 'includes/class-cn-suscribir.php' ) ) {
+	require_once $cn_raiz . 'includes/class-cn-suscribir.php';
+}
+require_once $cn_raiz . 'includes/class-cn-mail-carta.php';
 require_once $cn_raiz . 'includes/class-cn-vinculo-lote.php';
+require_once $cn_raiz . 'includes/class-cn-para-contactar.php';
+require_once $cn_raiz . 'includes/class-cn-espejo-mp.php';
+require_once $cn_raiz . 'includes/class-cn-espejo-auditoria.php';
 if ( file_exists( $cn_raiz . 'includes/class-cn-sync.php' ) ) {
 	require_once $cn_raiz . 'includes/class-cn-sync.php';
 }
 require_once $cn_raiz . 'includes/class-cn-auth.php';
+if ( ! getenv( 'CN_TEST_CLASE_VIEJA' ) && file_exists( $cn_raiz . 'includes/class-cn-cuentas.php' ) ) { // CN_TEST_CLASE_VIEJA: los tests lanzan un proceso aparte que simula el deploy a medias (clase vieja sin los métodos nuevos).
+	require_once $cn_raiz . 'includes/class-cn-cuentas.php';
+}
+if ( ! getenv( 'CN_TEST_CLASE_VIEJA' ) && file_exists( $cn_raiz . 'includes/class-cn-acceso.php' ) ) {
+	require_once $cn_raiz . 'includes/class-cn-acceso.php';
+}
+if ( ! getenv( 'CN_TEST_CLASE_VIEJA' ) && file_exists( $cn_raiz . 'includes/class-cn-mail-cuenta.php' ) ) {
+	require_once $cn_raiz . 'includes/class-cn-mail-cuenta.php';
+}
 require_once $cn_raiz . 'includes/class-cn-admin.php';
 require_once $cn_raiz . 'includes/class-cn-colaboradora.php';
+require_once $cn_raiz . 'includes/class-cn-diag-pagador.php';
+require_once $cn_raiz . 'includes/class-cn-socias-revisar.php';
+require_once $cn_raiz . 'includes/class-cn-sin-vincular.php';
+require_once $cn_raiz . 'includes/class-cn-panel-api.php';
+require_once $cn_raiz . 'includes/class-cn-reemplazo.php';
+require_once $cn_raiz . 'includes/class-cn-reemplazo-auto.php';
+require_once $cn_raiz . 'includes/class-cn-extender-acceso.php';
+require_once $cn_raiz . 'includes/class-cn-corregir-vinculo.php';
 require_once $cn_raiz . 'includes/class-cn-drive.php';
 require_once $cn_raiz . 'includes/class-cn-panel-contenido.php';
+CN_MP::$dormir = function () { // los tests nunca esperan de verdad (el 429 del sync pide esperas de segundos).
+};
 // ---------------------------------------------------------------- mini framework de tests
 $GLOBALS['cn_t_ok']   = 0;
 $GLOBALS['cn_t_fail'] = array();

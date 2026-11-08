@@ -4,6 +4,8 @@ if ( PHP_SAPI !== 'cli' ) {
 	exit;
 }
 $CAP = array( CN_Colaboradora::CAP );
+unset( $GLOBALS['ca_post'] ); // la deja otro test; aca manda la pagina del panel.
+$GLOBALS['cn_permalink'] = 'https://naturalesart.com/panel-contenido/'; // la pagina del panel, para get_permalink del bootstrap.
 $EVIL = 'https://evil.com/x';
 
 /** Corre ejecutar_post() con $caps y $_POST; $filas = array( regex => respuesta ) para el $wpdb falso. */
@@ -292,7 +294,7 @@ foreach ( array( 'CN_Webhook', 'CN_Mp', 'CN_Auth', 'CN_Vinculo', 'CN_Sync', 'mie
 	t( "el código del panel no menciona $palabra", false === stripos( $fuente, $palabra ) );
 }
 
-unset( $GLOBALS['cn_caps'], $GLOBALS['cn_post'] ); // el resto de los tests asume permisos de administrador (stub por defecto).
+unset( $GLOBALS['cn_caps'], $GLOBALS['cn_post'], $GLOBALS['cn_permalink'] ); // el resto de los tests asume permisos de administrador (stub por defecto).
 $GLOBALS['cn_logged']   = true;
 $GLOBALS['cn_nonce_ok'] = true;
 $_GET  = array();
