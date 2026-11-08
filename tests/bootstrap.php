@@ -11,13 +11,18 @@ define( 'HOUR_IN_SECONDS', 3600 );
 define( 'DAY_IN_SECONDS', 86400 );
 // mbstring no siempre está en la máquina local; WordPress trae este respaldo en producción.
 if ( ! function_exists( 'mb_substr' ) ) {
-	function mb_substr( $s, $start, $len = null ) {
-		return null === $len ? substr( $s, $start ) : substr( $s, $start, $len );
+	function mb_substr( $s, $start, $len = null, $enc = null ) { // cuenta CARACTERES UTF-8, como el respaldo de WordPress (no bytes).
+		$chars = preg_split( '//u', (string) $s, -1, PREG_SPLIT_NO_EMPTY );
+		if ( ! is_array( $chars ) ) {
+			return null === $len ? substr( (string) $s, $start ) : substr( (string) $s, $start, $len );
+		}
+		return implode( '', null === $len ? array_slice( $chars, $start ) : array_slice( $chars, $start, $len ) );
 	}
 }
 if ( ! function_exists( 'mb_strlen' ) ) {
-	function mb_strlen( $s ) {
-		return strlen( $s );
+	function mb_strlen( $s, $enc = null ) {
+		$n = preg_match_all( '/./us', (string) $s );
+		return false === $n ? strlen( (string) $s ) : $n;
 	}
 }
 if ( ! function_exists( 'mb_strtoupper' ) ) {
@@ -220,7 +225,13 @@ function wp_check_password( $p, $h, $uid = '' ) {
 function wp_salt( $s = 'auth' ) {
 	return 'sal-de-prueba-' . $s;
 }
-function get_permalink( $id ) {
+function get_permalink( $id = 0 ) { // acepta ID u objeto post; los tests del panel fijan $GLOBALS['cn_permalink'].
+	if ( isset( $GLOBALS['cn_permalink'] ) ) {
+		return $GLOBALS['cn_permalink'];
+	}
+	if ( is_object( $id ) ) {
+		$id = isset( $id->ID ) ? $id->ID : 0;
+	}
 	return 'https://naturalesart.com/?p=' . (int) $id;
 }
 function is_ssl() { // los tests lo prenden con $GLOBALS['cn_ssl'] = true (por defecto: HTTP).
@@ -273,6 +284,40 @@ function cn_http_calls( $patron ) {
 	return array_values( array_filter( $GLOBALS['cn_http_log'], function ( $c ) use ( $patron ) {
 		return preg_match( $patron, $c['url'] );
 	} ) );
+}
+// Stubs del panel de contenido (punto 12).
+$GLOBALS['cn_logged'] = true;
+function is_user_logged_in() {
+	return false !== ( $GLOBALS['cn_logged'] ?? true );
+}
+function is_singular() {
+	return true;
+}
+function get_post() { // cada test fija su pagina: cn_post (panel) o ca_post (cuentas/acceso); por defecto, la del panel.
+	if ( isset( $GLOBALS['cn_post'] ) ) {
+		return $GLOBALS['cn_post'];
+	}
+	if ( array_key_exists( 'ca_post', $GLOBALS ) ) {
+		return $GLOBALS['ca_post'];
+	}
+	return (object) array( 'ID' => 50, 'post_content' => '[cn_panel_contenido]' );
+}
+function has_shortcode( $contenido, $tag ) { // como WordPress: [tag], [tag attr] o [tag/], no [tag_otro].
+	return (bool) preg_match( '/\[' . preg_quote( (string) $tag, '/' ) . '[\s\]\/]/', (string) $contenido );
+}
+function wp_login_form( $a = array() ) {
+	echo '<form id="loginform" data-redirect="' . htmlspecialchars( (string) ( $a['redirect'] ?? '' ) ) . '" data-remember="' . ( empty( $a['value_remember'] ) ? '0' : '1' ) . '"></form>';
+}
+function wp_lostpassword_url( $r = '' ) {
+	return 'https://naturalesart.com/wp-login.php?action=lostpassword';
+}
+function wp_logout_url( $r = '' ) {
+	return 'https://naturalesart.com/wp-login.php?action=logout';
+}
+function wp_safe_redirect( $u ) {
+	$GLOBALS['cn_redirect'] = $u;
+}
+function add_filter( $h, $cb, $p = 10, $n = 1 ) {
 }
 // ---------------------------------------------------------------- $wpdb falso
 class CN_Fake_Wpdb {
@@ -335,6 +380,10 @@ class CN_Fake_Wpdb {
 	}
 	public function insert( $tabla, $data, $f = null ) {
 		$this->log[] = array( 'insert', $tabla, $data );
+		if ( ! empty( $GLOBALS['cn_insert_falla'] ) ) { // los tests simulan un INSERT que falla: wpdb devuelve false.
+			$this->last_error = 'insert simulado que falla';
+			return false;
+		}
 		$this->insert_id = 999;
 		return 1;
 	}
@@ -416,6 +465,8 @@ require_once $cn_raiz . 'includes/class-cn-reemplazo.php';
 require_once $cn_raiz . 'includes/class-cn-reemplazo-auto.php';
 require_once $cn_raiz . 'includes/class-cn-extender-acceso.php';
 require_once $cn_raiz . 'includes/class-cn-corregir-vinculo.php';
+require_once $cn_raiz . 'includes/class-cn-drive.php';
+require_once $cn_raiz . 'includes/class-cn-panel-contenido.php';
 CN_MP::$dormir = function () { // los tests nunca esperan de verdad (el 429 del sync pide esperas de segundos).
 };
 // ---------------------------------------------------------------- mini framework de tests

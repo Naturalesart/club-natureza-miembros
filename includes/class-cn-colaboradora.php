@@ -13,6 +13,9 @@ class CN_Colaboradora {
 	const ROL    = 'cn_colaboradora';
 	const CAP    = 'cn_gestionar_contenido';
 	const PAGINA = 'cn-colab';
+	// 191 caracteres: el máximo indexable en utf8mb4 (191 x 4 = 764 bytes), así el título nunca se corta al guardar.
+	const TITULO_MAX    = 191;
+	const ERROR_GUARDAR = 'No se pudo guardar. Probá de nuevo.';
 
 	const HOSTS_YOUTUBE = array( 'youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be' );
 	const HOSTS_DRIVE   = array( 'drive.google.com', 'docs.google.com' );
@@ -84,7 +87,7 @@ class CN_Colaboradora {
 		}
 		check_admin_referer( 'cn_colab', 'cn_colab_nonce' );
 		global $wpdb;
-		$titulo   = mb_substr( trim( sanitize_text_field( wp_unslash( $_POST['cn_titulo'] ?? '' ) ) ), 0, 200 );
+		$titulo   = mb_substr( trim( sanitize_text_field( wp_unslash( $_POST['cn_titulo'] ?? '' ) ) ), 0, self::TITULO_MAX );
 		$link     = esc_url_raw( trim( (string) wp_unslash( $_POST['cn_link'] ?? '' ) ) );
 		$curso_id = absint( $_POST['cn_curso_id'] ?? 0 );
 
@@ -98,11 +101,14 @@ class CN_Colaboradora {
 			if ( $curso_id && ! self::curso_existe( $curso_id ) ) {
 				return self::resultado( false, 'Ese curso no existe.' );
 			}
-			$wpdb->insert(
+			$ok = $wpdb->insert(
 				CN_DB::tabla( 'videos' ),
 				array( 'titulo' => $titulo, 'link_youtube' => $link, 'curso_id' => $curso_id ? $curso_id : null, 'orden' => 0 ),
 				array( '%s', '%s', '%d', '%d' )
 			);
+			if ( false === $ok ) {
+				return self::resultado( false, self::ERROR_GUARDAR );
+			}
 			return self::resultado( true, 'Video agregado.' );
 		}
 
@@ -120,7 +126,7 @@ class CN_Colaboradora {
 			if ( ! self::link_ok( $link, array_merge( self::HOSTS_YOUTUBE, self::HOSTS_DRIVE ) ) ) {
 				return self::resultado( false, 'El link tiene que ser de YouTube o de Google Drive.' );
 			}
-			$wpdb->insert(
+			$ok = $wpdb->insert(
 				CN_DB::tabla( 'contenidos' ),
 				array(
 					'curso_id'   => $curso_id,
@@ -134,6 +140,9 @@ class CN_Colaboradora {
 				),
 				array( '%d', '%s', '%s', '%s', '%s', '%s', '%d', '%s' )
 			);
+			if ( false === $ok ) {
+				return self::resultado( false, self::ERROR_GUARDAR );
+			}
 			return self::resultado( true, 'Contenido agregado.' );
 		}
 
@@ -148,11 +157,14 @@ class CN_Colaboradora {
 			$tabla  = CN_DB::tabla( 'cursos' );
 			$total  = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$tabla}" );
 			$maximo = (int) $wpdb->get_var( "SELECT COALESCE(MAX(orden), 0) FROM {$tabla}" );
-			$wpdb->insert(
+			$ok = $wpdb->insert(
 				$tabla,
 				array( 'nombre' => $nombre, 'link_drive' => $link, 'orden' => $maximo + 1, 'color' => CN_Helpers::color_por_indice( $total ) ),
 				array( '%s', '%s', '%d', '%s' )
 			);
+			if ( false === $ok ) {
+				return self::resultado( false, self::ERROR_GUARDAR );
+			}
 			return self::resultado( true, 'Curso creado. Ahora podés traer su contenido desde Drive.' );
 		}
 
@@ -207,7 +219,7 @@ class CN_Colaboradora {
 					<label>Tipo</label>
 					<select name="cn_tipo" required><option value="video">Video</option><option value="pdf">PDF</option><option value="audio">Audio</option></select>
 					<label>Título</label>
-					<input type="text" name="cn_titulo" maxlength="200" required>
+					<input type="text" name="cn_titulo" maxlength="<?php echo (int) self::TITULO_MAX; ?>" required>
 					<label>Link (YouTube o Drive)</label>
 					<input type="url" name="cn_link" required placeholder="https://...">
 					<label>Duración (opcional, solo audio)</label>
@@ -221,7 +233,7 @@ class CN_Colaboradora {
 				<form method="post">
 					<?php wp_nonce_field( 'cn_colab', 'cn_colab_nonce' ); ?>
 					<label>Título</label>
-					<input type="text" name="cn_titulo" maxlength="200" required>
+					<input type="text" name="cn_titulo" maxlength="<?php echo (int) self::TITULO_MAX; ?>" required>
 					<label>Link de YouTube</label>
 					<input type="url" name="cn_link" required placeholder="https://youtu.be/...">
 					<label>Curso (opcional)</label>
