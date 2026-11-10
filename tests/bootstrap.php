@@ -445,6 +445,9 @@ require_once $cn_raiz . 'includes/class-cn-espejo-auditoria.php';
 if ( file_exists( $cn_raiz . 'includes/class-cn-sync.php' ) ) {
 	require_once $cn_raiz . 'includes/class-cn-sync.php';
 }
+if ( file_exists( $cn_raiz . 'includes/class-cn-autovincular.php' ) ) {
+	require_once $cn_raiz . 'includes/class-cn-autovincular.php';
+}
 require_once $cn_raiz . 'includes/class-cn-auth.php';
 if ( ! getenv( 'CN_TEST_CLASE_VIEJA' ) && file_exists( $cn_raiz . 'includes/class-cn-cuentas.php' ) ) { // CN_TEST_CLASE_VIEJA: los tests lanzan un proceso aparte que simula el deploy a medias (clase vieja sin los métodos nuevos).
 	require_once $cn_raiz . 'includes/class-cn-cuentas.php';
