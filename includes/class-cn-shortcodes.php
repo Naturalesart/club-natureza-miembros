@@ -190,6 +190,13 @@ class CN_Shortcodes {
 			self::planes_intento_fallido( $key );
 			return $salida( 'Ingresá un celular válido (código de área + número).' );
 		}
+		// Email de la cuenta de Mercado Pago: MP lo exige como payer_email para crear la suscripción (sin él responde
+		// 400 "payer_email is required") y en el checkout solo deja pagarla a la cuenta con ese mismo email.
+		$email = isset( $post['cn_planes_email'] ) ? sanitize_email( trim( (string) wp_unslash( $post['cn_planes_email'] ) ) ) : '';
+		if ( '' === $email || ! is_email( $email ) ) {
+			self::planes_intento_fallido( $key );
+			return $salida( 'Ingresá el email de tu cuenta de Mercado Pago.' );
+		}
 		// Señales del navegador para el Subscribe de Meta, igual que el trial. El _fbc puede
 		// faltar si la visitante llegó directo del anuncio (el pixel base todavía no corrió):
 		// se arma desde el fbclid de la URL con la forma "fb.1.<timestamp_ms>.<fbclid>".
@@ -202,7 +209,7 @@ class CN_Shortcodes {
 		}
 		$ua   = isset( $_SERVER['HTTP_USER_AGENT'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_USER_AGENT'] ) ) : '';
 		$meta = array( 'fbp' => $fbp, 'fbc' => $fbc, 'ip' => $ip, 'user_agent' => $ua );
-		$res  = CN_MP::crear_suscripcion_link( $plan, $nombre, $norm['normalizado'], '', 'landing', $meta );
+		$res  = CN_MP::crear_suscripcion_link( $plan, $nombre, $norm['normalizado'], $email, 'landing', $meta );
 		if ( is_wp_error( $res ) ) {
 			self::planes_intento_fallido( $key );
 			CN_Webhook::registrar_log_mp( 'planes_form_fallo', array( 'plan' => $plan, 'error' => $res->get_error_message() ) );
@@ -218,9 +225,10 @@ class CN_Shortcodes {
 	/**
 	 * Mini formulario de suscripción por plan para la landing /planes-club/.
 	 * Uso: [cn_planes_form plan="basico" texto="Quiero el Club"]  /  [cn_planes_form plan="full" texto="Quiero el Full"]
-	 * Nombre + celular (sin email: MP no lo exige para el link y pedirlo traba el checkout
-	 * si no coincide con la cuenta de MP). Estilo propio del Club (crema, verde, terracota,
-	 * Georgia), CSS inline una sola vez, sin scripts.
+	 * Nombre + celular + email de la cuenta de Mercado Pago. El email es obligatorio: MP exige
+	 * payer_email para crear la suscripción (sin él responde 400) y en el checkout solo deja
+	 * pagarla a la cuenta de MP con ese email, por eso el formulario pide ese email y no otro.
+	 * Estilo propio del Club (crema, verde, terracota, Georgia), CSS inline una sola vez, sin scripts.
 	 */
 	public static function shortcode_planes_form( $atts ) {
 		$atts = shortcode_atts( array(
@@ -238,6 +246,7 @@ class CN_Shortcodes {
 		// Si hubo error, repoblamos lo que escribió para que no lo tipee de nuevo.
 		$v_nombre  = '' !== $mensaje && isset( $_POST['cn_planes_nombre'] ) ? sanitize_text_field( wp_unslash( $_POST['cn_planes_nombre'] ) ) : '';
 		$v_celular = '' !== $mensaje && isset( $_POST['cn_planes_celular'] ) ? sanitize_text_field( wp_unslash( $_POST['cn_planes_celular'] ) ) : '';
+		$v_email   = '' !== $mensaje && isset( $_POST['cn_planes_email'] ) ? sanitize_text_field( wp_unslash( $_POST['cn_planes_email'] ) ) : '';
 
 		ob_start();
 		if ( ! self::$planes_css_ok ) {
@@ -249,13 +258,14 @@ class CN_Shortcodes {
 			.cn-pf__titulo{margin:0 0 12px;font-size:1.15rem;font-weight:bold;text-align:center;color:#2F4A3A}
 			.cn-pf__precio{display:block;font-size:.95rem;font-weight:normal;color:#A9502E;margin-top:2px}
 			.cn-pf label{display:block;font-size:.95rem;margin:0 0 4px;color:#2F4A3A}
-			.cn-pf input[type=text],.cn-pf input[type=tel]{width:100%;padding:12px 12px;border:1px solid #cdbfa3;border-radius:8px;font:inherit;font-size:16px;color:#2F4A3A;background:#FAF3E6;margin-bottom:12px}
+			.cn-pf input[type=text],.cn-pf input[type=tel],.cn-pf input[type=email]{width:100%;padding:12px 12px;border:1px solid #cdbfa3;border-radius:8px;font:inherit;font-size:16px;color:#2F4A3A;background:#FAF3E6;margin-bottom:12px}
 			.cn-pf input:focus{outline:none;border-color:#A9502E;background:#fff}
 			.cn-pf__web{position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden}
 			.cn-pf__btn{display:block;width:100%;background:#A9502E;color:#fff;border:0;border-radius:8px;padding:16px 12px;font-family:Georgia,serif;font-size:1.1rem;font-weight:bold;cursor:pointer}
 			.cn-pf__btn:hover,.cn-pf__btn:focus{background:#8c4125}
 			.cn-pf__error{background:#fbe9e3;border:1px solid #A9502E;color:#8c4125;border-radius:8px;padding:10px 12px;margin:0 0 12px;font-size:.95rem}
 			.cn-pf__nota{margin:10px 0 0;font-size:.85rem;color:#6b7d72;text-align:center}
+			.cn-pf__ayuda{margin:-6px 0 12px;font-size:.85rem;color:#6b7d72}
 			</style>
 			<?php
 		}
@@ -269,6 +279,9 @@ class CN_Shortcodes {
 			<input type="text" id="<?php echo esc_attr( $id ); ?>-nombre" name="cn_planes_nombre" required autocomplete="name" value="<?php echo esc_attr( $v_nombre ); ?>">
 			<label for="<?php echo esc_attr( $id ); ?>-celular">Celular</label>
 			<input type="tel" id="<?php echo esc_attr( $id ); ?>-celular" name="cn_planes_celular" required inputmode="numeric" autocomplete="tel" placeholder="Ej: 11 2345 6789" value="<?php echo esc_attr( $v_celular ); ?>">
+			<label for="<?php echo esc_attr( $id ); ?>-email">Email de tu cuenta de Mercado Pago</label>
+			<input type="email" id="<?php echo esc_attr( $id ); ?>-email" name="cn_planes_email" required autocomplete="email" inputmode="email" placeholder="el mismo con el que entrás a Mercado Pago" value="<?php echo esc_attr( $v_email ); ?>">
+			<p class="cn-pf__ayuda">Tiene que ser el email con el que entrás a Mercado Pago: si no coincide, Mercado Pago no deja pagar.</p>
 			<div class="cn-pf__web" aria-hidden="true"><label for="<?php echo esc_attr( $id ); ?>-web">Web</label><input type="text" id="<?php echo esc_attr( $id ); ?>-web" name="cn_planes_web" tabindex="-1" autocomplete="off"></div>
 			<input type="hidden" name="cn_planes_plan" value="<?php echo esc_attr( $plan ); ?>">
 			<button type="submit" name="cn_planes_submit" value="1" class="cn-pf__btn"><?php echo esc_html( $texto ); ?></button>

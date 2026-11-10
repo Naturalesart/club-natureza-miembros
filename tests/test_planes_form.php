@@ -48,6 +48,7 @@ function pf_post( $extra = array() ) {
 		'cn_planes_plan'    => 'basico',
 		'cn_planes_nombre'  => 'Socia Prueba',
 		'cn_planes_celular' => '011 15 5555-0001',
+		'cn_planes_email'   => ' Socia.Prueba@Gmail.com ',
 	), $extra );
 }
 function pf_pendiente() {
@@ -78,7 +79,7 @@ t( 'ip guardada', is_array( $p ) && '190.1.2.3' === $p['ip'] );
 t( 'user_agent guardado', is_array( $p ) && 'Mozilla/5.0 (test)' === $p['user_agent'] );
 t( 'celular normalizado una sola vez (10 dígitos)', is_array( $p ) && '1155550001' === $p['celular'] );
 t( 'external_reference sub_', is_array( $p ) && 0 === strpos( $p['external_reference'], 'sub_1155550001_' ) );
-t( 'sin email (no se manda payer_email)', is_array( $p ) && null === $p['email'] && ! isset( pf_mp_body()['payer_email'] ) );
+t( 'email saneado en la pendiente y enviado a MP como payer_email (MP lo exige)', is_array( $p ) && 'Socia.Prueba@Gmail.com' === $p['email'] && 'Socia.Prueba@Gmail.com' === ( pf_mp_body()['payer_email'] ?? '' ) );
 t( 'MP recibe el monto del plan y el webhook', 15500.0 === (float) pf_mp_body()['auto_recurring']['transaction_amount'] && false !== strpos( pf_mp_body()['notification_url'], 'mp-webhook' ) );
 t( 'no cuenta como intento fallido', false === get_transient( 'cn_planes_fails_' . md5( '190.1.2.3' ) ) );
 t( 'no escribe miembros ni trial', ! $GLOBALS['wpdb']->escrituras( 'miembros' ) && ! $GLOBALS['wpdb']->escrituras( 'trial_pendientes' ) );
@@ -117,6 +118,29 @@ pf_preparar();
 $r = CN_Shortcodes::procesar_planes_form( pf_post( array( 'cn_planes_nombre' => '  ' ) ) );
 t( 'rechaza', ! $r['ok'] && false !== strpos( $r['mensaje'], 'nombre' ) );
 t( 'no llama a MP', ! cn_http_calls( '#/preapproval#' ) );
+
+seccion( 'Planes form: email de la cuenta de MP obligatorio (10/11/2026: sin payer_email MP responde 400)' );
+foreach ( array( 'vacío' => '', 'espacios' => '   ', 'inválido' => 'no-es-email', 'sin dominio' => 'socia@' ) as $caso_e => $valor_e ) {
+	pf_preparar();
+	$r = CN_Shortcodes::procesar_planes_form( pf_post( array( 'cn_planes_email' => $valor_e ) ) );
+	t( "email {$caso_e}: rechaza pidiendo el email de Mercado Pago, sin llamar a MP ni guardar fila", ! $r['ok'] && false !== strpos( $r['mensaje'], 'Mercado Pago' ) && 'basico' === $r['plan'] && ! cn_http_calls( '#/preapproval#' ) && null === pf_pendiente() );
+}
+pf_preparar();
+$r = CN_Shortcodes::procesar_planes_form( pf_post( array( 'cn_planes_email' => '' ) ) );
+t( 'email faltante cuenta como intento fallido (rate limit)', 1 === (int) get_transient( 'cn_planes_fails_' . md5( '190.1.2.3' ) ) );
+pf_preparar();
+$r = CN_Shortcodes::procesar_planes_form( pf_post() );
+t( 'el email no aparece en mp_log (solo viaja a MP y a la pendiente)', ( function () {
+	$mp_log = '';
+	foreach ( $GLOBALS['wpdb']->log as $l ) {
+		if ( 'insert' === $l[0] && false !== strpos( (string) $l[1], 'mp_log' ) ) {
+			$mp_log .= json_encode( $l[2] );
+		}
+	}
+	return false === stripos( $mp_log, 'socia.prueba' ) && false === stripos( $mp_log, 'gmail' );
+} )() );
+$fuente_pf = file_get_contents( dirname( __DIR__ ) . '/includes/class-cn-shortcodes.php' );
+t( 'el formulario pide el email (campo cn_planes_email, type=email, required) y explica que es el de la cuenta de MP', false !== strpos( $fuente_pf, 'name="cn_planes_email" required' ) && false !== strpos( $fuente_pf, 'type="email"' ) && false !== strpos( $fuente_pf, 'Email de tu cuenta de Mercado Pago' ) );
 
 seccion( 'Planes form: plan inválido' );
 pf_preparar();

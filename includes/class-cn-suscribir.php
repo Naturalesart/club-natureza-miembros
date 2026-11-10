@@ -23,10 +23,15 @@ if ( ! defined( 'ABSPATH' ) ) exit;
  *
  * Reglas: token inválido/vencido → 302 a /planes-club/ (ahí está el formulario con identidad), nunca una pantalla de
  * error. Ficha con suscripción ACTIVA ya vinculada → NO se crea otra: 302 a /planes-club/ + rastro suscribir_ya_activa
- * (mp_log + cartel). Ficha sin suscripción activa → se reusa la pendiente de las últimas 24 h de ese celular+plan si la
- * hay (doble clic / dos pestañas = un solo preapproval); si no, crear_suscripcion_link con nombre y celular de la ficha
- * y el origen del token, SIN email (como la landing: un payer_email que no coincide con la cuenta de Mercado Pago de la
- * socia puede trabar el checkout). Rate limit por IP (8 cada 10 min, como el formulario de planes).
+ * (mp_log + cartel). Ficha sin suscripción activa → se reusa la pendiente de las últimas 24 h de ese celular+plan+email
+ * si la hay (doble clic / dos pestañas = un solo preapproval); si no, crear_suscripcion_link con nombre, celular y EMAIL
+ * de la ficha y el origen del token. Rate limit por IP (8 cada 10 min, como el formulario de planes).
+ *
+ * payer_email (10/11/2026): Mercado Pago EXIGE payer_email al crear la suscripción (sin él responde 400 "payer_email is
+ * required": 13 de 13 intentos reales fallaron entre el 8 y el 10/11) y en el checkout solo deja autorizarla a la cuenta
+ * de MP con ese mismo email ("Tu e-mail no coincide con el de la suscripción"). El email de una ficha de trial es el
+ * payer.email del cobro del trial, o sea el de la cuenta de MP con la que la socia ya pagó: es el correcto. Ficha sin
+ * email usable → 302 a /planes-club/ (el formulario lo pide) + rastro suscribir_sin_email.
  *
  * Mercado Pago: GET nunca (todo sale de la base) y POST SOLO a /preapproval vía crear_suscripcion_link (suscripción
  * pendiente sin card_token). Jamás cancela, pausa ni cobra. Cero UPDATE/DELETE en wp_cn_miembros. Ningún dato personal
@@ -176,7 +181,7 @@ class CN_Suscribir {
 	 * Resuelve un token y devuelve a dónde redirigir. Separado de atender() para poder probarlo sin redirect ni exit.
 	 *
 	 * @return array{redirect:string,caso:string,ficha_id:int,plan:string,origen:string}
-	 *         caso: apagado | sin_secreto | rate_limit | token_<motivo> | ya_activa | sin_celular | reusada | creada | fallo
+	 *         caso: apagado | sin_secreto | rate_limit | token_<motivo> | ya_activa | sin_celular | sin_email | reusada | creada | fallo
 	 */
 	public static function procesar( $token ) {
 		global $wpdb;
@@ -222,8 +227,16 @@ class CN_Suscribir {
 			self::avisar_una_vez( 'suscribir_sin_celular', $id, $base + array( 'detalle' => 'La ficha no tiene un celular usable (celular_texto_plano vacío, inválido o que no coincide con el hash): fue a /planes-club/ a completar sus datos.' ) );
 			return $out;
 		}
-		// Doble clic / dos pestañas / el mismo mail dos veces en el día: la misma pendiente, no otra.
-		$previa = self::pendiente_reciente( $celular, $plan );
+		// Email de la ficha: MP lo exige como payer_email y tiene que ser el de la cuenta de MP que paga (ver cabecera).
+		$email = self::email_de( $ficha );
+		if ( '' === $email ) {
+			$out['caso'] = 'sin_email';
+			CN_Webhook::registrar_log_mp( 'suscribir_sin_email', $base );
+			self::avisar_una_vez( 'suscribir_sin_email', $id, $base + array( 'detalle' => 'La ficha no tiene un email válido y Mercado Pago lo exige para crear la suscripción: fue a /planes-club/, donde el formulario lo pide.' ) );
+			return $out;
+		}
+		// Doble clic / dos pestañas / el mismo mail dos veces en el día: la misma pendiente, no otra (mismo celular, plan y email).
+		$previa = self::pendiente_reciente( $celular, $plan, $email );
 		if ( null !== $previa ) {
 			$out['caso']     = 'reusada';
 			$out['redirect'] = $previa;
@@ -236,8 +249,8 @@ class CN_Suscribir {
 			'ip'         => CN_Helpers::get_client_ip(),
 			'user_agent' => isset( $_SERVER['HTTP_USER_AGENT'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_USER_AGENT'] ) ) : '',
 		);
-		// Email SIEMPRE vacío, igual que la landing (class-cn-shortcodes.php, procesar_planes_form): MP no recibe payer_email.
-		$res = CN_MP::crear_suscripcion_link( $plan, (string) $ficha->nombre_apellido, $celular, '', $origen, $meta );
+		// payer_email = email de la ficha (obligatorio para MP; ver cabecera). Nunca va al log ni a la URL.
+		$res = CN_MP::crear_suscripcion_link( $plan, (string) $ficha->nombre_apellido, $celular, $email, $origen, $meta );
 		if ( is_wp_error( $res ) ) {
 			$out['caso'] = 'fallo';
 			CN_Webhook::registrar_log_mp( 'suscribir_fallo', $base + array( 'error' => mb_substr( (string) $res->get_error_message(), 0, 200 ) ) );
@@ -285,14 +298,29 @@ class CN_Suscribir {
 		return (string) $norm['normalizado'];
 	}
 
-	/** init_point de una pendiente sin usar de las últimas 24 h para ese celular+plan (columna init_point, aditiva); null si no hay. */
-	protected static function pendiente_reciente( $celular, $plan ) {
+	/** Email de la ficha, saneado y válido; '' si no se puede usar como payer_email. */
+	public static function email_de( $ficha ) {
+		$raw = isset( $ficha->email ) ? trim( (string) $ficha->email ) : '';
+		if ( '' === $raw ) {
+			return '';
+		}
+		$email = sanitize_email( $raw );
+		return ( '' !== $email && is_email( $email ) ) ? $email : '';
+	}
+
+	/**
+	 * init_point de una pendiente sin usar de las últimas 24 h para ese celular+plan+email (columna init_point, aditiva);
+	 * null si no hay. El email forma parte de la clave: una pendiente creada con otro payer_email no sirve (MP solo deja
+	 * pagarla a esa cuenta).
+	 */
+	protected static function pendiente_reciente( $celular, $plan, $email ) {
 		global $wpdb;
 		$desde = gmdate( 'Y-m-d H:i:s', time() - self::REUSO_SEG );
 		$fila  = $wpdb->get_row( $wpdb->prepare(
-			'SELECT external_reference, init_point FROM ' . CN_DB::tabla( 'suscripciones_pendientes' ) . " WHERE celular = %s AND plan = %s AND usado = 0 AND creado >= %s AND init_point IS NOT NULL AND init_point <> '' ORDER BY id DESC LIMIT 1",
+			'SELECT external_reference, init_point FROM ' . CN_DB::tabla( 'suscripciones_pendientes' ) . " WHERE celular = %s AND plan = %s AND email = %s AND usado = 0 AND creado >= %s AND init_point IS NOT NULL AND init_point <> '' ORDER BY id DESC LIMIT 1",
 			$celular,
 			$plan,
+			$email,
 			$desde
 		) );
 		if ( '' !== (string) $wpdb->last_error || ! $fila || empty( $fila->init_point ) ) {

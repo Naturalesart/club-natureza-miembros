@@ -170,15 +170,18 @@ class CN_MP {
 		return array( 'ok' => true, 'init_point' => $data['init_point'], 'external_reference' => $external_reference, 'error' => '' );
 	}
 	/**
-	 * Crea una suscripción pendiente sobre un plan fijo de MP y devuelve el link de pago.
-	 * Hoy NADIE la llama (Fase 2A: base inerte).
+	 * Crea una suscripción pendiente (sin plan asociado, external_reference sub_) y devuelve el link de pago.
+	 * La llaman el panel (origen 'panel'), el formulario de /planes-club/ ('landing') y el endpoint de los mails
+	 * (CN_Suscribir: mail_d5/d6/d7, winback, upsell).
 	 *
 	 * $celular debe venir YA normalizado (CN_Helpers::normalizar_celular), igual que en
 	 * crear_preference_trial(): normalizar dos veces rompe los números extranjeros.
+	 * $email es OBLIGATORIO (10/11/2026): Mercado Pago exige payer_email al crear la suscripción
+	 * (sin él responde 400 "payer_email is required") y en el checkout solo deja pagarla a la cuenta
+	 * de MP con ese email. Sin email válido devuelve WP_Error SIN tocar la base ni MP.
 	 * $meta (opcional): fbp, fbc, ip, user_agent.
 	 *
-	 * Devuelve el init_point (string) o un WP_Error. Si falta el ID del plan en las
-	 * opciones, devuelve WP_Error SIN llamar a MP. Si MP falla, no deja fila pendiente.
+	 * Devuelve el init_point (string) o un WP_Error. Si MP falla, no deja fila pendiente.
 	 */
 	/** Orígenes válidos de una suscripción pendiente: panel y landing (de siempre) + los caminos de los mails (FASE 2, CN_Suscribir). */
 	const ORIGENES_SUSCRIPCION = array( 'panel', 'landing', 'mail_d5', 'mail_d6', 'mail_d7', 'winback', 'upsell' );
@@ -204,12 +207,12 @@ class CN_MP {
 			return new WP_Error( 'cn_celular_invalido', 'Celular inválido.' );
 		}
 		$email_raw = trim( (string) $email );
-		$email     = '';
-		if ( '' !== $email_raw ) {
-			$email = sanitize_email( $email_raw );
-			if ( '' === $email || ! is_email( $email ) ) {
-				return new WP_Error( 'cn_email_invalido', 'Email inválido.' );
-			}
+		if ( '' === $email_raw ) {
+			return new WP_Error( 'cn_sin_email', 'Falta el email de la cuenta de Mercado Pago: es obligatorio para crear la suscripción.' );
+		}
+		$email = sanitize_email( $email_raw );
+		if ( '' === $email || ! is_email( $email ) ) {
+			return new WP_Error( 'cn_email_invalido', 'Email inválido.' );
 		}
 		$meta = is_array( $meta ) ? $meta : array();
 		$fbp  = isset( $meta['fbp'] ) ? mb_substr( sanitize_text_field( (string) $meta['fbp'] ), 0, 255 ) : '';
