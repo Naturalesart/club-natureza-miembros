@@ -305,6 +305,7 @@ class CN_Webhook {
 		// para no tener la fila bloqueada mientras se espera a MP.
 		$acceso_hasta = self::sub_acceso_hasta( $preapproval_id );
 		$en_transaccion = false;
+		$duplicado      = null; // CN_Identidad: ficha nueva creada en un caso dudoso (se anota tras el COMMIT).
 		$es_alta        = false; // true solo en alta nueva o activación (nunca en "mismo preapproval_id ya vinculado").
 		try {
 			if ( false === $wpdb->query( 'START TRANSACTION' ) ) {
@@ -343,9 +344,29 @@ class CN_Webhook {
 					}
 				}
 			}
+			// Una sola ficha por persona (CN_Identidad, flag cn_identidad_modo): con 'on' busca por ficha del token → email →
+			// celular y decide ella; con 'log' solo registra qué ficha habría usado; con 'off' no corre.
+			$ident_modo = ( class_exists( 'CN_Identidad' ) && class_exists( 'CN_Flujo_Alta' ) ) ? CN_Identidad::modo() : 'off';
+			$ident      = null;
+			if ( 'off' !== $ident_modo ) {
+				$ident = CN_Identidad::resolver( $fila );
+				self::registrar_log_mp( 'on' === $ident_modo ? 'identidad_resuelta' : 'identidad_log', array(
+					'pendiente_id' => (int) $fila->id,
+					'via'          => $ident['via'],
+					'ficha_id'     => $ident['ficha'] ? (int) $ident['ficha']->id : null,
+					'dudoso'       => $ident['dudoso'],
+					'candidatas'   => $ident['candidatas'],
+				) );
+				if ( 'on' === $ident_modo ) {
+					$socia = $ident['ficha'];
+					if ( $socia && '' === $cel_mail ) {
+						$cel_mail = (string) $socia->celular_texto_plano;
+					}
+				}
+			}
 			// Buscar a la socia por celular, igual que el alta del trial (hint + verificación del hash).
 			$hint = CN_Helpers::hint_celular( $fila->celular );
-			if ( ! $socia && '' !== (string) $fila->celular ) {
+			if ( ! $socia && 'on' !== $ident_modo && '' !== (string) $fila->celular ) {
 				$candidatos = $wpdb->get_results(
 					$wpdb->prepare( "SELECT id, celular_hash, preapproval_id, plan, acceso_hasta FROM {$t_miembros} WHERE celular_hint = %s", $hint )
 				);
@@ -386,6 +407,9 @@ class CN_Webhook {
 					throw new RuntimeException( 'no se pudo crear la socia: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
 				}
 				$es_alta = true;
+				if ( $ident && 'on' === $ident_modo && $ident['dudoso'] ) {
+					$duplicado = array( 'id' => (int) $wpdb->insert_id, 'candidatas' => $ident['candidatas'], 'via' => $ident['via'] ); // se anota después del COMMIT.
+				}
 			} elseif ( '' === (string) $socia->preapproval_id ) {
 				// Socia existente sin suscripción (trial, manual, pausada o cancelada): se activa.
 				$ok = $wpdb->update(
@@ -456,6 +480,9 @@ class CN_Webhook {
 				throw new RuntimeException( 'no se pudo confirmar la transaccion' );
 			}
 			$en_transaccion = false;
+			if ( ! empty( $duplicado ) ) {
+				CN_Identidad::marcar_posible_duplicado( $duplicado['id'], $duplicado['candidatas'], $duplicado['via'] );
+			}
 			// Ya confirmado: mail de bienvenida y CAPI quedan FUERA de la transacción y nunca afectan el alta.
 			if ( $es_alta && $cel_mail !== (string) $fila->celular ) {
 				// Pendiente sin celular (sub_f<ficha>_): mail y CAPI usan el celular de la ficha destino. La fila de la base no se toca.

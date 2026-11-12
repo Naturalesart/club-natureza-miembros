@@ -22,6 +22,7 @@ class CN_Flujo_Alta {
 	public static function flags() {
 		return array(
 			'cn_suscribir_fallback_modo' => 'Link firmado: planes B y C (sin celular, formulario precargado, checkout + alerta)',
+			'cn_identidad_modo'          => 'Una sola ficha por persona al activar (ficha del token → email → celular)',
 		);
 	}
 

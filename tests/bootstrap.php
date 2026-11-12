@@ -440,6 +440,9 @@ if ( file_exists( $cn_raiz . 'includes/class-cn-suscribir.php' ) ) {
 if ( file_exists( $cn_raiz . 'includes/class-cn-flujo-alta.php' ) ) {
 	require_once $cn_raiz . 'includes/class-cn-flujo-alta.php';
 	require_once $cn_raiz . 'includes/class-cn-suscribir-fallback.php';
+	if ( file_exists( $cn_raiz . 'includes/class-cn-identidad.php' ) ) {
+		require_once $cn_raiz . 'includes/class-cn-identidad.php';
+	}
 }
 require_once $cn_raiz . 'includes/class-cn-mail-carta.php';
 require_once $cn_raiz . 'includes/class-cn-vinculo-lote.php';
