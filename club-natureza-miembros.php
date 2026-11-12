@@ -74,6 +74,12 @@ if ( file_exists( CN_PATH . 'includes/class-cn-suscribir.php' ) ) { // mismo gua
 	require_once CN_PATH . 'includes/class-cn-suscribir.php'; // FASE 2: ?cn_suscribir=<token> (link firmado por ficha desde los mails). Inerte con cn_suscribir_modo 'off' (default) o sin secreto.
 	add_action( 'init', array( 'CN_Suscribir', 'registrar' ) );
 }
+if ( file_exists( CN_PATH . 'includes/class-cn-flujo-alta.php' ) ) { // flujo de alta (11/11): flags off|log|on compartidos + alerta a hola@. Inerte con los flags en 'off' (default).
+	require_once CN_PATH . 'includes/class-cn-flujo-alta.php';
+	if ( file_exists( CN_PATH . 'includes/class-cn-suscribir-fallback.php' ) ) {
+		require_once CN_PATH . 'includes/class-cn-suscribir-fallback.php'; // link firmado: planes B y C (cn_suscribir_fallback_modo).
+	}
+}
 CN_Planes_MP::registrar();
 // Rol "Colaboradora Club": acceso acotado (solo cargar contenido), sin permisos de administrador.
 add_action( 'init', array( 'CN_Colaboradora', 'registrar_rol' ) );

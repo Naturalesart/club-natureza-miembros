@@ -321,4 +321,5 @@ t( 'crear_suscripcion_link acepta los orígenes de los mails y sigue rechazando 
 $main = file_get_contents( dirname( __DIR__ ) . '/club-natureza-miembros.php' );
 t( 'el plugin carga la clase con guard y la engancha en init', false !== strpos( $main, "class-cn-suscribir.php" ) && false !== strpos( $main, "array( 'CN_Suscribir', 'registrar' )" ) );
 $db = file_get_contents( dirname( __DIR__ ) . '/includes/class-cn-db.php' );
-t( 'DB: una sola columna aditiva (init_point) en suscripciones_pendientes y versión 2.10.0', false !== strpos( $db, 'init_point varchar(500) DEFAULT NULL' ) && '2.10.0' === CN_DB::DB_VERSION );
+// 11/11/2026: el flujo de alta suma columnas/tablas aditivas (2.11.0+); init_point sigue igual.
+t( 'DB: columna aditiva init_point en suscripciones_pendientes y versión 2.10.0 o posterior', false !== strpos( $db, 'init_point varchar(500) DEFAULT NULL' ) && version_compare( CN_DB::DB_VERSION, '2.10.0', '>=' ) );

@@ -322,20 +322,46 @@ class CN_Webhook {
 			$planes = CN_MP::get_planes();
 			$plan   = ( is_string( $fila->plan ) && isset( $planes[ $fila->plan ] ) ) ? $fila->plan : null;
 			$ahora  = current_time( 'mysql', true );
-			// Buscar a la socia por celular, igual que el alta del trial (hint + verificación del hash).
-			$hint       = CN_Helpers::hint_celular( $fila->celular );
-			$candidatos = $wpdb->get_results(
-				$wpdb->prepare( "SELECT id, celular_hash, preapproval_id, plan, acceso_hasta FROM {$t_miembros} WHERE celular_hint = %s", $hint )
-			);
-			if ( '' !== (string) $wpdb->last_error ) {
-				throw new RuntimeException( 'error buscando a la socia: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
-			}
-			$socia = null;
-			foreach ( (array) $candidatos as $candidato ) {
-				if ( CN_Helpers::verificar_celular( $fila->celular, $candidato->celular_hash ) ) {
-					$socia = $candidato;
-					break;
+			// Ficha destino guardada por el link firmado / formulario precargado (flag cn_suscribir_fallback_modo): con 'on' se usa
+			// primero; con 'log' solo se registra; con 'off' (o pendiente sin ficha_id) no se lee nada y todo sigue como siempre.
+			$socia       = null;
+			$cel_mail    = (string) $fila->celular; // celular que va en el mail de bienvenida
+			$ficha_dest  = ( isset( $fila->ficha_id ) && (int) $fila->ficha_id > 0 ) ? (int) $fila->ficha_id : 0;
+			$fb_modo     = ( $ficha_dest > 0 && class_exists( 'CN_Suscribir_Fallback' ) && class_exists( 'CN_Flujo_Alta' ) ) ? CN_Suscribir_Fallback::modo() : 'off';
+			if ( 'off' !== $fb_modo ) {
+				$por_ficha = $wpdb->get_row(
+					$wpdb->prepare( "SELECT id, celular_hash, preapproval_id, plan, acceso_hasta, celular_texto_plano FROM {$t_miembros} WHERE id = %d", $ficha_dest )
+				);
+				if ( '' !== (string) $wpdb->last_error ) {
+					throw new RuntimeException( 'error buscando la ficha destino: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
 				}
+				self::registrar_log_mp( 'sub_ficha_destino', array( 'pendiente_id' => (int) $fila->id, 'ficha_id' => $ficha_dest, 'encontrada' => (bool) $por_ficha, 'modo' => $fb_modo ) );
+				if ( 'on' === $fb_modo && $por_ficha ) {
+					$socia = $por_ficha;
+					if ( '' === $cel_mail ) {
+						$cel_mail = (string) $por_ficha->celular_texto_plano;
+					}
+				}
+			}
+			// Buscar a la socia por celular, igual que el alta del trial (hint + verificación del hash).
+			$hint = CN_Helpers::hint_celular( $fila->celular );
+			if ( ! $socia && '' !== (string) $fila->celular ) {
+				$candidatos = $wpdb->get_results(
+					$wpdb->prepare( "SELECT id, celular_hash, preapproval_id, plan, acceso_hasta FROM {$t_miembros} WHERE celular_hint = %s", $hint )
+				);
+				if ( '' !== (string) $wpdb->last_error ) {
+					throw new RuntimeException( 'error buscando a la socia: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
+				}
+				foreach ( (array) $candidatos as $candidato ) {
+					if ( CN_Helpers::verificar_celular( $fila->celular, $candidato->celular_hash ) ) {
+						$socia = $candidato;
+						break;
+					}
+				}
+			}
+			if ( ! $socia && '' === (string) $fila->celular ) {
+				// Pendiente sin celular (sub_f<ficha>_) cuya ficha destino no está: no se crea una ficha sin forma de entrar.
+				throw new RuntimeException( 'pendiente sin celular y la ficha destino no se encontró (ficha ' . $ficha_dest . ')' );
 			}
 			if ( ! $socia ) {
 				// Socia nueva.
@@ -431,6 +457,11 @@ class CN_Webhook {
 			}
 			$en_transaccion = false;
 			// Ya confirmado: mail de bienvenida y CAPI quedan FUERA de la transacción y nunca afectan el alta.
+			if ( $es_alta && $cel_mail !== (string) $fila->celular ) {
+				// Pendiente sin celular (sub_f<ficha>_): mail y CAPI usan el celular de la ficha destino. La fila de la base no se toca.
+				$fila          = clone $fila;
+				$fila->celular = $cel_mail;
+			}
 			if ( $es_alta ) {
 				self::sub_post_alta( $fila, $plan, $planes );
 				try { // PASO E: cuenta con email + contraseña (la ficha se busca por preapproval_id; nunca afecta el alta).
@@ -591,7 +622,7 @@ class CN_Webhook {
 		$cuerpo .= '<p style="font-size:13px;color:#777;margin:0 0 4px;">USUARIO (nombre y apellido)</p>';
 		$cuerpo .= '<p style="font-size:16px;color:#2f3b2c;margin:0 0 14px;font-weight:bold;">' . esc_html( $nombre ) . '</p>';
 		$cuerpo .= '<p style="font-size:13px;color:#777;margin:0 0 4px;">CELULAR (el que registraste)</p>';
-		$cuerpo .= '<p style="font-size:16px;color:#2f3b2c;margin:0;font-weight:bold;">' . esc_html( $celular ) . '</p>';
+		$cuerpo .= '<p style="font-size:16px;color:#2f3b2c;margin:0;font-weight:bold;">' . ( '' !== trim( (string) $celular ) ? esc_html( $celular ) : 'El mismo con el que te sumaste al Club' ) . '</p>';
 		$cuerpo .= '</td></tr></table>';
 		$cuerpo .= '<p style="font-size:14px;color:#555;line-height:1.6;margin:0 0 24px;">Escribí tu nombre y apellido tal cual figura arriba.</p>';
 		$cuerpo .= '<table role="presentation" width="100%"><tr><td align="center">';
