@@ -180,6 +180,9 @@ t( 'render: el form de otro plan no se precarga', false === strpos( $html_full, 
 update_option( CN_Suscribir_Fallback::OPT_MODO, 'off' );
 $html = CN_Shortcodes::shortcode_planes_form( array( 'plan' => 'basico' ) );
 t( 'render off: formulario de siempre', false === strpos( $html, 'cn_planes_pre' ) && false === strpos( $html, 'Socia Trescientos' ) );
+$css = new ReflectionProperty( 'CN_Shortcodes', 'planes_css_ok' ); // que el CSS "una vez por página" no quede marcado para otros tests
+$css->setValue( null, false );
+$_GET = array();
 
 seccion( 'PR1: formulario con token B — un clic para pagar' );
 $w = fa_prep( 'on' );
