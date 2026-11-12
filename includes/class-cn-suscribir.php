@@ -182,6 +182,7 @@ class CN_Suscribir {
 	 *
 	 * @return array{redirect:string,caso:string,ficha_id:int,plan:string,origen:string}
 	 *         caso: apagado | sin_secreto | rate_limit | token_<motivo> | ya_activa | sin_celular | sin_email | reusada | creada | fallo
+	 *         Con cn_suscribir_fallback_modo = 'on' puede traer además fallback: 'b' | 'c' (ver CN_Suscribir_Fallback).
 	 */
 	public static function procesar( $token ) {
 		global $wpdb;
@@ -219,12 +220,18 @@ class CN_Suscribir {
 			self::avisar_una_vez( 'suscribir_ya_activa', $id, $base + array( 'detalle' => 'La ficha ya tiene una suscripción activa vinculada y clickeó "Suscribirme" en un mail. No se creó nada: fue a /planes-club/.' ) );
 			return $out;
 		}
-		// Celular de la ficha (normalizado y verificado contra el hash): sin él no se puede armar la pendiente.
+		// Planes B/C del link firmado (CN_Suscribir_Fallback, flag cn_suscribir_fallback_modo). 'off' = todo como siempre.
+		$fb = ( class_exists( 'CN_Suscribir_Fallback' ) && class_exists( 'CN_Flujo_Alta' ) ) ? CN_Suscribir_Fallback::modo() : 'off';
+		// Celular de la ficha (normalizado y verificado contra el hash). Con el flag apagado, sin él no se puede armar la pendiente;
+		// encendido (plan A), la firma ya identifica la ficha y la suscripción se crea igual (external_reference sub_f<ficha>_).
 		$celular = self::celular_de( $ficha );
-		if ( '' === $celular ) {
+		if ( '' === $celular && 'on' !== $fb ) {
 			$out['caso'] = 'sin_celular';
 			CN_Webhook::registrar_log_mp( 'suscribir_sin_celular', $base );
 			self::avisar_una_vez( 'suscribir_sin_celular', $id, $base + array( 'detalle' => 'La ficha no tiene un celular usable (celular_texto_plano vacío, inválido o que no coincide con el hash): fue a /planes-club/ a completar sus datos.' ) );
+			if ( 'log' === $fb ) {
+				CN_Webhook::registrar_log_mp( 'suscribir_fallback_log', $base + array( 'motivo' => 'sin_celular', 'haria' => 'a_sin_celular' ) );
+			}
 			return $out;
 		}
 		// Email de la ficha: MP lo exige como payer_email y tiene que ser el de la cuenta de MP que paga (ver cabecera).
@@ -233,10 +240,11 @@ class CN_Suscribir {
 			$out['caso'] = 'sin_email';
 			CN_Webhook::registrar_log_mp( 'suscribir_sin_email', $base );
 			self::avisar_una_vez( 'suscribir_sin_email', $id, $base + array( 'detalle' => 'La ficha no tiene un email válido y Mercado Pago lo exige para crear la suscripción: fue a /planes-club/, donde el formulario lo pide.' ) );
-			return $out;
+			return self::fallback( $out, $fb, 'sin_email' );
 		}
-		// Doble clic / dos pestañas / el mismo mail dos veces en el día: la misma pendiente, no otra (mismo celular, plan y email).
-		$previa = self::pendiente_reciente( $celular, $plan, $email );
+		// Doble clic / dos pestañas / el mismo mail dos veces en el día: la misma pendiente, no otra (mismo celular —o misma
+		// ficha, si no tiene celular—, plan y email).
+		$previa = '' === $celular ? self::pendiente_reciente_ficha( $id, $plan, $email ) : self::pendiente_reciente( $celular, $plan, $email );
 		if ( null !== $previa ) {
 			$out['caso']     = 'reusada';
 			$out['redirect'] = $previa;
@@ -249,16 +257,37 @@ class CN_Suscribir {
 			'ip'         => CN_Helpers::get_client_ip(),
 			'user_agent' => isset( $_SERVER['HTTP_USER_AGENT'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_USER_AGENT'] ) ) : '',
 		);
+		if ( 'on' === $fb ) {
+			$meta['ficha_id'] = $id; // la pendiente guarda la ficha destino: el webhook la usa primero.
+		}
 		// payer_email = email de la ficha (obligatorio para MP; ver cabecera). Nunca va al log ni a la URL.
 		$res = CN_MP::crear_suscripcion_link( $plan, (string) $ficha->nombre_apellido, $celular, $email, $origen, $meta );
 		if ( is_wp_error( $res ) ) {
 			$out['caso'] = 'fallo';
 			CN_Webhook::registrar_log_mp( 'suscribir_fallo', $base + array( 'error' => mb_substr( (string) $res->get_error_message(), 0, 200 ) ) );
-			return $out; // a /planes-club/: ahí puede intentar con el formulario.
+			return self::fallback( $out, $fb, 'fallo_mp' ); // apagado: a /planes-club/, ahí puede intentar con el formulario.
 		}
 		$out['caso']     = 'creada';
 		$out['redirect'] = (string) $res;
-		CN_Webhook::registrar_log_mp( 'suscribir_creada', $base );
+		CN_Webhook::registrar_log_mp( 'suscribir_creada', $base + ( '' === $celular ? array( 'sin_celular' => true ) : array() ) );
+		return $out;
+	}
+
+	/**
+	 * Fallo del plan A: con el flag en 'on' pasa al plan B (formulario precargado) o al C; en 'log' solo registra qué haría;
+	 * en 'off' devuelve $out sin tocar (a /planes-club/, como siempre).
+	 */
+	protected static function fallback( $out, $fb, $motivo ) {
+		if ( 'off' === $fb ) {
+			return $out;
+		}
+		$r = CN_Suscribir_Fallback::plan_b( (int) $out['ficha_id'], (string) $out['plan'], (string) $out['origen'], $motivo );
+		if ( '' !== $r['plan'] ) {
+			$out['fallback'] = $r['plan'];
+			if ( '' !== $r['redirect'] ) {
+				$out['redirect'] = $r['redirect'];
+			}
+		}
 		return $out;
 	}
 
@@ -313,6 +342,24 @@ class CN_Suscribir {
 	 * null si no hay. El email forma parte de la clave: una pendiente creada con otro payer_email no sirve (MP solo deja
 	 * pagarla a esa cuenta).
 	 */
+	/** Igual que pendiente_reciente(), para una ficha sin celular (pendientes con ficha_id, columna aditiva). */
+	protected static function pendiente_reciente_ficha( $ficha_id, $plan, $email ) {
+		global $wpdb;
+		$desde = gmdate( 'Y-m-d H:i:s', time() - self::REUSO_SEG );
+		$fila  = $wpdb->get_row( $wpdb->prepare(
+			'SELECT external_reference, init_point FROM ' . CN_DB::tabla( 'suscripciones_pendientes' ) . " WHERE ficha_id = %d AND plan = %s AND email = %s AND usado = 0 AND creado >= %s AND init_point IS NOT NULL AND init_point <> '' ORDER BY id DESC LIMIT 1",
+			(int) $ficha_id,
+			$plan,
+			$email,
+			$desde
+		) );
+		if ( '' !== (string) $wpdb->last_error || ! $fila || empty( $fila->init_point ) ) {
+			return null;
+		}
+		$url = trim( (string) $fila->init_point );
+		return 0 === strpos( $url, 'https://' ) ? $url : null;
+	}
+
 	protected static function pendiente_reciente( $celular, $plan, $email ) {
 		global $wpdb;
 		$desde = gmdate( 'Y-m-d H:i:s', time() - self::REUSO_SEG );
