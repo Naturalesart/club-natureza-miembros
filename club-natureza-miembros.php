@@ -79,6 +79,9 @@ if ( file_exists( CN_PATH . 'includes/class-cn-flujo-alta.php' ) ) { // flujo de
 	if ( file_exists( CN_PATH . 'includes/class-cn-suscribir-fallback.php' ) ) {
 		require_once CN_PATH . 'includes/class-cn-suscribir-fallback.php'; // link firmado: planes B y C (cn_suscribir_fallback_modo).
 	}
+	if ( file_exists( CN_PATH . 'includes/class-cn-identidad.php' ) ) {
+		require_once CN_PATH . 'includes/class-cn-identidad.php'; // una sola ficha por persona al activar (cn_identidad_modo).
+	}
 }
 CN_Planes_MP::registrar();
 // Rol "Colaboradora Club": acceso acotado (solo cargar contenido), sin permisos de administrador.
