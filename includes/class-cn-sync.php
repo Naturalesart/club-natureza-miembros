@@ -155,6 +155,13 @@ class CN_Sync {
 				CN_Webhook::registrar_log_mp( 'sub_error', array( 'paso' => 'reemplazo_auto', 'mensaje' => mb_substr( $e->getMessage(), 0, 300 ) ) );
 			}
 		}
+		try { // plan B de activación (CN_Entrega, cn_retorno_activar_modo; off = no hace nada): antes del mail de alta, así una sub_ activada acá ya no recibe "completá tus datos".
+			if ( class_exists( 'CN_Entrega' ) && class_exists( 'CN_Flujo_Alta' ) ) {
+				CN_Entrega::sync_activar();
+			}
+		} catch ( Throwable $e ) {
+			CN_Webhook::registrar_log_mp( 'sub_error', array( 'paso' => 'sync_activar', 'mensaje' => mb_substr( $e->getMessage(), 0, 300 ) ) );
+		}
 		try {
 			CN_Alta_Mail::correr(); // 'off' por defecto: no hace nada. Solo GET a MP; nunca vincula ni crea socias.
 		} catch ( Throwable $e ) {

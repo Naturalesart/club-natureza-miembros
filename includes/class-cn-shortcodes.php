@@ -103,6 +103,17 @@ class CN_Shortcodes {
 			}
 		}
 
+		// "No puedo entrar → reenviame el acceso" (CN_Entrega, cn_reenvio_acceso_modo; off = no existe). Respuesta siempre genérica.
+		if ( isset( $_POST['cn_reenvio_submit'] ) && class_exists( 'CN_Entrega' ) && class_exists( 'CN_Flujo_Alta' ) && 'off' !== CN_Entrega::modo( CN_Entrega::OPT_REENVIO ) ) {
+			if ( ! isset( $_POST['cn_reenvio_nonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['cn_reenvio_nonce'] ) ), 'cn_reenvio' ) ) {
+				self::$login_mensaje = 'Hubo un problema, recargá la página e intentá de nuevo.';
+				self::$login_tipo    = 'error';
+			} else {
+				self::$login_mensaje = CN_Entrega::reenvio( $_POST );
+				self::$login_tipo    = 'success';
+			}
+		}
+
 		// Suscripción (Mercado Pago) — mismo problema latente que el login:
 		// el redirect al init_point de MP no puede salir desde el shortcode.
 		if ( isset( $_POST['cn_suscripcion_submit'] ) ) {
@@ -401,7 +412,18 @@ class CN_Shortcodes {
 				self::render_home( $miembro );
 			}
 		} else {
+			// Vuelta de Mercado Pago (?preapproval_id=): si el webhook no llegó, activa (plan B) y muestra cómo entrar
+			// (CN_Entrega, cn_retorno_activar_modo; off = nada). No cambia el login.
+			if ( ! $mensaje && class_exists( 'CN_Entrega' ) && class_exists( 'CN_Flujo_Alta' ) ) {
+				$vuelta = CN_Entrega::mensaje_retorno( $_GET );
+				if ( '' !== $vuelta ) {
+					echo '<div class="cn-alerta cn-alerta--success" role="status">' . esc_html( $vuelta ) . '</div>';
+				}
+			}
 			self::render_form_login();
+			if ( class_exists( 'CN_Entrega' ) && class_exists( 'CN_Flujo_Alta' ) ) {
+				echo CN_Entrega::form_reenvio(); // vacío con cn_reenvio_acceso_modo = off.
+			}
 		}
 
 		echo '</div>';
