@@ -457,8 +457,13 @@ class CN_Webhook {
 			}
 			$en_transaccion = false;
 			// Ya confirmado: mail de bienvenida y CAPI quedan FUERA de la transacción y nunca afectan el alta.
+			if ( $es_alta && $cel_mail !== (string) $fila->celular ) {
+				// Pendiente sin celular (sub_f<ficha>_): mail y CAPI usan el celular de la ficha destino. La fila de la base no se toca.
+				$fila          = clone $fila;
+				$fila->celular = $cel_mail;
+			}
 			if ( $es_alta ) {
-				self::sub_post_alta( $fila, $plan, $planes, $cel_mail );
+				self::sub_post_alta( $fila, $plan, $planes );
 				try { // PASO E: cuenta con email + contraseña (la ficha se busca por preapproval_id; nunca afecta el alta).
 					if ( class_exists( 'CN_Cuentas' ) && method_exists( 'CN_Cuentas', 'enganche_preapproval' ) ) {
 						CN_Cuentas::enganche_preapproval( $preapproval_id, 'sub' );
@@ -487,10 +492,9 @@ class CN_Webhook {
 	 * Después del COMMIT de un alta/activación "sub_": mail de bienvenida y evento CAPI "Subscribe".
 	 * Cada paso en su propio try/catch: si uno falla se deja el rastro y el alta ya hecha no se toca.
 	 */
-	protected static function sub_post_alta( $fila, $plan, $planes, $cel_mail = null ) {
+	protected static function sub_post_alta( $fila, $plan, $planes ) {
 		$email    = trim( (string) $fila->email );
-		$celular  = null === $cel_mail ? (string) $fila->celular : (string) $cel_mail; // sin celular en la pendiente: el de la ficha destino (o vacío).
-		$cel_capi = (string) $fila->celular;
+		$celular  = (string) $fila->celular;
 		$nombre_p = ( null !== $plan && isset( $planes[ $plan ] ) ) ? (string) $planes[ $plan ]['nombre'] : 'Club Natureza';
 		try {
 			if ( '' !== $email ) {
@@ -508,7 +512,7 @@ class CN_Webhook {
 					(string) $fila->external_reference,
 					(float) $planes[ $plan ]['precio'],
 					$email,
-					$cel_capi,
+					$celular,
 					$nombre_p,
 					$meta['fbp'],
 					$meta['fbc'],
