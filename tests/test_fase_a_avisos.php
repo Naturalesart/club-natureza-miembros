@@ -122,5 +122,9 @@ foreach ( glob( $raiz . '*.php' ) as $f ) {
 		$mails[ basename( $f ) ] = count( $m[0] );
 	}
 }
-t( 'wp_mail solo en mails buenos: class-cn-webhook.php (bienvenidas, fin de trial, día 5), el mail de alta por mail a la clienta y los mails de cuenta (envío y vista previa a destinatario fijo); ninguno de errores', array( 'class-cn-alta-mail.php' => 1, 'class-cn-mail-cuenta.php' => 2, 'class-cn-webhook.php' => 4 ) === $mails, json_encode( $mails ) );
+// 11/11/2026 (flujo de alta, pedido explícito): CN_Flujo_Alta::alertar() es la única alerta por wp_mail, a destinatario
+// fijo (hola@), máx. 1 por caso y hora, sin datos personales. Nunca a la clienta.
+t( 'wp_mail solo en mails buenos: class-cn-webhook.php (bienvenidas, fin de trial, día 5), el mail de alta por mail a la clienta, los mails de cuenta (envío y vista previa a destinatario fijo) y la alerta del flujo de alta a hola@; ningún otro de errores', array( 'class-cn-alta-mail.php' => 1, 'class-cn-flujo-alta.php' => 1, 'class-cn-mail-cuenta.php' => 2, 'class-cn-webhook.php' => 4 ) === $mails, json_encode( $mails ) );
+$fa = file_get_contents( $raiz . 'class-cn-flujo-alta.php' );
+t( 'la alerta del flujo de alta va solo a self::email_alerta() (hola@ o la opción)', 1 === preg_match( '/wp_mail\( self::email_alerta\(\),/', $fa ) );
 t( 'cn_admin_alerta_email se lee solo para el aviso de día 5', 1 === substr_count( $web, "get_option( 'cn_admin_alerta_email'" ) );
