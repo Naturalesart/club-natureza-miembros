@@ -23,6 +23,10 @@ class CN_Flujo_Alta {
 		return array(
 			'cn_suscribir_fallback_modo' => 'Link firmado: planes B y C (sin celular, formulario precargado, checkout + alerta)',
 			'cn_identidad_modo'          => 'Una sola ficha por persona al activar (ficha del token → email → celular)',
+			'cn_alta_reintento_modo'     => 'Mail de bienvenida: registrar resultado y reintentar (10 min, máx. 3)',
+			'cn_retorno_activar_modo'    => 'Activar sin webhook: página de vuelta de MP y sync (plan B)',
+			'cn_reenvio_acceso_modo'     => 'Login: "No puedo entrar → reenviame el acceso"',
+			'cn_authorized_payment_modo' => 'Webhook: cobros de suscripción por /authorized_payments (arregla el 404)',
 		);
 	}
 

@@ -75,7 +75,12 @@ class CN_Webhook {
 		if ( $id && in_array( $tipo, array( 'preapproval', 'subscription_preapproval' ), true ) ) {
 			self::procesar_preapproval( $id );
 		} elseif ( $id && in_array( $tipo, array( 'payment', 'subscription_authorized_payment' ), true ) ) {
-			self::procesar_payment( $id );
+			// subscription_authorized_payment trae el id de un COBRO de suscripción, no de un pago: /v1/payments da 404. Con
+			// cn_authorized_payment_modo = on se consulta /authorized_payments/<id> (CN_Entrega); off = como siempre.
+			$atendido = ( 'subscription_authorized_payment' === $tipo && class_exists( 'CN_Entrega' ) && class_exists( 'CN_Flujo_Alta' ) ) ? CN_Entrega::authorized_payment( $id ) : false;
+			if ( ! $atendido ) {
+				self::procesar_payment( $id );
+			}
 		}
 		// 3. Responder rápido y siempre 200 para que MP no reintente en loop.
 		return new WP_REST_Response( array( 'status' => 'ok' ), 200 );
@@ -305,6 +310,7 @@ class CN_Webhook {
 		// para no tener la fila bloqueada mientras se espera a MP.
 		$acceso_hasta = self::sub_acceso_hasta( $preapproval_id );
 		$en_transaccion = false;
+		$ficha_fin      = 0;    // id de la ficha activada o creada (solo informativo, para el registro del mail).
 		$duplicado      = null; // CN_Identidad: ficha nueva creada en un caso dudoso (se anota tras el COMMIT).
 		$es_alta        = false; // true solo en alta nueva o activación (nunca en "mismo preapproval_id ya vinculado").
 		try {
@@ -406,7 +412,8 @@ class CN_Webhook {
 				if ( false === $ok ) {
 					throw new RuntimeException( 'no se pudo crear la socia: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
 				}
-				$es_alta = true;
+				$es_alta  = true;
+				$ficha_fin = (int) $wpdb->insert_id;
 				if ( $ident && 'on' === $ident_modo && $ident['dudoso'] ) {
 					$duplicado = array( 'id' => (int) $wpdb->insert_id, 'candidatas' => $ident['candidatas'], 'via' => $ident['via'] ); // se anota después del COMMIT.
 				}
@@ -429,7 +436,8 @@ class CN_Webhook {
 				if ( false === $ok ) {
 					throw new RuntimeException( 'no se pudo activar a la socia: ' . mb_substr( (string) $wpdb->last_error, 0, 200 ) );
 				}
-				$es_alta = true;
+				$es_alta   = true;
+				$ficha_fin = (int) $socia->id;
 			} elseif ( (string) $socia->preapproval_id !== $preapproval_id ) {
 				// Ya tiene OTRA suscripción: no se pisa nada y la pendiente queda sin marcar.
 				$wpdb->query( 'ROLLBACK' );
@@ -490,6 +498,10 @@ class CN_Webhook {
 				$fila->celular = $cel_mail;
 			}
 			if ( $es_alta ) {
+				$fila             = clone $fila; // copia en memoria: la fila de la base no se toca.
+				$fila->miembro_id = $ficha_fin;  // para registrar el mail de bienvenida por ficha (CN_Entrega, sin email).
+			}
+			if ( $es_alta ) {
 				self::sub_post_alta( $fila, $plan, $planes );
 				try { // PASO E: cuenta con email + contraseña (la ficha se busca por preapproval_id; nunca afecta el alta).
 					if ( class_exists( 'CN_Cuentas' ) && method_exists( 'CN_Cuentas', 'enganche_preapproval' ) ) {
@@ -524,8 +536,12 @@ class CN_Webhook {
 		$celular  = (string) $fila->celular;
 		$nombre_p = ( null !== $plan && isset( $planes[ $plan ] ) ) ? (string) $planes[ $plan ]['nombre'] : 'Club Natureza';
 		try {
+			$res_mail = false;
 			if ( '' !== $email ) {
-				self::enviar_mail_bienvenida_suscripcion( (string) $fila->nombre_apellido, $celular, $email, $nombre_p );
+				$res_mail = self::enviar_mail_bienvenida_suscripcion( (string) $fila->nombre_apellido, $celular, $email, $nombre_p );
+			}
+			if ( class_exists( 'CN_Entrega' ) && class_exists( 'CN_Flujo_Alta' ) ) { // registro + reintento (cn_alta_reintento_modo; off = nada).
+				CN_Entrega::bienvenida_resultado( isset( $fila->miembro_id ) ? (int) $fila->miembro_id : 0, $res_mail, $plan, '' === $email ? 'sin_email' : '' );
 			}
 		} catch ( Throwable $e ) {
 			self::registrar_log_mp( 'sub_post_alta_error', array( 'paso' => 'mail', 'external_reference' => (string) $fila->external_reference, 'mensaje' => mb_substr( $e->getMessage(), 0, 200 ) ) );
@@ -622,6 +638,18 @@ class CN_Webhook {
 		$ref = isset( $fila->external_reference ) ? (string) $fila->external_reference : '';
 		return '' === $ref ? '' : substr( hash( 'sha256', $ref ), 0, 32 );
 	}
+	/** CN_Entrega (reintento del mail de bienvenida): mismo mail que el alta. true/false = wp_mail; null = lo reemplazó el mail de cuenta. */
+	public static function mail_bienvenida_sub( $nombre, $celular, $email, $plan_nombre ) {
+		return self::enviar_mail_bienvenida_suscripcion( $nombre, $celular, $email, $plan_nombre );
+	}
+	/** CN_Entrega (plan B de activación: página de vuelta y sync): la MISMA activación transaccional e idempotente del webhook. */
+	public static function activar_sub_publico( $external_reference, $preapproval_id ) {
+		return self::activar_por_suscripcion_sub( (string) $external_reference, (string) $preapproval_id );
+	}
+	/** CN_Entrega (subscription_authorized_payment): procesa el pago real que trae el cobro de la suscripción. */
+	public static function procesar_payment_publico( $id ) {
+		self::procesar_payment( (string) $id );
+	}
 	/**
 	 * Mail de bienvenida de una socia que se suscribió (no es el del trial: sin "7 días" ni "nunca se te cobra").
 	 * Mismo wrapper HTML que enviar_mail_bienvenida(). El usuario es el nombre y la contraseña el celular.
@@ -658,7 +686,7 @@ class CN_Webhook {
 		$cuerpo .= '<p style="font-size:14px;color:#555;line-height:1.6;margin:24px 0 0;">Tu suscripción se renueva cada mes y podés cancelarla cuando quieras desde Mercado Pago. Cualquier duda, escribinos por WhatsApp.</p>';
 		$cuerpo .= '<p style="font-size:15px;color:#2f3b2c;margin:20px 0 0;">¡Bienvenida! 🌿</p>';
 		$cuerpo .= '</td></tr></table></td></tr></table></body></html>';
-		wp_mail( $email, $asunto, $cuerpo, array( 'Content-Type: text/html; charset=UTF-8' ) );
+		return (bool) wp_mail( $email, $asunto, $cuerpo, array( 'Content-Type: text/html; charset=UTF-8' ) ); // true/false; null = lo reemplazó el mail de cuenta.
 	}
 	/**
 	 * next_payment_date de la suscripción en MP, en UTC ('Y-m-d H:i:s'); null si no viene o
