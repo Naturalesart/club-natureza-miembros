@@ -232,3 +232,116 @@ for ( $i = 0; $i < 31; $i++ ) {
 	$r = CN_Panel_API::manejar( pa_req( 'tok-bueno' ) );
 }
 t( '429 rate limit: también no-cache', 429 === $r->status && $nc( $r ) );
+
+seccion( 'Panel API: trials vencidos (cn_panel_incluir_trials_vencidos), apagado por defecto' );
+function pa_vencidos_base( $w ) {
+	$w->on( '/FROM wp_cn_miembros\s+WHERE estado IN/', array(
+		pa_ficha( 1, array( 'preapproval_id' => 'abc123', 'plan' => 'full' ) ),
+		pa_ficha( 3, array( 'fecha_fin_trial' => '2026-10-20 00:00:00' ) ),
+	) );
+	$w->on( "/FROM wp_cn_miembros\s+WHERE estado = 'cancelada'/", array(
+		pa_ficha( 312, array( 'estado' => 'cancelada', 'fecha_fin_trial' => gmdate( 'Y-m-d H:i:s', time() - 86400 ), 'email' => 'vencida@gmail.com' ) ),
+		pa_ficha( 3, array( 'estado' => 'cancelada', 'fecha_fin_trial' => gmdate( 'Y-m-d H:i:s', time() - 86400 ) ) ), // repetida a propósito: no se duplica
+	) );
+}
+$w = pa_preparar();
+pa_vencidos_base( $w );
+$j_off = json_decode( json_encode( CN_Panel_API::manejar( pa_req( 'tok-bueno' ) )->data ), true );
+t( 'flag apagado: no hace la consulta de canceladas', ! array_filter( $w->consultas, function ( $q ) {
+	return preg_match( "/WHERE estado = 'cancelada'/", $q );
+} ) );
+t( 'flag apagado: mismas socias, sin trial_vencido ni clave trials_vencidos', 2 === count( $j_off['socias'] ) && ! isset( $j_off['trials_vencidos'] ) && false === strpos( json_encode( $j_off ), 'trial_vencido' ) );
+
+$w = pa_preparar();
+update_option( 'cn_panel_incluir_trials_vencidos', '1' );
+pa_vencidos_base( $w );
+$j = json_decode( json_encode( CN_Panel_API::manejar( pa_req( 'tok-bueno' ) )->data ), true );
+$q = implode( "\n", array_filter( $w->consultas, function ( $q ) {
+	return preg_match( "/WHERE estado = 'cancelada'/", $q );
+} ) );
+t( 'flag prendido: consulta canceladas sin suscripción, con trial pagado y vencidas hace <= 14 días', '' !== $q && false !== strpos( $q, "preapproval_id IS NULL OR preapproval_id = ''" ) && false !== strpos( $q, "trial_payment_id <> ''" ) && false !== strpos( $q, 'fecha_fin_trial >= ' . "'" . gmdate( 'Y-m-d', time() - 14 * 86400 ) ) );
+t( 'flag prendido: agrega la vencida al final y no duplica la que ya estaba', 3 === count( $j['socias'] ) && 312 === $j['socias'][2]['id'] );
+t( 'la agregada trae trial_vencido=true, tipo inactiva y los campos de siempre', true === $j['socias'][2]['trial_vencido'] && 'inactiva' === $j['socias'][2]['tipo'] && 'cancelada' === $j['socias'][2]['estado'] && 'v***@gmail.com' === $j['socias'][2]['email_enmascarado'] );
+t( 'las fichas de siempre quedan idénticas a con el flag apagado', $j_off['socias'] === array_slice( $j['socias'], 0, 2 ) );
+t( 'resumen trials_vencidos: cantidad, truncados, días y aptas (sin decisión = 0)', array( 'cantidad' => 2, 'truncados' => false, 'dias' => 14, 'aptas_winback' => 0 ) === $j['trials_vencidos'] );
+t( 'sin decisión de la guarda: guarda_mp null y apta_winback false (ante la duda no se escribe)', null === $j['socias'][2]['guarda_mp'] && false === $j['socias'][2]['apta_winback'] && false === $j['socias'][2]['sub_sin_vincular'] );
+t( 'las fichas de siempre no traen campos de guarda', ! isset( $j['socias'][0]['guarda_mp'] ) && ! isset( $j['socias'][1]['apta_winback'] ) );
+t( 'flag prendido: cero escrituras en la base', array() === $w->log );
+
+$w = pa_preparar();
+update_option( 'cn_panel_incluir_trials_vencidos', '1' );
+update_option( 'cn_panel_uso_activo', '1' );
+pa_vencidos_base( $w );
+$j = json_decode( json_encode( CN_Panel_API::manejar( pa_req( 'tok-bueno' ) )->data ), true );
+t( 'con uso prendido: la vencida trae email completo y bloque uso (el motor matchea por email)', 'vencida@gmail.com' === $j['socias'][2]['email'] && isset( $j['socias'][2]['uso'] ) );
+$uq = implode( "\n", array_filter( $w->consultas, function ( $q ) {
+	return preg_match( '/FROM wp_cn_vistos WHERE miembro_id IN/', $q );
+} ) );
+t( 'el uso se calcula también para la vencida (misma consulta agrupada)', false !== strpos( $uq, '312' ) );
+
+$w = pa_preparar();
+update_option( 'cn_panel_incluir_trials_vencidos', '1' );
+$muchas = array();
+for ( $i = 1000; $i <= 1200; $i++ ) {
+	$muchas[] = pa_ficha( $i, array( 'estado' => 'cancelada', 'fecha_fin_trial' => gmdate( 'Y-m-d H:i:s', time() - 86400 ) ) );
+}
+$w->on( '/FROM wp_cn_miembros\s+WHERE estado IN/', array( pa_ficha( 1 ) ) );
+$w->on( "/FROM wp_cn_miembros\s+WHERE estado = 'cancelada'/", $muchas );
+$j = json_decode( json_encode( CN_Panel_API::manejar( pa_req( 'tok-bueno' ) )->data ), true );
+t( 'tope propio de 200 vencidas y avisa que se truncó (no toca socias_truncadas)', 201 === count( $j['socias'] ) && true === $j['trials_vencidos']['truncados'] && 200 === $j['trials_vencidos']['cantidad'] && false === $j['socias_truncadas'] );
+
+seccion( 'Panel API: guarda de los trials vencidos (no escribirle a quien ya se suscribió)' );
+function pa_guarda( $decisiones, $avisos = array(), $vinculadas = array() ) {
+	$w = pa_preparar();
+	update_option( 'cn_panel_incluir_trials_vencidos', '1' );
+	$w->on( '/FROM wp_cn_miembros\s+WHERE estado IN/', array( pa_ficha( 1, array( 'preapproval_id' => 'abc123', 'plan' => 'full' ) ) ) );
+	$v = gmdate( 'Y-m-d H:i:s', time() - 86400 );
+	$w->on( "/FROM wp_cn_miembros\s+WHERE estado = 'cancelada'/", array(
+		pa_ficha( 312, array( 'estado' => 'cancelada', 'fecha_fin_trial' => $v, 'email' => 'Vencida@Gmail.com' ) ),
+		pa_ficha( 313, array( 'estado' => 'cancelada', 'fecha_fin_trial' => $v, 'email' => 'otra@gmail.com' ) ),
+		pa_ficha( 314, array( 'estado' => 'cancelada', 'fecha_fin_trial' => $v, 'email' => 'tercera@gmail.com' ) ),
+	) );
+	$w->on( "/FROM wp_cn_mp_log WHERE tipo = 'trial_guarda_decision'/", array_map( function ( $d ) {
+		return cn_fila( array( 'fecha' => $d[2], 'payload' => json_encode( array( 'miembro_id' => $d[0], 'resultado' => $d[1], 'motivo' => '', 'solo_log' => true ) ) ) );
+	}, $decisiones ) );
+	$w->on( "/FROM wp_cn_mp_log WHERE tipo = 'aviso_error' AND payload LIKE/", $avisos ? array( cn_fila( array( 'fecha' => gmdate( 'Y-m-d H:i:s', time() - 3600 ), 'payload' => json_encode( array( 'motivo' => 'sub_sin_vincular', 'detalle' => array( 'items' => $avisos ) ) ) ) ) ) : array() );
+	$w->on( '/SELECT preapproval_id FROM wp_cn_miembros WHERE preapproval_id IN/', $vinculadas );
+	$j = json_decode( json_encode( CN_Panel_API::manejar( pa_req( 'tok-bueno' ) )->data ), true );
+	$por_id = array();
+	foreach ( $j['socias'] as $s ) {
+		$por_id[ $s['id'] ] = $s;
+	}
+	return array( $w, $j, $por_id );
+}
+list( $w, $j, $s ) = pa_guarda( array(
+	array( 312, 'sin_pago', '2026-11-14 12:00:00' ),
+	array( 312, 'error', '2026-11-13 12:00:00' ), // más vieja: no gana
+	array( 313, 'pago', '2026-11-14 12:00:00' ),
+	array( 314, 'indeterminado', '2026-11-14 12:00:00' ),
+) );
+t( 'gana la decisión más nueva y sin_pago => apta_winback', 'sin_pago' === $s[312]['guarda_mp'] && '2026-11-14T12:00:00Z' === $s[312]['guarda_mp_fecha'] && true === $s[312]['apta_winback'] );
+t( 'guarda dice pago (pagó por link directo) => no apta', 'pago' === $s[313]['guarda_mp'] && false === $s[313]['apta_winback'] );
+t( 'indeterminado / error => no apta', 'indeterminado' === $s[314]['guarda_mp'] && false === $s[314]['apta_winback'] );
+t( 'resumen: 1 apta de 3', 1 === $j['trials_vencidos']['aptas_winback'] && 3 === $j['trials_vencidos']['cantidad'] );
+t( 'la guarda solo lee (cero escrituras, cero HTTP)', array() === $w->log && array() === $GLOBALS['cn_http_log'] );
+
+$sp = array( array( 312, 'sin_pago', '2026-11-14 12:00:00' ), array( 313, 'sin_pago', '2026-11-14 12:00:00' ), array( 314, 'sin_pago', '2026-11-14 12:00:00' ) );
+list( $w, $j, $s ) = pa_guarda( $sp, array(
+	array( 'preapproval_id' => 'p1', 'email' => 'vencida@gmail.com', 'socia_id' => null, 'candidatas' => array() ), // mismo email (otra mayúscula)
+	array( 'preapproval_id' => 'p2', 'email' => 'x@y.com', 'socia_id' => 313, 'candidatas' => array() ),             // apunta por socia_id
+) );
+t( 'suscripción sin vincular con su email => sub_sin_vincular y no apta', true === $s[312]['sub_sin_vincular'] && false === $s[312]['apta_winback'] );
+t( 'suscripción sin vincular que la propone como socia => no apta', true === $s[313]['sub_sin_vincular'] && false === $s[313]['apta_winback'] );
+t( 'la que no aparece en ningún aviso sigue apta', false === $s[314]['sub_sin_vincular'] && true === $s[314]['apta_winback'] );
+
+list( $w, $j, $s ) = pa_guarda( $sp, array( array( 'preapproval_id' => 'p3', 'email' => 'x@y.com', 'socia_id' => null, 'candidatas' => array( 314 ) ) ), array( 'p3' ) );
+t( 'aviso de una suscripción que ya se vinculó a otra ficha: no bloquea', false === $s[314]['sub_sin_vincular'] && true === $s[314]['apta_winback'] );
+list( $w, $j, $s ) = pa_guarda( $sp, array( array( 'preapproval_id' => 'p4', 'email' => 'x@y.com', 'socia_id' => null, 'candidatas' => array( 314 ) ) ) );
+t( 'aviso que la trae como candidata => no apta', true === $s[314]['sub_sin_vincular'] && false === $s[314]['apta_winback'] );
+
+$w = pa_preparar();
+pa_vencidos_base( $w );
+CN_Panel_API::manejar( pa_req( 'tok-bueno' ) );
+t( 'flag apagado: no lee trial_guarda_decision', ! array_filter( $w->consultas, function ( $q ) {
+	return false !== strpos( $q, 'trial_guarda_decision' );
+} ) );
