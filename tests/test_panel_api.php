@@ -232,3 +232,58 @@ for ( $i = 0; $i < 31; $i++ ) {
 	$r = CN_Panel_API::manejar( pa_req( 'tok-bueno' ) );
 }
 t( '429 rate limit: también no-cache', 429 === $r->status && $nc( $r ) );
+
+seccion( 'Panel API: trials vencidos (cn_panel_incluir_trials_vencidos), apagado por defecto' );
+function pa_vencidos_base( $w ) {
+	$w->on( '/FROM wp_cn_miembros\s+WHERE estado IN/', array(
+		pa_ficha( 1, array( 'preapproval_id' => 'abc123', 'plan' => 'full' ) ),
+		pa_ficha( 3, array( 'fecha_fin_trial' => '2026-10-20 00:00:00' ) ),
+	) );
+	$w->on( "/FROM wp_cn_miembros\s+WHERE estado = 'cancelada'/", array(
+		pa_ficha( 312, array( 'estado' => 'cancelada', 'fecha_fin_trial' => gmdate( 'Y-m-d H:i:s', time() - 86400 ), 'email' => 'vencida@gmail.com' ) ),
+		pa_ficha( 3, array( 'estado' => 'cancelada', 'fecha_fin_trial' => gmdate( 'Y-m-d H:i:s', time() - 86400 ) ) ), // repetida a propósito: no se duplica
+	) );
+}
+$w = pa_preparar();
+pa_vencidos_base( $w );
+$j_off = json_decode( json_encode( CN_Panel_API::manejar( pa_req( 'tok-bueno' ) )->data ), true );
+t( 'flag apagado: no hace la consulta de canceladas', ! array_filter( $w->consultas, function ( $q ) {
+	return preg_match( "/WHERE estado = 'cancelada'/", $q );
+} ) );
+t( 'flag apagado: mismas socias, sin trial_vencido ni clave trials_vencidos', 2 === count( $j_off['socias'] ) && ! isset( $j_off['trials_vencidos'] ) && false === strpos( json_encode( $j_off ), 'trial_vencido' ) );
+
+$w = pa_preparar();
+update_option( 'cn_panel_incluir_trials_vencidos', '1' );
+pa_vencidos_base( $w );
+$j = json_decode( json_encode( CN_Panel_API::manejar( pa_req( 'tok-bueno' ) )->data ), true );
+$q = implode( "\n", array_filter( $w->consultas, function ( $q ) {
+	return preg_match( "/WHERE estado = 'cancelada'/", $q );
+} ) );
+t( 'flag prendido: consulta canceladas sin suscripción, con trial pagado y vencidas hace <= 14 días', '' !== $q && false !== strpos( $q, "preapproval_id IS NULL OR preapproval_id = ''" ) && false !== strpos( $q, "trial_payment_id <> ''" ) && false !== strpos( $q, 'fecha_fin_trial >= ' . "'" . gmdate( 'Y-m-d', time() - 14 * 86400 ) ) );
+t( 'flag prendido: agrega la vencida al final y no duplica la que ya estaba', 3 === count( $j['socias'] ) && 312 === $j['socias'][2]['id'] );
+t( 'la agregada trae trial_vencido=true, tipo inactiva y los campos de siempre', true === $j['socias'][2]['trial_vencido'] && 'inactiva' === $j['socias'][2]['tipo'] && 'cancelada' === $j['socias'][2]['estado'] && 'v***@gmail.com' === $j['socias'][2]['email_enmascarado'] );
+t( 'las fichas de siempre quedan idénticas a con el flag apagado', $j_off['socias'] === array_slice( $j['socias'], 0, 2 ) );
+t( 'resumen trials_vencidos: cantidad, truncados y días', array( 'cantidad' => 2, 'truncados' => false, 'dias' => 14 ) === $j['trials_vencidos'] );
+t( 'flag prendido: cero escrituras en la base', array() === $w->log );
+
+$w = pa_preparar();
+update_option( 'cn_panel_incluir_trials_vencidos', '1' );
+update_option( 'cn_panel_uso_activo', '1' );
+pa_vencidos_base( $w );
+$j = json_decode( json_encode( CN_Panel_API::manejar( pa_req( 'tok-bueno' ) )->data ), true );
+t( 'con uso prendido: la vencida trae email completo y bloque uso (el motor matchea por email)', 'vencida@gmail.com' === $j['socias'][2]['email'] && isset( $j['socias'][2]['uso'] ) );
+$uq = implode( "\n", array_filter( $w->consultas, function ( $q ) {
+	return preg_match( '/FROM wp_cn_vistos WHERE miembro_id IN/', $q );
+} ) );
+t( 'el uso se calcula también para la vencida (misma consulta agrupada)', false !== strpos( $uq, '312' ) );
+
+$w = pa_preparar();
+update_option( 'cn_panel_incluir_trials_vencidos', '1' );
+$muchas = array();
+for ( $i = 1000; $i <= 1200; $i++ ) {
+	$muchas[] = pa_ficha( $i, array( 'estado' => 'cancelada', 'fecha_fin_trial' => gmdate( 'Y-m-d H:i:s', time() - 86400 ) ) );
+}
+$w->on( '/FROM wp_cn_miembros\s+WHERE estado IN/', array( pa_ficha( 1 ) ) );
+$w->on( "/FROM wp_cn_miembros\s+WHERE estado = 'cancelada'/", $muchas );
+$j = json_decode( json_encode( CN_Panel_API::manejar( pa_req( 'tok-bueno' ) )->data ), true );
+t( 'tope propio de 200 vencidas y avisa que se truncó (no toca socias_truncadas)', 201 === count( $j['socias'] ) && true === $j['trials_vencidos']['truncados'] && 200 === $j['trials_vencidos']['cantidad'] && false === $j['socias_truncadas'] );
