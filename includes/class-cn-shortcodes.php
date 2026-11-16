@@ -129,6 +129,13 @@ class CN_Shortcodes {
 
 		// Planes (landing /planes-club/): mismo motivo que arriba, el redirect al init_point
 		// de MP tiene que salir con los headers todavía abiertos.
+		// Formulario precargado del link firmado (plan B, ?cn_pre=): la página muestra datos de una ficha, nunca va a la caché.
+		if ( isset( $_GET['cn_pre'] ) && class_exists( 'CN_Suscribir_Fallback' ) && 'on' === CN_Suscribir_Fallback::modo() ) {
+			if ( ! defined( 'DONOTCACHEPAGE' ) ) {
+				define( 'DONOTCACHEPAGE', true );
+			}
+			nocache_headers();
+		}
 		if ( isset( $_POST['cn_planes_submit'] ) ) {
 			$res = self::procesar_planes_form( $_POST );
 			if ( $res['ok'] ) {
@@ -179,16 +186,27 @@ class CN_Shortcodes {
 			self::planes_intento_fallido( $key );
 			return $salida( 'Elegí un plan válido.' );
 		}
+		// Plan B del link firmado (?cn_pre=, flag cn_suscribir_fallback_modo en 'on'): el token fija la ficha destino.
+		// Sin token válido para ESTE plan, todo sigue como siempre.
+		$pre = ( isset( $post['cn_planes_pre'] ) && class_exists( 'CN_Suscribir_Fallback' ) ) ? CN_Suscribir_Fallback::contexto( $post ) : array( 'ok' => false );
+		if ( ! empty( $pre['ok'] ) && $pre['plan'] !== $plan ) {
+			$pre = array( 'ok' => false );
+		}
 		$nombre  = isset( $post['cn_planes_nombre'] ) ? trim( sanitize_text_field( wp_unslash( $post['cn_planes_nombre'] ) ) ) : '';
 		$celular = isset( $post['cn_planes_celular'] ) ? sanitize_text_field( wp_unslash( $post['cn_planes_celular'] ) ) : '';
 		if ( strlen( $nombre ) < 3 ) {
 			self::planes_intento_fallido( $key );
 			return $salida( 'Ingresá tu nombre y apellido.' );
 		}
-		$norm = CN_Helpers::normalizar_celular( $celular );
-		if ( empty( $norm['valido'] ) || '' === (string) $norm['normalizado'] ) {
-			self::planes_intento_fallido( $key );
-			return $salida( 'Ingresá un celular válido (código de área + número).' );
+		if ( ! empty( $pre['ok'] ) && '' === trim( $celular ) ) {
+			// Con ficha destino el celular es opcional: se usa el de la ficha si es confiable; si no, va vacío (la ficha la identifica).
+			$norm = array( 'valido' => true, 'normalizado' => CN_Suscribir::celular_de( $pre['ficha'] ) );
+		} else {
+			$norm = CN_Helpers::normalizar_celular( $celular );
+			if ( empty( $norm['valido'] ) || '' === (string) $norm['normalizado'] ) {
+				self::planes_intento_fallido( $key );
+				return $salida( 'Ingresá un celular válido (código de área + número).' );
+			}
 		}
 		// Email de la cuenta de Mercado Pago: MP lo exige como payer_email para crear la suscripción (sin él responde
 		// 400 "payer_email is required") y en el checkout solo deja pagarla a la cuenta con ese mismo email.
@@ -208,11 +226,24 @@ class CN_Shortcodes {
 			$fbc    = 'fb.1.' . round( microtime( true ) * 1000 ) . '.' . $fbclid;
 		}
 		$ua   = isset( $_SERVER['HTTP_USER_AGENT'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_USER_AGENT'] ) ) : '';
-		$meta = array( 'fbp' => $fbp, 'fbc' => $fbc, 'ip' => $ip, 'user_agent' => $ua );
-		$res  = CN_MP::crear_suscripcion_link( $plan, $nombre, $norm['normalizado'], $email, 'landing', $meta );
+		$meta   = array( 'fbp' => $fbp, 'fbc' => $fbc, 'ip' => $ip, 'user_agent' => $ua );
+		$origen = 'landing';
+		if ( ! empty( $pre['ok'] ) ) {
+			$meta['ficha_id'] = (int) $pre['ficha_id'];
+			$origen           = (string) $pre['origen'];
+		}
+		$res = CN_MP::crear_suscripcion_link( $plan, $nombre, $norm['normalizado'], $email, $origen, $meta );
 		if ( is_wp_error( $res ) ) {
 			self::planes_intento_fallido( $key );
-			CN_Webhook::registrar_log_mp( 'planes_form_fallo', array( 'plan' => $plan, 'error' => $res->get_error_message() ) );
+			CN_Webhook::registrar_log_mp( 'planes_form_fallo', array( 'plan' => $plan, 'error' => $res->get_error_message() ) + ( ! empty( $pre['ok'] ) ? array( 'ficha_id' => (int) $pre['ficha_id'] ) : array() ) );
+			if ( ! empty( $pre['ok'] ) ) {
+				// Plan C: checkout fijo del plan + ficha pendiente de vincular + alerta a hola@.
+				$link = CN_Suscribir_Fallback::plan_c( (int) $pre['ficha_id'], $plan, (string) $pre['origen'], 'fallo_form_b' );
+				if ( '' !== $link ) {
+					return array( 'ok' => true, 'init_point' => $link, 'mensaje' => '', 'plan' => $plan );
+				}
+				return $salida( CN_Suscribir_Fallback::MENSAJE_C );
+			}
 			return $salida( 'No pudimos iniciar la suscripción. Probá de nuevo en un minuto.' );
 		}
 		return array( 'ok' => true, 'init_point' => (string) $res, 'mensaje' => '', 'plan' => $plan );
@@ -247,6 +278,15 @@ class CN_Shortcodes {
 		$v_nombre  = '' !== $mensaje && isset( $_POST['cn_planes_nombre'] ) ? sanitize_text_field( wp_unslash( $_POST['cn_planes_nombre'] ) ) : '';
 		$v_celular = '' !== $mensaje && isset( $_POST['cn_planes_celular'] ) ? sanitize_text_field( wp_unslash( $_POST['cn_planes_celular'] ) ) : '';
 		$v_email   = '' !== $mensaje && isset( $_POST['cn_planes_email'] ) ? sanitize_text_field( wp_unslash( $_POST['cn_planes_email'] ) ) : '';
+		// Plan B del link firmado: formulario precargado con la ficha del token (solo para el plan del token).
+		$pre = ( isset( $_GET['cn_pre'] ) && class_exists( 'CN_Suscribir_Fallback' ) ) ? CN_Suscribir_Fallback::contexto() : array( 'ok' => false );
+		if ( ! empty( $pre['ok'] ) && $pre['plan'] !== $plan ) {
+			$pre = array( 'ok' => false );
+		}
+		if ( ! empty( $pre['ok'] ) && '' === $mensaje ) {
+			$v_nombre = (string) $pre['ficha']->nombre_apellido;
+			$v_email  = CN_Suscribir::email_de( $pre['ficha'] );
+		}
 
 		ob_start();
 		if ( ! self::$planes_css_ok ) {
@@ -274,16 +314,21 @@ class CN_Shortcodes {
 			<p class="cn-pf__titulo"><?php echo esc_html( $planes[ $plan ]['nombre'] ); ?><span class="cn-pf__precio">$<?php echo esc_html( number_format( (float) $planes[ $plan ]['precio'], 0, ',', '.' ) ); ?>/mes</span></p>
 			<?php if ( '' !== $mensaje ) : ?>
 				<p class="cn-pf__error" role="alert"><?php echo esc_html( $mensaje ); ?></p>
+			<?php elseif ( ! empty( $pre['ok'] ) ) : ?>
+				<p class="cn-pf__ayuda" role="status" style="margin:0 0 12px;"><?php echo esc_html( CN_Suscribir_Fallback::MENSAJE_B ); ?></p>
 			<?php endif; ?>
 			<label for="<?php echo esc_attr( $id ); ?>-nombre">Nombre y apellido</label>
 			<input type="text" id="<?php echo esc_attr( $id ); ?>-nombre" name="cn_planes_nombre" required autocomplete="name" value="<?php echo esc_attr( $v_nombre ); ?>">
 			<label for="<?php echo esc_attr( $id ); ?>-celular">Celular</label>
-			<input type="tel" id="<?php echo esc_attr( $id ); ?>-celular" name="cn_planes_celular" required inputmode="numeric" autocomplete="tel" placeholder="Ej: 11 2345 6789" value="<?php echo esc_attr( $v_celular ); ?>">
+			<input type="tel" id="<?php echo esc_attr( $id ); ?>-celular" name="cn_planes_celular" <?php echo empty( $pre['ok'] ) ? 'required ' : ''; ?>inputmode="numeric" autocomplete="tel" placeholder="<?php echo esc_attr( empty( $pre['ok'] ) ? 'Ej: 11 2345 6789' : 'Opcional: ya tenemos tus datos' ); ?>" value="<?php echo esc_attr( $v_celular ); ?>">
 			<label for="<?php echo esc_attr( $id ); ?>-email">Email de tu cuenta de Mercado Pago</label>
 			<input type="email" id="<?php echo esc_attr( $id ); ?>-email" name="cn_planes_email" required autocomplete="email" inputmode="email" placeholder="el mismo con el que entrás a Mercado Pago" value="<?php echo esc_attr( $v_email ); ?>">
 			<p class="cn-pf__ayuda">Tiene que ser el email con el que entrás a Mercado Pago: si no coincide, Mercado Pago no deja pagar.</p>
 			<div class="cn-pf__web" aria-hidden="true"><label for="<?php echo esc_attr( $id ); ?>-web">Web</label><input type="text" id="<?php echo esc_attr( $id ); ?>-web" name="cn_planes_web" tabindex="-1" autocomplete="off"></div>
 			<input type="hidden" name="cn_planes_plan" value="<?php echo esc_attr( $plan ); ?>">
+			<?php if ( ! empty( $pre['ok'] ) ) : ?>
+			<input type="hidden" name="cn_planes_pre" value="<?php echo esc_attr( wp_unslash( (string) $_GET['cn_pre'] ) ); ?>">
+			<?php endif; ?>
 			<button type="submit" name="cn_planes_submit" value="1" class="cn-pf__btn"><?php echo esc_html( $texto ); ?></button>
 			<p class="cn-pf__nota">Pagás en Mercado Pago. Cancelás cuando quieras.</p>
 		</form>

@@ -1444,6 +1444,9 @@ class CN_Admin {
 			if ( isset( $_POST['cn_suscribir_modo'] ) && class_exists( 'CN_Suscribir' ) ) {
 				update_option( CN_Suscribir::OPT_MODO, 'on' === sanitize_key( wp_unslash( $_POST['cn_suscribir_modo'] ) ) ? 'on' : 'off' );
 			}
+			if ( class_exists( 'CN_Flujo_Alta' ) ) { // flags del flujo de alta (off | log | on).
+				CN_Flujo_Alta::guardar_config( $_POST );
+			}
 			update_option( CN_Retorno::OPT_WHATSAPP, preg_replace( '/\D+/', '', sanitize_text_field( wp_unslash( $_POST['cn_retorno_whatsapp'] ?? '' ) ) ) ); // solo dígitos
 			// API de solo lectura del panel de socias (CN_Panel_API). Apagada por defecto.
 			update_option( CN_Panel_API::OPT_ACTIVO, isset( $_POST['cn_panel_api_activo'] ) ? '1' : '0' );
@@ -1563,6 +1566,7 @@ class CN_Admin {
 						</td>
 					</tr>
 					<?php endif; ?>
+					<?php if ( class_exists( 'CN_Flujo_Alta' ) ) { CN_Flujo_Alta::filas_config(); } ?>
 					<tr>
 						<th><label>Página de retorno de suscripción</label></th>
 						<td>

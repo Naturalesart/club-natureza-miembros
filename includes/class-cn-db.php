@@ -5,7 +5,7 @@ class CN_DB {
 		global $wpdb;
 		return $wpdb->prefix . 'cn_' . $nombre;
 	}
-	const DB_VERSION = '2.10.0'; // 2.10.0: columna aditiva init_point en cn_suscripciones_pendientes (FASE 2: reusar la pendiente de 24 h). 2.9.0: tablas nuevas cn_cuentas y cn_cuenta_tokens (acceso con email + contraseña; aditivas, no tocan las existentes).
+	const DB_VERSION = '2.11.0'; // 2.11.0: columna aditiva ficha_id en cn_suscripciones_pendientes (ficha destino del link firmado) y tabla nueva cn_vincular_pendientes (plan C del link firmado; aditivas). 2.10.0: columna aditiva init_point en cn_suscripciones_pendientes (FASE 2: reusar la pendiente de 24 h). 2.9.0: tablas nuevas cn_cuentas y cn_cuenta_tokens (acceso con email + contraseña; aditivas, no tocan las existentes).
 	public static function maybe_upgrade() {
 		if ( get_option( 'cn_db_version' ) !== self::DB_VERSION ) {
 			self::instalar();
@@ -30,6 +30,7 @@ class CN_DB {
 		$t_pixel_dedup      = self::tabla( 'pixel_dedup' );
 		$t_cuentas          = self::tabla( 'cuentas' );
 		$t_cuenta_tokens    = self::tabla( 'cuenta_tokens' );
+		$t_vincular_pend    = self::tabla( 'vincular_pendientes' );
 		$sql = "CREATE TABLE {$t_miembros} (
 			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
 			nombre_apellido varchar(191) NOT NULL,
@@ -153,9 +154,11 @@ class CN_DB {
 			creado datetime NOT NULL,
 			usado tinyint(1) NOT NULL DEFAULT 0,
 			init_point varchar(500) DEFAULT NULL,
+			ficha_id bigint(20) unsigned DEFAULT NULL,
 			PRIMARY KEY  (id),
 			UNIQUE KEY external_reference (external_reference),
-			KEY celular (celular)
+			KEY celular (celular),
+			KEY ficha_id (ficha_id)
 		) {$charset_collate};
 		CREATE TABLE {$t_mp_log} (
 			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
@@ -192,6 +195,17 @@ class CN_DB {
 			PRIMARY KEY  (id),
 			UNIQUE KEY token_hash (token_hash),
 			KEY cuenta_proposito (cuenta_id,proposito)
+		) {$charset_collate};
+		CREATE TABLE {$t_vincular_pend} (
+			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+			ficha_id bigint(20) unsigned NOT NULL,
+			plan varchar(20) NOT NULL,
+			origen varchar(20) NOT NULL,
+			motivo varchar(50) NOT NULL,
+			creado datetime NOT NULL,
+			resuelto tinyint(1) NOT NULL DEFAULT 0,
+			PRIMARY KEY  (id),
+			KEY ficha_id (ficha_id)
 		) {$charset_collate};";
 		dbDelta( $sql );
 	}

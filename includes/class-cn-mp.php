@@ -179,7 +179,7 @@ class CN_MP {
 	 * $email es OBLIGATORIO (10/11/2026): Mercado Pago exige payer_email al crear la suscripción
 	 * (sin él responde 400 "payer_email is required") y en el checkout solo deja pagarla a la cuenta
 	 * de MP con ese email. Sin email válido devuelve WP_Error SIN tocar la base ni MP.
-	 * $meta (opcional): fbp, fbc, ip, user_agent.
+	 * $meta (opcional): fbp, fbc, ip, user_agent y ficha_id (ficha destino; con ficha_id el celular puede venir vacío).
 	 *
 	 * Devuelve el init_point (string) o un WP_Error. Si MP falla, no deja fila pendiente.
 	 */
@@ -203,7 +203,11 @@ class CN_MP {
 			return new WP_Error( 'cn_nombre_invalido', 'Ingresá nombre y apellido.' );
 		}
 		$celular = (string) $celular;
-		if ( ! preg_match( '/^[0-9]{8,15}$/', $celular ) ) {
+		// Ficha destino (link firmado / formulario precargado, flag cn_suscribir_fallback_modo): solo la pasa
+		// CN_Suscribir o el formulario con token. Sin ella todo sigue como siempre.
+		$ficha_id = ( is_array( $meta ) && isset( $meta['ficha_id'] ) ) ? (int) $meta['ficha_id'] : 0;
+		$sin_cel  = ( '' === $celular && $ficha_id > 0 ); // la firma ya identifica la ficha: el celular no hace falta.
+		if ( ! $sin_cel && ! preg_match( '/^[0-9]{8,15}$/', $celular ) ) {
 			return new WP_Error( 'cn_celular_invalido', 'Celular inválido.' );
 		}
 		$email_raw = trim( (string) $email );
@@ -219,28 +223,32 @@ class CN_MP {
 		$fbc  = isset( $meta['fbc'] ) ? mb_substr( sanitize_text_field( (string) $meta['fbc'] ), 0, 255 ) : '';
 		$ip   = isset( $meta['ip'] ) ? mb_substr( sanitize_text_field( (string) $meta['ip'] ), 0, 45 ) : '';
 		$ua   = isset( $meta['user_agent'] ) ? mb_substr( sanitize_text_field( (string) $meta['user_agent'] ), 0, 512 ) : '';
-		$hash_corto         = substr( md5( $celular . microtime( true ) . wp_rand() ), 0, 8 );
-		$external_reference = 'sub_' . $celular . '_' . $hash_corto;
+		$hash_corto         = substr( md5( $celular . $ficha_id . microtime( true ) . wp_rand() ), 0, 8 );
+		// Sin celular: sub_f<ficha>_<hash>. Sigue empezando con "sub_" (el webhook la reconoce igual) y no choca con
+		// sub_<celular>_ (un celular nunca empieza con "f").
+		$external_reference = $sin_cel ? 'sub_f' . $ficha_id . '_' . $hash_corto : 'sub_' . $celular . '_' . $hash_corto;
 		// La fila pendiente se guarda ANTES de llamar a MP; si MP falla, se borra.
 		$t_pend    = CN_DB::tabla( 'suscripciones_pendientes' );
-		$insertado = $wpdb->insert(
-			$t_pend,
-			array(
-				'external_reference' => $external_reference,
-				'nombre_apellido'    => $nombre,
-				'celular'            => $celular,
-				'email'              => '' !== $email ? $email : null,
-				'plan'               => $plan,
-				'origen'             => $origen,
-				'fbp'                => '' !== $fbp ? $fbp : null,
-				'fbc'                => '' !== $fbc ? $fbc : null,
-				'ip'                 => '' !== $ip ? $ip : null,
-				'user_agent'         => '' !== $ua ? $ua : null,
-				'creado'             => current_time( 'mysql', true ),
-				'usado'              => 0,
-			),
-			array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d' )
+		$fila_pend = array(
+			'external_reference' => $external_reference,
+			'nombre_apellido'    => $nombre,
+			'celular'            => $celular,
+			'email'              => '' !== $email ? $email : null,
+			'plan'               => $plan,
+			'origen'             => $origen,
+			'fbp'                => '' !== $fbp ? $fbp : null,
+			'fbc'                => '' !== $fbc ? $fbc : null,
+			'ip'                 => '' !== $ip ? $ip : null,
+			'user_agent'         => '' !== $ua ? $ua : null,
+			'creado'             => current_time( 'mysql', true ),
+			'usado'              => 0,
 		);
+		$formatos = array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d' );
+		if ( $ficha_id > 0 ) { // solo cuando viene ficha destino: sin ella el INSERT es idéntico al de siempre.
+			$fila_pend['ficha_id'] = $ficha_id;
+			$formatos[]            = '%d';
+		}
+		$insertado = $wpdb->insert( $t_pend, $fila_pend, $formatos );
 		if ( false === $insertado ) {
 			CN_Webhook::registrar_log_mp( 'susc_pendiente_error', array( 'plan' => $plan, 'db_error' => mb_substr( (string) $wpdb->last_error, 0, 200 ) ) );
 			return new WP_Error( 'cn_susc_pendiente', 'No pudimos registrar la suscripción. Probá de nuevo.' );
