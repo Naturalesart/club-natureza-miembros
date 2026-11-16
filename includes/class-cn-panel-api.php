@@ -17,6 +17,9 @@ if ( ! defined( 'ABSPATH' ) ) exit;
  *   suscripción que vinieron de un trial pagado (trial_payment_id) y cuyo trial venció hace 14 días o menos, con el campo extra
  *   "trial_vencido": true. Sirve para que la secuencia del trial (d8/d10) las vea; hoy las cancela el login al vencer y desaparecían
  *   del panel ("SIN FICHA"). Solo SELECT; con el flag apagado la respuesta es idéntica a la de antes. Rollback: apagar la opción.
+ *   Guarda (solo en esas fichas): `guarda_mp` (última decisión trial_guarda_decision que dejó el cron en mp_log), `sub_sin_vincular`
+ *   (alguna suscripción authorized sin vincular de los últimos 7 días apunta a esta ficha o a su email) y `apta_winback`
+ *   = guarda_mp 'sin_pago' Y sin suscripción sin vincular. Sin decisión registrada => false: ante la duda no se le escribe.
  * - Anti-caché: todas las respuestas (200 y errores) llevan Cache-Control: no-store y X-LiteSpeed-Cache-Control: no-cache. Sin el segundo, LiteSpeed
  *   (con "Cache REST API" activo) guardaba la respuesta autenticada y la servía a pedidos sin token (incidente del 28/10/2026).
  * - Sin migraciones. Quitarlo = borrar el require_once del bootstrap y este archivo.
@@ -196,6 +199,93 @@ class CN_Panel_API {
 		return is_array( $rows ) ? $rows : array();
 	}
 
+	/**
+	 * Guarda de las fichas de trial vencido, con DOS consultas a mp_log (solo SELECT):
+	 *  - trial_guarda_decision: la última decisión del cron para cada ficha (pago / sin_pago / indeterminado / error / sin_email).
+	 *    El cron no mira las canceladas, así que la decisión es la de antes de cancelarse; si no hay, queda null.
+	 *  - aviso sub_sin_vincular (últimos 7 días, menos las que hoy ya tienen ficha): si un item apunta a la ficha (socia_id o candidatas)
+	 *    o trae el mismo email, puede que ya se haya suscripto por otro camino.
+	 * apta_winback = 'sin_pago' y ningún aviso que la apunte. Ante cualquier duda (sin decisión, MP falló, aviso) => false.
+	 *
+	 * @param array $fichas filas de miembros (id, email)
+	 * @return array<int,array{guarda_mp:?string,guarda_mp_fecha:?string,sub_sin_vincular:bool,apta_winback:bool}>
+	 */
+	protected static function guarda_trials_vencidos( $fichas, $ahora ) {
+		global $wpdb;
+		$out    = array();
+		$emails = array(); // email normalizado => ids
+		foreach ( $fichas as $f ) {
+			$id         = (int) $f->id;
+			$out[ $id ] = array( 'guarda_mp' => null, 'guarda_mp_fecha' => null, 'sub_sin_vincular' => false, 'apta_winback' => false );
+			$m          = strtolower( trim( (string) $f->email ) );
+			if ( '' !== $m && false !== strpos( $m, '@' ) ) {
+				$emails[ $m ][] = $id;
+			}
+		}
+		if ( ! $out ) {
+			return $out;
+		}
+		$t    = CN_DB::tabla( 'mp_log' );
+		$rows = $wpdb->get_results( $wpdb->prepare(
+			"SELECT payload, fecha FROM {$t} WHERE tipo = %s AND fecha >= %s ORDER BY id DESC LIMIT %d",
+			'trial_guarda_decision',
+			gmdate( 'Y-m-d H:i:s', $ahora - ( self::DIAS_TRIALS_VENCIDOS + 14 ) * DAY_IN_SECONDS ),
+			5000
+		) );
+		foreach ( is_array( $rows ) ? $rows : array() as $r ) { // de la más nueva a la más vieja: gana la primera que aparece.
+			$p  = json_decode( (string) $r->payload, true );
+			$id = is_array( $p ) && isset( $p['miembro_id'] ) ? (int) $p['miembro_id'] : 0;
+			if ( $id && isset( $out[ $id ] ) && null === $out[ $id ]['guarda_mp'] && isset( $p['resultado'] ) && '' !== (string) $p['resultado'] ) {
+				$out[ $id ]['guarda_mp']       = (string) $p['resultado'];
+				$out[ $id ]['guarda_mp_fecha'] = self::iso( $r->fecha );
+			}
+		}
+		$rows  = $wpdb->get_results( $wpdb->prepare(
+			'SELECT payload FROM ' . $t . ' WHERE tipo = %s AND payload LIKE %s AND fecha >= %s ORDER BY id DESC LIMIT 100',
+			CN_Webhook::TIPO_AVISO,
+			'%' . $wpdb->esc_like( '"motivo":"sub_sin_vincular"' ) . '%',
+			gmdate( 'Y-m-d H:i:s', $ahora - self::VENTANA_AVISOS )
+		) );
+		$items = array(); // preapproval_id => item
+		foreach ( is_array( $rows ) ? $rows : array() as $r ) {
+			$p = json_decode( (string) $r->payload, true );
+			if ( ! is_array( $p ) || empty( $p['detalle']['items'] ) || ! is_array( $p['detalle']['items'] ) ) {
+				continue;
+			}
+			foreach ( $p['detalle']['items'] as $it ) {
+				$pid = is_array( $it ) && isset( $it['preapproval_id'] ) ? trim( (string) $it['preapproval_id'] ) : '';
+				if ( '' !== $pid && ! isset( $items[ $pid ] ) ) {
+					$items[ $pid ] = $it;
+				}
+			}
+		}
+		foreach ( self::vinculados( array_keys( $items ) ) as $pid ) { // las que ya se vincularon a alguna ficha no cuentan.
+			unset( $items[ $pid ] );
+		}
+		foreach ( $items as $it ) {
+			$ids = array();
+			if ( ! empty( $it['socia_id'] ) ) {
+				$ids[] = (int) $it['socia_id'];
+			}
+			if ( ! empty( $it['candidatas'] ) && is_array( $it['candidatas'] ) ) {
+				$ids = array_merge( $ids, array_map( 'intval', $it['candidatas'] ) );
+			}
+			$m = isset( $it['email'] ) ? strtolower( trim( (string) $it['email'] ) ) : '';
+			if ( '' !== $m && isset( $emails[ $m ] ) ) {
+				$ids = array_merge( $ids, $emails[ $m ] );
+			}
+			foreach ( $ids as $id ) {
+				if ( isset( $out[ $id ] ) ) {
+					$out[ $id ]['sub_sin_vincular'] = true;
+				}
+			}
+		}
+		foreach ( $out as $id => $g ) {
+			$out[ $id ]['apta_winback'] = 'sin_pago' === $g['guarda_mp'] && ! $g['sub_sin_vincular'];
+		}
+		return $out;
+	}
+
 	protected static function socias( $ahora = null ) {
 		global $wpdb;
 		$ahora = null === $ahora ? time() : (int) $ahora;
@@ -211,7 +301,7 @@ class CN_Panel_API {
 		$truncadas = count( $rows ) > self::MAX_SOCIAS;
 		$rows      = array_slice( $rows, 0, self::MAX_SOCIAS );
 		$vencidos  = null;
-		$marcados  = array(); // id => true para las fichas de trial vencido
+		$marcados  = array(); // id => guarda, solo para las fichas de trial vencido
 		if ( self::trials_vencidos_activo() ) {
 			$extra    = self::filas_trials_vencidos( $ahora );
 			$vencidos = array( 'cantidad' => min( count( $extra ), self::MAX_TRIALS_VENCIDOS ), 'truncados' => count( $extra ) > self::MAX_TRIALS_VENCIDOS, 'dias' => self::DIAS_TRIALS_VENCIDOS );
@@ -219,12 +309,17 @@ class CN_Panel_API {
 			foreach ( $rows as $f ) {
 				$ya[ (int) $f->id ] = true;
 			}
+			$nuevas = array();
 			foreach ( array_slice( $extra, 0, self::MAX_TRIALS_VENCIDOS ) as $f ) {
 				if ( ! isset( $ya[ (int) $f->id ] ) ) { // defensa: nunca duplicar una ficha que ya vino en la consulta principal.
-					$rows[]                     = $f;
-					$marcados[ (int) $f->id ] = true;
+					$rows[]   = $f;
+					$nuevas[] = $f;
 				}
 			}
+			$marcados = self::guarda_trials_vencidos( $nuevas, $ahora );
+			$vencidos['aptas_winback'] = count( array_filter( $marcados, function ( $g ) {
+				return $g['apta_winback'];
+			} ) );
 		}
 		$lista     = array();
 		$ext       = self::uso_activo();
@@ -255,7 +350,7 @@ class CN_Panel_API {
 				$lista[ $i ]['uso']     = isset( $uso[ (int) $f->id ] ) ? $uso[ (int) $f->id ] : self::uso_vacio();
 			}
 			if ( isset( $marcados[ (int) $f->id ] ) ) { // solo en las fichas agregadas: las demás quedan exactamente como antes.
-				$lista[ count( $lista ) - 1 ]['trial_vencido'] = true;
+				$lista[ count( $lista ) - 1 ] += array( 'trial_vencido' => true ) + $marcados[ (int) $f->id ];
 			}
 		}
 		return array( 'lista' => $lista, 'truncadas' => $truncadas, 'vencidos' => $vencidos );
