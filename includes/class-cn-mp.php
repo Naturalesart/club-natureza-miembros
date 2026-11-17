@@ -184,7 +184,7 @@ class CN_MP {
 	 * Devuelve el init_point (string) o un WP_Error. Si MP falla, no deja fila pendiente.
 	 */
 	/** Orígenes válidos de una suscripción pendiente: panel y landing (de siempre) + los caminos de los mails (FASE 2, CN_Suscribir). */
-	const ORIGENES_SUSCRIPCION = array( 'panel', 'landing', 'mail_d5', 'mail_d6', 'mail_d7', 'winback', 'upsell' );
+	const ORIGENES_SUSCRIPCION = array( 'panel', 'landing', 'mail_d5', 'mail_d6', 'mail_d7', 'winback', 'upsell', 'club_cartel_full', 'club_cartel_club' );
 	public static function crear_suscripcion_link( $plan, $nombre, $celular, $email = '', $origen = 'panel', $meta = array() ) {
 		global $wpdb;
 		$planes = self::get_planes();
