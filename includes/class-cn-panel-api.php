@@ -22,6 +22,11 @@ if ( ! defined( 'ABSPATH' ) ) exit;
  *   = guarda_mp 'sin_pago' Y sin suscripción sin vincular. Sin decisión registrada => false: ante la duda no se le escribe.
  * - Anti-caché: todas las respuestas (200 y errores) llevan Cache-Control: no-store y X-LiteSpeed-Cache-Control: no-cache. Sin el segundo, LiteSpeed
  *   (con "Cache REST API" activo) guardaba la respuesta autenticada y la servía a pedidos sin token (incidente del 28/10/2026).
+ * - Bloque `cartel` (métricas del cartel de suscripción de la portada, CN_Cartel_Trial / PR #44): SOLO NÚMEROS, nunca datos de fichas.
+ *   modo (off|log|on), por_dia (el conteo de cn_cartel_trial_conteo tal cual, últimos 30 días), clics (pendientes con origen
+ *   club_cartel_full / club_cartel_club: total, por origen y por día) y altas (las mismas con usado = 1, que marca el webhook al autorizar:
+ *   total, por plan y por día). Días en UTC; el día de clics y altas es el del clic (columna `creado`): la pendiente no guarda la fecha
+ *   del alta. Una sola consulta agregada (COUNT ... GROUP BY) a suscripciones_pendientes; no devuelve filas.
  * - Sin migraciones. Quitarlo = borrar el require_once del bootstrap y este archivo.
  */
 class CN_Panel_API {
@@ -37,6 +42,12 @@ class CN_Panel_API {
 	const MAX_ESPERANDO  = 10;
 	const VENTANA_AVISOS = 604800; // 7 días: lo mismo que poda el sync en cn_sync_alertados.
 	const NONCE          = 'cn_panel_token';
+	const CARTEL_ORIGENES = array( 'club_cartel_full', 'club_cartel_club' ); // los de CN_Cartel_Trial (no se depende de esa clase: deploy a medias)
+	const CARTEL_PLANES   = array( 'full', 'basico' );
+	const CARTEL_OPT_MODO = 'cn_cartel_trial_modo';
+	const CARTEL_OPT_CONTEO = 'cn_cartel_trial_conteo';
+	const CARTEL_DIAS     = 30;
+	const CARTEL_MOTIVOS  = array( 'mostrado', 'se_mostraria', 'sin_email', 'sin_celular', 'suscribir_off', 'sin_secreto', 'sin_token', 'con_cache' ); // lista cerrada: nada más sale
 
 	public static function registrar() {
 		add_action( 'rest_api_init', array( __CLASS__, 'registrar_rutas' ) );
@@ -131,6 +142,7 @@ class CN_Panel_API {
 			'alertas'          => self::alertas( $ahora ),
 			'config'           => self::config(),
 			'sync'             => self::sync( $ahora ),
+			'cartel'           => self::cartel( $ahora ),
 		);
 		if ( null !== $s['vencidos'] ) { // solo con el flag prendido: con el flag apagado el JSON no cambia ni en una clave.
 			$out['trials_vencidos'] = $s['vencidos'];
@@ -613,6 +625,85 @@ class CN_Panel_API {
 			'errores_mp_api_24h'     => self::contar_log( 'mp_api_error', $desde ),
 			'cursor'                 => (int) get_option( 'cn_sync_mp_cursor', 0 ),
 			'en_cola_reintento'      => is_array( $cola ) ? count( $cola ) : 0,
+		);
+	}
+
+	// ---------------------------------------------------------------- cartel de la portada (solo números)
+	/**
+	 * Métricas del cartel de suscripción (CN_Cartel_Trial). Solo SELECT y solo agregados: ni filas, ni ids, ni datos de fichas o de MP.
+	 *
+	 * @return array{modo:string,dias:int,zona:string,por_dia:array,clics:array,altas:array}
+	 */
+	protected static function cartel( $ahora ) {
+		global $wpdb;
+		$desde_dia = gmdate( 'Y-m-d', $ahora - ( self::CARTEL_DIAS - 1 ) * DAY_IN_SECONDS );
+		$modo      = (string) get_option( self::CARTEL_OPT_MODO, 'off' );
+		$modo      = in_array( $modo, array( 'log', 'on' ), true ) ? $modo : 'off'; // mismo criterio que CN_Cartel_Trial::modo()
+
+		// por_dia: la opción tal cual, saneada (claves Y-m-d de los últimos 30 días, solo los motivos de la lista cerrada, valores enteros).
+		$conteo  = get_option( self::CARTEL_OPT_CONTEO, array() );
+		$por_dia = array();
+		if ( is_array( $conteo ) ) {
+			foreach ( $conteo as $dia => $motivos ) {
+				if ( ! is_string( $dia ) || ! preg_match( '/^\d{4}-\d{2}-\d{2}$/', $dia ) || $dia < $desde_dia || ! is_array( $motivos ) ) {
+					continue;
+				}
+				foreach ( $motivos as $m => $n ) {
+					if ( in_array( (string) $m, self::CARTEL_MOTIVOS, true ) ) {
+						$por_dia[ $dia ][ (string) $m ] = (int) $n;
+					}
+				}
+			}
+		}
+		krsort( $por_dia );
+
+		$clics = array( 'total' => 0, 'por_origen' => array_fill_keys( self::CARTEL_ORIGENES, 0 ), 'por_dia' => array() );
+		$altas = array( 'total' => 0, 'por_plan' => array_fill_keys( self::CARTEL_PLANES, 0 ), 'por_dia' => array() );
+		$filas = $wpdb->get_results( $wpdb->prepare(
+			'SELECT DATE(creado) AS dia, origen, plan, usado, COUNT(*) AS n FROM ' . CN_DB::tabla( 'suscripciones_pendientes' )
+			. ' WHERE origen IN (%s, %s) GROUP BY DATE(creado), origen, plan, usado',
+			self::CARTEL_ORIGENES[0],
+			self::CARTEL_ORIGENES[1]
+		) );
+		foreach ( (array) $filas as $f ) {
+			$origen = isset( $f->origen ) ? (string) $f->origen : '';
+			if ( ! in_array( $origen, self::CARTEL_ORIGENES, true ) ) {
+				continue;
+			}
+			$n   = (int) ( $f->n ?? 0 );
+			$dia = isset( $f->dia ) ? (string) $f->dia : '';
+			$dia = preg_match( '/^\d{4}-\d{2}-\d{2}$/', $dia ) && $dia >= $desde_dia ? $dia : '';
+			$clics['total']                += $n;
+			$clics['por_origen'][ $origen ] += $n;
+			if ( '' !== $dia ) {
+				if ( ! isset( $clics['por_dia'][ $dia ] ) ) {
+					$clics['por_dia'][ $dia ] = array( 'total' => 0 ) + array_fill_keys( self::CARTEL_ORIGENES, 0 );
+				}
+				$clics['por_dia'][ $dia ]['total']   += $n;
+				$clics['por_dia'][ $dia ][ $origen ] += $n;
+			}
+			$plan = isset( $f->plan ) ? (string) $f->plan : '';
+			if ( 1 === (int) ( $f->usado ?? 0 ) && in_array( $plan, self::CARTEL_PLANES, true ) ) {
+				$altas['total']             += $n;
+				$altas['por_plan'][ $plan ] += $n;
+				if ( '' !== $dia ) {
+					if ( ! isset( $altas['por_dia'][ $dia ] ) ) {
+						$altas['por_dia'][ $dia ] = array( 'total' => 0 ) + array_fill_keys( self::CARTEL_PLANES, 0 );
+					}
+					$altas['por_dia'][ $dia ]['total'] += $n;
+					$altas['por_dia'][ $dia ][ $plan ] += $n;
+				}
+			}
+		}
+		krsort( $clics['por_dia'] );
+		krsort( $altas['por_dia'] );
+		return array(
+			'modo'    => $modo,
+			'dias'    => self::CARTEL_DIAS,
+			'zona'    => 'UTC',
+			'por_dia' => (object) $por_dia, // objeto también vacío: {} en el JSON, no []
+			'clics'   => array( 'total' => $clics['total'], 'por_origen' => $clics['por_origen'], 'por_dia' => (object) $clics['por_dia'] ),
+			'altas'   => array( 'total' => $altas['total'], 'por_plan' => $altas['por_plan'], 'por_dia' => (object) $altas['por_dia'] ),
 		);
 	}
 
