@@ -73,17 +73,20 @@ class CN_Cartel_Trial {
 		if ( null !== $pre && '' !== (string) $pre ) { // misma regla que CN_Auth: NULL y '' = sin suscripción.
 			return null;
 		}
-		$fin = isset( $miembro->fecha_fin_trial ) ? trim( (string) $miembro->fecha_fin_trial ) : '';
-		if ( '' === $fin || '0000-00-00 00:00:00' === $fin ) {
+		// fecha_fin_trial se guarda en UTC (gmdate en el alta del trial, CN_Webhook) y se compara EXACTAMENTE como
+		// CN_Auth::trial_vencido(): vacía o '0000-00-00 00:00:00' = sin trial (manual); vencida si
+		// strtotime( fecha . ' UTC' ) < ahora. En el segundo exacto del fin todavía tiene acceso, así que todavía es elegible.
+		$fin = isset( $miembro->fecha_fin_trial ) ? $miembro->fecha_fin_trial : null;
+		if ( empty( $fin ) || '0000-00-00 00:00:00' === $fin ) {
 			return null; // manual (sin trial)
 		}
 		$ts = strtotime( $fin . ' UTC' );
 		if ( false === $ts ) {
 			return null;
 		}
-		$falta = $ts - self::ahora();
-		if ( $falta <= 0 || $falta > self::VENTANA_SEG ) {
-			return null;
+		$ahora = self::ahora();
+		if ( $ts < $ahora || $ts - $ahora > self::VENTANA_SEG ) {
+			return null; // vencida (misma condición que CN_Auth) o le quedan más de 48 h
 		}
 		return $ts;
 	}
@@ -103,6 +106,20 @@ class CN_Cartel_Trial {
 		$tz = function_exists( 'wp_timezone' ) ? wp_timezone() : new DateTimeZone( 'America/Argentina/Buenos_Aires' );
 		$d  = ( new DateTimeImmutable( '@' . (int) $ts ) )->setTimezone( $tz );
 		return self::DIAS_SEMANA[ (int) $d->format( 'w' ) ] . ' ' . $d->format( 'd/m' );
+	}
+
+	/** Precio del plan con formato argentino ("$" + miles con punto), leído de CN_MP::PLANES (nunca escrito a mano). */
+	public static function precio( $plan ) {
+		$planes = CN_MP::get_planes();
+		$p      = isset( $planes[ $plan ]['precio'] ) ? (int) $planes[ $plan ]['precio'] : 0;
+		return $p > 0 ? '$' . number_format( $p, 0, ',', '.' ) : '';
+	}
+
+	/** Texto de cada botón: "Quiero el Full · <precio>/mes →" y "Seguir con el Plan Club · <precio>/mes →". */
+	public static function etiqueta( $plan ) {
+		$precio = self::precio( $plan );
+		$base   = 'full' === $plan ? 'Quiero el Full' : 'Seguir con el Plan Club';
+		return $base . ( '' !== $precio ? ' · ' . $precio . '/mes' : '' ) . ' →';
 	}
 
 	public static function texto( $vistas, $ts_fin ) {
@@ -227,8 +244,8 @@ class CN_Cartel_Trial {
 		<section class="cn-seccion cn-cartel-trial" aria-label="Tu prueba del club">
 			<p class="cn-cartel-trial__texto"><?php echo esc_html( $texto ); ?></p>
 			<div class="cn-cartel-trial__botones">
-				<a class="cn-boton cn-boton--full" rel="nofollow" href="<?php echo esc_url( $links['full'] ); ?>" onclick="<?php echo esc_attr( $js ); ?>">Quiero el Full →</a>
-				<a class="cn-boton cn-boton--club" rel="nofollow" href="<?php echo esc_url( $links['club'] ); ?>" onclick="<?php echo esc_attr( $js ); ?>">Seguir con el Plan Club →</a>
+				<a class="cn-boton cn-boton--full" rel="nofollow" href="<?php echo esc_url( $links['full'] ); ?>" onclick="<?php echo esc_attr( $js ); ?>"><?php echo esc_html( self::etiqueta( 'full' ) ); ?></a>
+				<a class="cn-boton cn-boton--club" rel="nofollow" href="<?php echo esc_url( $links['club'] ); ?>" onclick="<?php echo esc_attr( $js ); ?>"><?php echo esc_html( self::etiqueta( 'basico' ) ); ?></a>
 			</div>
 		</section>
 		<?php

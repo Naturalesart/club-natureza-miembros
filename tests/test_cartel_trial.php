@@ -153,6 +153,48 @@ t( 'N=1: singular', 'Entraste a 1 clase del club. Tu prueba termina el jueves 19
 t( 'N=0: solo la fecha', 'Tu prueba termina el jueves 19/11.' === CN_Cartel_Trial::texto( 0, $ts ) );
 t( 'sin palabras de urgencia ni descuentos', 0 === preg_match( '/últim|apurate|ya mismo|descuento|gratis|oferta|%/iu', CN_Cartel_Trial::texto( 5, $ts ) ) );
 
+seccion( 'precio en los botones: sale de CN_MP::PLANES' );
+t( 'precio Full = CN_MP::PLANES[full]', '$' . number_format( CN_MP::PLANES['full']['precio'], 0, ',', '.' ) === CN_Cartel_Trial::precio( 'full' ) && '$32.000' === CN_Cartel_Trial::precio( 'full' ) );
+t( 'precio Club = CN_MP::PLANES[basico]', '$' . number_format( CN_MP::PLANES['basico']['precio'], 0, ',', '.' ) === CN_Cartel_Trial::precio( 'basico' ) && '$15.500' === CN_Cartel_Trial::precio( 'basico' ) );
+t( 'etiqueta Full', 'Quiero el Full · $32.000/mes →' === CN_Cartel_Trial::etiqueta( 'full' ) );
+t( 'etiqueta Club', 'Seguir con el Plan Club · $15.500/mes →' === CN_Cartel_Trial::etiqueta( 'basico' ) );
+t( 'plan desconocido: sin precio inventado', '' === CN_Cartel_Trial::precio( 'premium' ) );
+$clase_src = file_get_contents( dirname( __DIR__ ) . '/includes/class-cn-cartel-trial.php' );
+t( 'los precios no están escritos a mano en la clase', false === strpos( $clase_src, '32.000' ) && false === strpos( $clase_src, '32000' ) && false === strpos( $clase_src, '15.500' ) && false === strpos( $clase_src, '15500' ) );
+
+seccion( 'zona horaria: fecha_fin_trial en UTC, misma lógica que CN_Auth' );
+$tz_antes = date_default_timezone_get();
+date_default_timezone_set( 'America/Argentina/Buenos_Aires' ); // la zona del servidor PHP no tiene que cambiar nada
+$fin_utc = '2026-11-19 02:00:00'; // 23:00 del 18/11 en Argentina
+$ts_utc  = gmmktime( 2, 0, 0, 11, 19, 2026 );
+CN_Cartel_Trial::$reloj = $ts_utc - 3600;
+t( 'se lee como UTC: 1 h antes del fin (UTC) es elegible', $ts_utc === CN_Cartel_Trial::fin_trial_si_elegible( ctt_miembro( 0, array( 'fecha_fin_trial' => $fin_utc ) ) ) );
+CN_Cartel_Trial::$reloj = $ts_utc + 90 * 60;
+t( 'se lee como UTC: 1:30 h después del fin (UTC) ya no (si se leyera en hora argentina seguiría vigente)', null === CN_Cartel_Trial::fin_trial_si_elegible( ctt_miembro( 0, array( 'fecha_fin_trial' => $fin_utc ) ) ) );
+CN_Cartel_Trial::$reloj = $ts_utc;
+t( 'en el segundo exacto del fin: elegible (CN_Auth todavía deja entrar: vencido solo si fin < ahora)', $ts_utc === CN_Cartel_Trial::fin_trial_si_elegible( ctt_miembro( 0, array( 'fecha_fin_trial' => $fin_utc ) ) ) );
+CN_Cartel_Trial::$reloj = $ts_utc + 1;
+t( 'un segundo después: no', null === CN_Cartel_Trial::fin_trial_si_elegible( ctt_miembro( 0, array( 'fecha_fin_trial' => $fin_utc ) ) ) );
+CN_Cartel_Trial::$reloj = $ts_utc - 172800;
+t( 'a 48 h justas: elegible', null !== CN_Cartel_Trial::fin_trial_si_elegible( ctt_miembro( 0, array( 'fecha_fin_trial' => $fin_utc ) ) ) );
+CN_Cartel_Trial::$reloj = $ts_utc - 172801;
+t( 'a 48 h + 1 s: no', null === CN_Cartel_Trial::fin_trial_si_elegible( ctt_miembro( 0, array( 'fecha_fin_trial' => $fin_utc ) ) ) );
+CN_Cartel_Trial::$reloj = null;
+$paridad = true;
+foreach ( array( -86400, -3600, -60, 60, 3600, 47 * 3600 ) as $off ) { // reloj real, como CN_Auth
+	$f       = gmdate( 'Y-m-d H:i:s', time() + $off );
+	$vencido = cn_llamar( 'CN_Auth', 'trial_vencido', $f );
+	$eleg    = null !== CN_Cartel_Trial::fin_trial_si_elegible( ctt_miembro( 0, array( 'fecha_fin_trial' => $f ) ) );
+	if ( $vencido === $eleg ) { // vencido para CN_Auth <=> nunca elegible; vigente con <= 48 h <=> elegible
+		$paridad = false;
+	}
+}
+t( 'paridad con CN_Auth::trial_vencido para fechas vencidas y vigentes', $paridad );
+foreach ( array( null, '', '0000-00-00 00:00:00' ) as $vacia ) {
+	t( 'fecha vacía (' . var_export( $vacia, true ) . '): CN_Auth no la vence y el cartel la trata como manual', false === cn_llamar( 'CN_Auth', 'trial_vencido', $vacia ) && null === CN_Cartel_Trial::fin_trial_si_elegible( ctt_miembro( 0, array( 'fecha_fin_trial' => $vacia ) ) ) );
+}
+date_default_timezone_set( $tz_antes );
+
 seccion( 'clases vistas: solo lectura de wp_cn_vistos, solo videos' );
 $w = ctt_preparar( 'on', null, 7 );
 t( 'cuenta lo que devuelve la base', 7 === CN_Cartel_Trial::clases_vistas( 77 ) );
@@ -169,9 +211,9 @@ $m = ctt_miembro( 30 );
 $h = CN_Cartel_Trial::html( $m );
 t( 'on: hay cartel', '' !== $h && false !== strpos( $h, 'cn-cartel-trial' ) );
 t( 'texto con N y la fecha', false !== strpos( $h, 'Entraste a 4 clases del club. Tu prueba termina el ' ) );
-$pos_full = strpos( $h, 'Quiero el Full →' );
-$pos_club = strpos( $h, 'Seguir con el Plan Club →' );
-t( 'los dos botones, Full arriba', false !== $pos_full && false !== $pos_club && $pos_full < $pos_club );
+$pos_full = strpos( $h, '>Quiero el Full · $32.000/mes →</a>' );
+$pos_club = strpos( $h, '>Seguir con el Plan Club · $15.500/mes →</a>' );
+t( 'los dos botones con su precio por mes, Full arriba', false !== $pos_full && false !== $pos_club && $pos_full < $pos_club );
 $hrefs = ctt_hrefs( $h );
 t( 'exactamente 2 links, los dos al endpoint ?cn_suscribir=', 2 === count( $hrefs ) && 0 === strpos( $hrefs[0], 'https://naturalesart.com/?cn_suscribir=' ) && 0 === strpos( $hrefs[1], 'https://naturalesart.com/?cn_suscribir=' ), implode( ' | ', $hrefs ) );
 $v_full = CN_Suscribir::verificar( ctt_token_de( $hrefs[0] ) );
@@ -304,7 +346,7 @@ t( 'carga con guard file_exists (deploy por SFTP)', 1 === preg_match( "/if \( fi
 ]*
 \s*require_once CN_PATH \. 'includes\/class-cn-cartel-trial\.php';/", $main ) );
 t( 'clase: sin UPDATE/DELETE/INSERT directos', 0 === preg_match( '/\b(UPDATE|DELETE FROM|INSERT INTO)\b|->(update|delete|insert|query)\(/', $clase ) );
-t( 'clase: no toca login, sesiones, webhook de MP ni sync', 0 === preg_match( '/CN_Auth::|CN_Sync::|CN_MP::|crear_sesion|logout|wp_remote_|wp_mail\(/', $clase ) );
+t( 'clase: no toca login, sesiones, webhook de MP ni sync (de CN_MP solo lee get_planes)', 0 === preg_match( '/CN_Auth::|CN_Sync::|CN_MP::(?!get_planes\(\))|crear_sesion|logout|wp_remote_|wp_mail\(/', $clase ) );
 t( 'clase: sin WhatsApp', false === stripos( $clase, 'whatsapp' ) && false === stripos( $clase, 'wa.me' ) );
 t( 'clase: el modo por defecto es off', false !== strpos( $clase, "get_option( self::OPT_MODO, 'off' )" ) );
 CN_Cartel_Trial::$reloj     = null;
