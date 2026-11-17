@@ -74,6 +74,9 @@ if ( file_exists( CN_PATH . 'includes/class-cn-suscribir.php' ) ) { // mismo gua
 	require_once CN_PATH . 'includes/class-cn-suscribir.php'; // FASE 2: ?cn_suscribir=<token> (link firmado por ficha desde los mails). Inerte con cn_suscribir_modo 'off' (default) o sin secreto.
 	add_action( 'init', array( 'CN_Suscribir', 'registrar' ) );
 }
+if ( file_exists( CN_PATH . 'includes/class-cn-cartel-trial.php' ) ) { // mismo guard.
+	require_once CN_PATH . 'includes/class-cn-cartel-trial.php'; // cartel de suscripción en la portada del club para trials con 48 h o menos. Inerte con cn_cartel_trial_modo 'off' (default).
+}
 CN_Planes_MP::registrar();
 // Rol "Colaboradora Club": acceso acotado (solo cargar contenido), sin permisos de administrador.
 add_action( 'init', array( 'CN_Colaboradora', 'registrar_rol' ) );

@@ -1444,6 +1444,11 @@ class CN_Admin {
 			if ( isset( $_POST['cn_suscribir_modo'] ) && class_exists( 'CN_Suscribir' ) ) {
 				update_option( CN_Suscribir::OPT_MODO, 'on' === sanitize_key( wp_unslash( $_POST['cn_suscribir_modo'] ) ) ? 'on' : 'off' );
 			}
+			// Cartel de suscripción en la portada del club (trials con 48 h o menos). off por defecto.
+			if ( isset( $_POST['cn_cartel_trial_modo'] ) && class_exists( 'CN_Cartel_Trial' ) ) {
+				$cn_cartel_nuevo = sanitize_key( wp_unslash( $_POST['cn_cartel_trial_modo'] ) );
+				update_option( CN_Cartel_Trial::OPT_MODO, in_array( $cn_cartel_nuevo, array( 'log', 'on' ), true ) ? $cn_cartel_nuevo : 'off' );
+			}
 			update_option( CN_Retorno::OPT_WHATSAPP, preg_replace( '/\D+/', '', sanitize_text_field( wp_unslash( $_POST['cn_retorno_whatsapp'] ?? '' ) ) ) ); // solo dígitos
 			// API de solo lectura del panel de socias (CN_Panel_API). Apagada por defecto.
 			update_option( CN_Panel_API::OPT_ACTIVO, isset( $_POST['cn_panel_api_activo'] ) ? '1' : '0' );
@@ -1457,6 +1462,7 @@ class CN_Admin {
 		$panel_token_nuevo = CN_Panel_API::procesar_generar_token(); // botón "Generar/rotar token": se muestra una sola vez.
 		$suscribir_cfg     = class_exists( 'CN_Suscribir' ) ? CN_Suscribir::procesar_config() : array(); // botones "Generar secreto" / "Armar link": se muestran una sola vez.
 		$suscribir_modo    = class_exists( 'CN_Suscribir' ) ? CN_Suscribir::modo() : 'off';
+		$cartel_trial_modo = class_exists( 'CN_Cartel_Trial' ) ? CN_Cartel_Trial::modo() : 'off';
 		$panel_activo      = CN_Panel_API::activo();
 		$token        = CN_MP::get_access_token();
 		$token_trial  = CN_MP::get_access_token_trial();
@@ -1560,6 +1566,36 @@ class CN_Admin {
 								<option value="on" <?php selected( 'on', $suscribir_modo ); ?>>Encendido (crea la suscripción de la ficha y manda a pagar)</option>
 							</select>
 							<p class="description">Apagado por defecto. Con el endpoint apagado o sin secreto, el link <code>?cn_suscribir=</code> solo redirige a /planes-club/. El secreto y los links de prueba están más abajo, en su bloque. Marcha atrás: Apagado.</p>
+						</td>
+					</tr>
+					<?php endif; ?>
+					<?php if ( class_exists( 'CN_Cartel_Trial' ) ) : ?>
+					<tr>
+						<th><label>Cartel de suscripción en el club (trials con 48 h o menos)</label></th>
+						<td>
+							<select name="cn_cartel_trial_modo">
+								<option value="off" <?php selected( 'off', $cartel_trial_modo ); ?>>Apagado</option>
+								<option value="log" <?php selected( 'log', $cartel_trial_modo ); ?>>Solo registrar (no se muestra)</option>
+								<option value="on" <?php selected( 'on', $cartel_trial_modo ); ?>>Encendido (se muestra en la portada del club)</option>
+							</select>
+							<p class="description">Apagado por defecto. Botones Full y Plan Club con el link firmado de la ficha (orígenes club_cartel_full y club_cartel_club); necesita el link firmado encendido y con secreto. Marcha atrás: Apagado.</p>
+							<?php
+							$cn_cartel_conteo = array_slice( CN_Cartel_Trial::conteo(), 0, 7, true );
+							if ( $cn_cartel_conteo ) :
+								?>
+								<p class="description"><strong>Conteo por día (fichas distintas):</strong></p>
+								<ul class="description" style="margin-top:0;">
+									<?php foreach ( $cn_cartel_conteo as $cn_dia => $cn_motivos ) : ?>
+										<li><?php echo esc_html( $cn_dia ); ?>: <?php
+										$cn_partes = array();
+										foreach ( (array) $cn_motivos as $cn_m => $cn_n ) {
+											$cn_partes[] = sanitize_key( $cn_m ) . ' ' . (int) $cn_n;
+										}
+										echo esc_html( implode( ' · ', $cn_partes ) );
+										?></li>
+									<?php endforeach; ?>
+								</ul>
+							<?php endif; ?>
 						</td>
 					</tr>
 					<?php endif; ?>

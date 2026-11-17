@@ -317,7 +317,7 @@ $sin = CN_MP::crear_suscripcion_link( 'basico', 'Socia Prueba', SP_CEL, '', 'lan
 t( 'crear_suscripcion_link SIN email: WP_Error (pide el email de Mercado Pago), sin llamar a MP ni escribir la pendiente (MP exige payer_email)', is_wp_error( $sin ) && false !== strpos( $sin->get_error_message(), 'Mercado Pago' ) && ! cn_http_calls( '#/preapproval#' ) && ! $GLOBALS['wpdb']->escrituras( 'suscripciones_pendientes' ) );
 $inv = CN_MP::crear_suscripcion_link( 'basico', 'Socia Prueba', SP_CEL, 'no-es-email', 'landing' );
 t( 'crear_suscripcion_link con email inválido: WP_Error Email inválido, sin llamar a MP', is_wp_error( $inv ) && 'Email inválido.' === $inv->get_error_message() && ! cn_http_calls( '#/preapproval#' ) );
-t( 'crear_suscripcion_link acepta los orígenes de los mails y sigue rechazando uno inventado', is_wp_error( CN_MP::crear_suscripcion_link( 'basico', 'Socia Prueba', SP_CEL, '', 'instagram' ) ) && array( 'panel', 'landing', 'mail_d5', 'mail_d6', 'mail_d7', 'winback', 'upsell' ) === CN_MP::ORIGENES_SUSCRIPCION );
+t( 'crear_suscripcion_link acepta los orígenes de los mails y sigue rechazando uno inventado', is_wp_error( CN_MP::crear_suscripcion_link( 'basico', 'Socia Prueba', SP_CEL, '', 'instagram' ) ) && array( 'panel', 'landing', 'mail_d5', 'mail_d6', 'mail_d7', 'winback', 'upsell', 'club_cartel_full', 'club_cartel_club' ) === CN_MP::ORIGENES_SUSCRIPCION );
 $main = file_get_contents( dirname( __DIR__ ) . '/club-natureza-miembros.php' );
 t( 'el plugin carga la clase con guard y la engancha en init', false !== strpos( $main, "class-cn-suscribir.php" ) && false !== strpos( $main, "array( 'CN_Suscribir', 'registrar' )" ) );
 $db = file_get_contents( dirname( __DIR__ ) . '/includes/class-cn-db.php' );

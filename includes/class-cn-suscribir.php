@@ -11,7 +11,8 @@ if ( ! defined( 'ABSPATH' ) ) exit;
  *
  * Token = <ficha_id>.<plan>.<origen>.<vence>.<HMAC>
  *   - plan   en lista cerrada: basico | full
- *   - origen en lista cerrada: mail_d5 | mail_d6 | mail_d7 | winback | upsell
+ *   - origen en lista cerrada: mail_d5 | mail_d6 | mail_d7 | winback | upsell | club_cartel_full | club_cartel_club
+ *     (los dos últimos: botones del cartel de la portada del club, CN_Cartel_Trial)
  *   - vence  = timestamp Unix (segundos); el generador usa 30 días por defecto
  *   - HMAC   = hash_hmac( 'sha256', "<ficha_id>.<plan>.<origen>.<vence>", SECRETO ) en hex (64 caracteres, minúsculas)
  *   SECRETO = opción cn_suscribir_secreto (texto plano, compartido con n8n; wp_salt no sirve porque n8n tiene que
@@ -42,7 +43,7 @@ class CN_Suscribir {
 	const OPT_MODO      = 'cn_suscribir_modo';    // off | on
 	const OPT_SECRETO   = 'cn_suscribir_secreto'; // texto plano: n8n firma con el mismo secreto
 	const PLANES        = array( 'basico', 'full' );
-	const ORIGENES      = array( 'mail_d5', 'mail_d6', 'mail_d7', 'winback', 'upsell' );
+	const ORIGENES      = array( 'mail_d5', 'mail_d6', 'mail_d7', 'winback', 'upsell', 'club_cartel_full', 'club_cartel_club' );
 	const VENCE_DIAS    = 30;      // vencimiento por defecto del generador de tokens
 	const MAX_INTENTOS  = 8;       // pedidos por IP…
 	const VENTANA_SEG   = 600;     // …cada 10 minutos (igual que [cn_planes_form])
@@ -127,7 +128,7 @@ class CN_Suscribir {
 			return $r;
 		}
 		if ( ! is_string( $token ) || strlen( $token ) > 160
-			|| ! preg_match( '/^([1-9][0-9]{0,11})\.(basico|full)\.(mail_d5|mail_d6|mail_d7|winback|upsell)\.([0-9]{9,11})\.([a-f0-9]{64})\z/', $token, $m ) ) {
+			|| ! preg_match( '/^([1-9][0-9]{0,11})\.(basico|full)\.(mail_d5|mail_d6|mail_d7|winback|upsell|club_cartel_full|club_cartel_club)\.([0-9]{9,11})\.([a-f0-9]{64})\z/', $token, $m ) ) {
 			return $r;
 		}
 		$payload = $m[1] . '.' . $m[2] . '.' . $m[3] . '.' . $m[4];
@@ -393,7 +394,7 @@ class CN_Suscribir {
 				origen <select name="cn_suscribir_origen"><?php foreach ( self::ORIGENES as $o ) : ?><option value="<?php echo esc_attr( $o ); ?>"><?php echo esc_html( $o ); ?></option><?php endforeach; ?></select>
 				<?php submit_button( 'Armar link', 'secondary', 'cn_suscribir_link', false ); ?>
 			</p>
-			<p class="description">Receta del token (la misma para n8n): <code>&lt;ficha&gt;.&lt;plan&gt;.&lt;origen&gt;.&lt;vence&gt;</code> + <code>.</code> + HMAC-SHA256 en hex de ese texto con el secreto. Planes: basico, full. Orígenes: mail_d5, mail_d6, mail_d7, winback, upsell. Vence: timestamp Unix en segundos.</p>
+			<p class="description">Receta del token (la misma para n8n): <code>&lt;ficha&gt;.&lt;plan&gt;.&lt;origen&gt;.&lt;vence&gt;</code> + <code>.</code> + HMAC-SHA256 en hex de ese texto con el secreto. Planes: basico, full. Orígenes: mail_d5, mail_d6, mail_d7, winback, upsell (y club_cartel_full, club_cartel_club, que usa el cartel del club). Vence: timestamp Unix en segundos.</p>
 		</form>
 		<?php
 	}

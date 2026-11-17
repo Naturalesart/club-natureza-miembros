@@ -353,6 +353,11 @@ class CN_Shortcodes {
 			if ( $curso ) {
 				self::render_curso( $miembro, $curso );
 			} else {
+				// Experimento: cartel de suscripción para trials que terminan en 48 h o menos, solo en la portada. Va después de
+				// CN_Auth (la socia ya está adentro) y no cambia el acceso. Inerte con cn_cartel_trial_modo 'off' (default).
+				if ( class_exists( 'CN_Cartel_Trial' ) ) {
+					echo CN_Cartel_Trial::html( $miembro ); // phpcs:ignore WordPress.Security.EscapeOutput -- escapado adentro.
+				}
 				self::render_home( $miembro );
 			}
 		} else {
