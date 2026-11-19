@@ -2,7 +2,11 @@
 if ( ! defined( 'ABSPATH' ) ) exit;
 /**
  * Experimento: cartel "suscribite" ADENTRO del club, solo en la portada ([cn_login] sin ?cn_curso), para las fichas con
- * trial activo a las que les quedan 48 h o menos.
+ * trial activo a las que les quedan 48 h o menos (ventana configurable: opción cn_cartel_trial_ventana_h = 48 | 168; con
+ * 168 se muestra durante todo el trial; cualquier otro valor = 48).
+ *
+ * Con más de 48 h por delante el texto es "Cuando quieras, seguí con tu plan. Tu prueba termina el jueves 19/11."; con
+ * 48 h o menos, el de abajo.
  *
  * Texto real, sin urgencia falsa: "Entraste a N clases del club. Tu prueba termina el jueves 19/11." (con N = 0, solo la
  * fecha). Dos botones, cada uno con el link firmado existente (?cn_suscribir=, CN_Suscribir) de ESA ficha:
@@ -32,7 +36,9 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 class CN_Cartel_Trial {
 	const OPT_MODO     = 'cn_cartel_trial_modo';   // off | log | on
 	const OPT_CONTEO   = 'cn_cartel_trial_conteo'; // array( 'Y-m-d' => array( motivo => n ) ), últimos DIAS_CONTEO días
-	const VENTANA_SEG  = 172800;                   // 48 h antes de fecha_fin_trial
+	const OPT_VENTANA  = 'cn_cartel_trial_ventana_h'; // 48 (por defecto) | 168 (todo el trial)
+	const VENTANAS_H   = array( 48, 168 );
+	const VENTANA_SEG  = 172800;                   // 48 h: ventana por defecto y corte entre los dos textos
 	const TOKEN_SEG    = 21600;                    // el token del cartel vence a las 6 h (o antes, si termina el trial)
 	const DIAS_CONTEO  = 30;
 	const ORIGEN_FULL  = 'club_cartel_full';
@@ -50,6 +56,18 @@ class CN_Cartel_Trial {
 		return in_array( $m, array( 'log', 'on' ), true ) ? $m : 'off';
 	}
 
+	/** Horas antes del fin del trial en que se muestra el cartel: 48 o 168. Cualquier otro valor = 48. */
+	public static function ventana_h() {
+		$v = get_option( self::OPT_VENTANA, 48 );
+		if ( is_int( $v ) || ( is_string( $v ) && ctype_digit( $v ) ) ) {
+			$v = (int) $v;
+			if ( in_array( $v, self::VENTANAS_H, true ) ) {
+				return $v;
+			}
+		}
+		return 48;
+	}
+
 	protected static function ahora() {
 		return null === self::$reloj ? time() : (int) self::$reloj;
 	}
@@ -62,8 +80,8 @@ class CN_Cartel_Trial {
 	}
 
 	/**
-	 * Timestamp de fin del trial si la ficha es del público del cartel (trial activo, sin suscripción, termina en 48 h o
-	 * menos); null si no. Usa solo lo que ya trae CN_Auth::get_miembro_actual().
+	 * Timestamp de fin del trial si la ficha es del público del cartel (trial activo, sin suscripción, termina dentro de la
+	 * ventana: 48 h por defecto, 168 h si así está configurado); null si no. Usa solo lo que ya trae CN_Auth::get_miembro_actual().
 	 */
 	public static function fin_trial_si_elegible( $miembro ) {
 		if ( ! is_object( $miembro ) || 'activo' !== (string) ( $miembro->estado ?? '' ) ) {
@@ -85,8 +103,8 @@ class CN_Cartel_Trial {
 			return null;
 		}
 		$ahora = self::ahora();
-		if ( $ts < $ahora || $ts - $ahora > self::VENTANA_SEG ) {
-			return null; // vencida (misma condición que CN_Auth) o le quedan más de 48 h
+		if ( $ts < $ahora || $ts - $ahora > self::ventana_h() * 3600 ) {
+			return null; // vencida (misma condición que CN_Auth) o le queda más que la ventana
 		}
 		return $ts;
 	}
@@ -122,8 +140,12 @@ class CN_Cartel_Trial {
 		return $base . ( '' !== $precio ? ' · ' . $precio . '/mes' : '' ) . ' →';
 	}
 
+	/** Más de 48 h por delante: invitación tranquila. 48 h o menos: clases vistas + fecha (como siempre). */
 	public static function texto( $vistas, $ts_fin ) {
 		$fecha = 'Tu prueba termina el ' . self::dia_fin( $ts_fin ) . '.';
+		if ( (int) $ts_fin - self::ahora() > self::VENTANA_SEG ) {
+			return 'Cuando quieras, seguí con tu plan. ' . $fecha;
+		}
 		$n     = (int) $vistas;
 		if ( $n <= 0 ) {
 			return $fecha;
