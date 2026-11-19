@@ -38,6 +38,10 @@ require_once CN_PATH . 'includes/class-cn-espejo-mp.php';
 require_once CN_PATH . 'includes/class-cn-espejo-auditoria.php'; // pantalla "Auditoría del espejo" (solo lectura; se engancha sola).
 require_once CN_PATH . 'includes/class-cn-panel-api.php'; // API REST de solo lectura para el panel de socias (n8n); apagada por defecto (cn_panel_api_activo).
 require_once CN_PATH . 'includes/class-cn-sync.php';
+if ( file_exists( CN_PATH . 'includes/class-cn-autovincular.php' ) ) { // el guard evita un fatal si el deploy por SFTP sube este archivo antes que la clase nueva.
+	require_once CN_PATH . 'includes/class-cn-autovincular.php'; // auto-vinculación por candidata única: corre tras el sync; inerte con cn_autovincular_modo 'off' (default).
+	CN_Autovincular::registrar();
+}
 require_once CN_PATH . 'includes/class-cn-shortcodes.php';
 require_once CN_PATH . 'includes/class-cn-admin.php';
 require_once CN_PATH . 'includes/class-cn-colaboradora.php';
