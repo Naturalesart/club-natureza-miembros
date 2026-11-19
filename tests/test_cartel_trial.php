@@ -146,12 +146,76 @@ t( 'no elegibles: no se cuentan ni se loguean', array() === CN_Cartel_Trial::con
 
 seccion( 'texto: real, sin urgencia falsa' );
 $ts = gmmktime( 15, 0, 0, 11, 19, 2026 ); // 19/11/2026 15:00 UTC = 12:00 en Argentina (jueves)
+CN_Cartel_Trial::$reloj = $ts - 30 * 3600; // 30 h antes: tramo de 48 h o menos (texto de siempre)
 t( 'día y fecha en hora de Argentina: "jueves 19/11"', 'jueves 19/11' === CN_Cartel_Trial::dia_fin( $ts ), CN_Cartel_Trial::dia_fin( $ts ) );
 t( '02:00 UTC del 20/11 es todavía el jueves 19/11 en Argentina', 'jueves 19/11' === CN_Cartel_Trial::dia_fin( gmmktime( 2, 0, 0, 11, 20, 2026 ) ) );
 t( 'N=5: "Entraste a 5 clases del club. Tu prueba termina el jueves 19/11."', 'Entraste a 5 clases del club. Tu prueba termina el jueves 19/11.' === CN_Cartel_Trial::texto( 5, $ts ) );
 t( 'N=1: singular', 'Entraste a 1 clase del club. Tu prueba termina el jueves 19/11.' === CN_Cartel_Trial::texto( 1, $ts ) );
 t( 'N=0: solo la fecha', 'Tu prueba termina el jueves 19/11.' === CN_Cartel_Trial::texto( 0, $ts ) );
 t( 'sin palabras de urgencia ni descuentos', 0 === preg_match( '/últim|apurate|ya mismo|descuento|gratis|oferta|%/iu', CN_Cartel_Trial::texto( 5, $ts ) ) );
+CN_Cartel_Trial::$reloj = $ts - 172800;
+t( 'a 48 h justas: todavía el texto de siempre', 'Entraste a 5 clases del club. Tu prueba termina el jueves 19/11.' === CN_Cartel_Trial::texto( 5, $ts ) );
+CN_Cartel_Trial::$reloj = $ts - 172801;
+t( 'a 48 h + 1 s: "Cuando quieras, seguí con tu plan. Tu prueba termina el jueves 19/11."', 'Cuando quieras, seguí con tu plan. Tu prueba termina el jueves 19/11.' === CN_Cartel_Trial::texto( 5, $ts ), CN_Cartel_Trial::texto( 5, $ts ) );
+CN_Cartel_Trial::$reloj = $ts - 6 * 86400;
+t( 'con 6 días: texto tranquilo, sin conteo de clases (también con N=0)', 'Cuando quieras, seguí con tu plan. Tu prueba termina el jueves 19/11.' === CN_Cartel_Trial::texto( 5, $ts ) && 'Cuando quieras, seguí con tu plan. Tu prueba termina el jueves 19/11.' === CN_Cartel_Trial::texto( 0, $ts ) );
+t( 'texto tranquilo: sin palabras de urgencia ni descuentos', 0 === preg_match( '/últim|apurate|ya mismo|descuento|gratis|oferta|%/iu', CN_Cartel_Trial::texto( 5, $ts ) ) );
+CN_Cartel_Trial::$reloj = null;
+
+seccion( 'ventana configurable: cn_cartel_trial_ventana_h (48 por defecto | 168)' );
+cn_test_reset();
+t( 'sin opción: 48', 48 === CN_Cartel_Trial::ventana_h() );
+foreach ( array( 168, '168' ) as $v ) {
+	update_option( CN_Cartel_Trial::OPT_VENTANA, $v );
+	t( 'valor ' . var_export( $v, true ) . ': 168', 168 === CN_Cartel_Trial::ventana_h() );
+}
+foreach ( array( 72, '72', 0, -1, '168h', '', 'todo', null, 168.0, array( 168 ), true ) as $v ) {
+	update_option( CN_Cartel_Trial::OPT_VENTANA, $v );
+	t( 'valor inválido ' . str_replace( "\n", '', var_export( $v, true ) ) . ': 48', 48 === CN_Cartel_Trial::ventana_h() );
+}
+update_option( CN_Cartel_Trial::OPT_VENTANA, 72 );
+t( 'inválido = 48: con 49 h no es elegible y con 47 h sí', null === CN_Cartel_Trial::fin_trial_si_elegible( ctt_miembro( 49 ) ) && null !== CN_Cartel_Trial::fin_trial_si_elegible( ctt_miembro( 47 ) ) );
+update_option( CN_Cartel_Trial::OPT_VENTANA, 48 );
+foreach ( array( 47 => true, 49 => false, 144 => false ) as $hs => $esperado ) {
+	t( "con 48: trial con {$hs} h " . ( $esperado ? 'sí' : 'no' ), $esperado === ( null !== CN_Cartel_Trial::fin_trial_si_elegible( ctt_miembro( $hs ) ) ) );
+}
+update_option( CN_Cartel_Trial::OPT_VENTANA, 168 );
+foreach ( array( 1 => true, 47 => true, 49 => true, 144 => true, 167 => true, 169 => false, -1 => false ) as $hs => $esperado ) {
+	t( "con 168: trial con {$hs} h " . ( $esperado ? 'sí' : 'no' ), $esperado === ( null !== CN_Cartel_Trial::fin_trial_si_elegible( ctt_miembro( $hs ) ) ) );
+}
+t( 'con 168: suscriptas y manuales siguen afuera', null === CN_Cartel_Trial::fin_trial_si_elegible( ctt_miembro( 100, array( 'preapproval_id' => 'pre_1' ) ) ) && null === CN_Cartel_Trial::fin_trial_si_elegible( ctt_miembro( 100, array( 'fecha_fin_trial' => null ) ) ) );
+$fin_v = gmmktime( 15, 0, 0, 11, 19, 2026 );
+CN_Cartel_Trial::$reloj = $fin_v - 168 * 3600;
+t( 'con 168: a 168 h justas, elegible', $fin_v === CN_Cartel_Trial::fin_trial_si_elegible( ctt_miembro( 0, array( 'fecha_fin_trial' => gmdate( 'Y-m-d H:i:s', $fin_v ) ) ) ) );
+CN_Cartel_Trial::$reloj = $fin_v - 168 * 3600 - 1;
+t( 'con 168: a 168 h + 1 s, no', null === CN_Cartel_Trial::fin_trial_si_elegible( ctt_miembro( 0, array( 'fecha_fin_trial' => gmdate( 'Y-m-d H:i:s', $fin_v ) ) ) ) );
+CN_Cartel_Trial::$reloj = null;
+
+// Con 168 y 6 días restantes: se muestra con el texto tranquilo; conteo y log iguales (una vez por ficha y día).
+$w = ctt_preparar( 'on', null, 4 );
+update_option( CN_Cartel_Trial::OPT_VENTANA, 168 );
+$m6 = ctt_miembro( 6 * 24 );
+$h  = CN_Cartel_Trial::html( $m6 );
+t( 'con 168 y 6 días restantes: se muestra el cartel', '' !== $h && false !== strpos( $h, 'cn-cartel-trial' ) );
+t( 'con 6 días: "Cuando quieras, seguí con tu plan. Tu prueba termina el <día dd/mm>."', 1 === preg_match( '/Cuando quieras, seguí con tu plan\. Tu prueba termina el (domingo|lunes|martes|miércoles|jueves|viernes|sábado) \d{2}\/\d{2}\./u', $h ) && false === strpos( $h, 'Entraste a' ) );
+t( 'con 6 días: los dos botones con link firmado', 2 === count( ctt_hrefs( $h ) ) && '' !== ctt_token_de( ctt_hrefs( $h )[0] ) && '' !== ctt_token_de( ctt_hrefs( $h )[1] ) );
+t( 'con 6 días: conteo "mostrado" 1 y un log cartel_trial_mostrado', array( gmdate( 'Y-m-d' ) => array( 'mostrado' => 1 ) ) === CN_Cartel_Trial::conteo() && 1 === count( array_keys( ctt_tipos( $w ), 'cartel_trial_mostrado', true ) ) );
+CN_Cartel_Trial::html( $m6 );
+CN_Cartel_Trial::html( $m6 );
+t( 'con 6 días: mismo día, no vuelve a contar ni a loguear', array( gmdate( 'Y-m-d' ) => array( 'mostrado' => 1 ) ) === CN_Cartel_Trial::conteo() && 1 === count( array_keys( ctt_tipos( $w ), 'cartel_trial_mostrado', true ) ) );
+t( 'con 6 días: el log lleva las horas que quedan (143)', false !== strpos( ctt_payloads( $w ), '143' ) );
+t( 'con 6 días: sin datos personales ni WhatsApp', ctt_sin_datos( $h ) && ctt_sin_datos( ctt_payloads( $w ) ) );
+t( 'con 6 días: solo lectura', ctt_solo_lectura( $w ) );
+$w = ctt_preparar( 'on', null, 4 );
+update_option( CN_Cartel_Trial::OPT_VENTANA, 168 );
+$h = CN_Cartel_Trial::html( ctt_miembro( 30 ) );
+t( 'con 168 y 30 h: el texto de siempre ("Entraste a 4 clases del club…")', false !== strpos( $h, 'Entraste a 4 clases del club. Tu prueba termina el ' ) && false === strpos( $h, 'Cuando quieras' ) );
+$w = ctt_preparar( 'on', null, 4 );
+t( 'con 48 (por defecto) y 6 días: no se muestra, ni conteo ni log', '' === CN_Cartel_Trial::html( ctt_miembro( 6 * 24 ) ) && array() === CN_Cartel_Trial::conteo() && array() === ctt_tipos( $w ) );
+$w = ctt_preparar( 'log', null, 4 );
+update_option( CN_Cartel_Trial::OPT_VENTANA, 168 );
+t( 'log + 168 y 6 días: no muestra; cuenta se_mostraria y loguea cartel_trial_elegible', '' === CN_Cartel_Trial::html( ctt_miembro( 6 * 24 ) ) && array( gmdate( 'Y-m-d' ) => array( 'se_mostraria' => 1 ) ) === CN_Cartel_Trial::conteo() && array( 'cartel_trial_elegible' ) === ctt_tipos( $w ) );
+update_option( CN_Cartel_Trial::OPT_VENTANA, 48 ); // los tests de abajo asumen la ventana por defecto
 
 seccion( 'precio en los botones: sale de CN_MP::PLANES' );
 t( 'precio Full = CN_MP::PLANES[full]', '$' . number_format( CN_MP::PLANES['full']['precio'], 0, ',', '.' ) === CN_Cartel_Trial::precio( 'full' ) && '$32.000' === CN_Cartel_Trial::precio( 'full' ) );
@@ -349,5 +413,9 @@ t( 'clase: sin UPDATE/DELETE/INSERT directos', 0 === preg_match( '/\b(UPDATE|DEL
 t( 'clase: no toca login, sesiones, webhook de MP ni sync (de CN_MP solo lee get_planes)', 0 === preg_match( '/CN_Auth::|CN_Sync::|CN_MP::(?!get_planes\(\))|crear_sesion|logout|wp_remote_|wp_mail\(/', $clase ) );
 t( 'clase: sin WhatsApp', false === stripos( $clase, 'whatsapp' ) && false === stripos( $clase, 'wa.me' ) );
 t( 'clase: el modo por defecto es off', false !== strpos( $clase, "get_option( self::OPT_MODO, 'off' )" ) );
+t( 'clase: la ventana por defecto es 48', false !== strpos( $clase, 'get_option( self::OPT_VENTANA, 48 )' ) );
+$admin = file_get_contents( $raiz . 'includes/class-cn-admin.php' );
+t( 'Config: selector de ventana (48 y 168) al lado del flag del cartel', 1 === preg_match( '/name="cn_cartel_trial_modo">.*?<\/select>\s*<\?php if \( method_exists\( \'CN_Cartel_Trial\', \'ventana_h\' \) \).*?name="cn_cartel_trial_ventana_h".*?value="48".*?value="168"/s', $admin ) );
+t( 'Config: al guardar, todo lo que no sea 168 queda en 48', false !== strpos( $admin, "update_option( CN_Cartel_Trial::OPT_VENTANA, '168' === sanitize_key( wp_unslash( \$_POST['cn_cartel_trial_ventana_h'] ) ) ? 168 : 48 );" ) );
 CN_Cartel_Trial::$reloj     = null;
 CN_Cartel_Trial::$sin_cache = null;

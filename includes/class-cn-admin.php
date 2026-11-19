@@ -1444,10 +1444,13 @@ class CN_Admin {
 			if ( isset( $_POST['cn_suscribir_modo'] ) && class_exists( 'CN_Suscribir' ) ) {
 				update_option( CN_Suscribir::OPT_MODO, 'on' === sanitize_key( wp_unslash( $_POST['cn_suscribir_modo'] ) ) ? 'on' : 'off' );
 			}
-			// Cartel de suscripción en la portada del club (trials con 48 h o menos). off por defecto.
+			// Cartel de suscripción en la portada del club (ventana de 48 o 168 h). off por defecto.
 			if ( isset( $_POST['cn_cartel_trial_modo'] ) && class_exists( 'CN_Cartel_Trial' ) ) {
 				$cn_cartel_nuevo = sanitize_key( wp_unslash( $_POST['cn_cartel_trial_modo'] ) );
 				update_option( CN_Cartel_Trial::OPT_MODO, in_array( $cn_cartel_nuevo, array( 'log', 'on' ), true ) ? $cn_cartel_nuevo : 'off' );
+			}
+			if ( isset( $_POST['cn_cartel_trial_ventana_h'] ) && class_exists( 'CN_Cartel_Trial' ) && defined( 'CN_Cartel_Trial::OPT_VENTANA' ) ) {
+				update_option( CN_Cartel_Trial::OPT_VENTANA, '168' === sanitize_key( wp_unslash( $_POST['cn_cartel_trial_ventana_h'] ) ) ? 168 : 48 );
 			}
 			update_option( CN_Retorno::OPT_WHATSAPP, preg_replace( '/\D+/', '', sanitize_text_field( wp_unslash( $_POST['cn_retorno_whatsapp'] ?? '' ) ) ) ); // solo dígitos
 			// API de solo lectura del panel de socias (CN_Panel_API). Apagada por defecto.
@@ -1571,13 +1574,19 @@ class CN_Admin {
 					<?php endif; ?>
 					<?php if ( class_exists( 'CN_Cartel_Trial' ) ) : ?>
 					<tr>
-						<th><label>Cartel de suscripción en el club (trials con 48 h o menos)</label></th>
+						<th><label>Cartel de suscripción en el club (últimas 48 h o todo el trial)</label></th>
 						<td>
 							<select name="cn_cartel_trial_modo">
 								<option value="off" <?php selected( 'off', $cartel_trial_modo ); ?>>Apagado</option>
 								<option value="log" <?php selected( 'log', $cartel_trial_modo ); ?>>Solo registrar (no se muestra)</option>
 								<option value="on" <?php selected( 'on', $cartel_trial_modo ); ?>>Encendido (se muestra en la portada del club)</option>
 							</select>
+							<?php if ( method_exists( 'CN_Cartel_Trial', 'ventana_h' ) ) : $cn_cartel_ventana = CN_Cartel_Trial::ventana_h(); ?>
+							<select name="cn_cartel_trial_ventana_h" aria-label="Cuándo se muestra el cartel">
+								<option value="48" <?php selected( 48, $cn_cartel_ventana ); ?>>Últimas 48 h del trial</option>
+								<option value="168" <?php selected( 168, $cn_cartel_ventana ); ?>>Todo el trial (7 días)</option>
+							</select>
+							<?php endif; ?>
 							<p class="description">Apagado por defecto. Botones Full y Plan Club con el link firmado de la ficha (orígenes club_cartel_full y club_cartel_club); necesita el link firmado encendido y con secreto. Marcha atrás: Apagado.</p>
 							<?php
 							$cn_cartel_conteo = array_slice( CN_Cartel_Trial::conteo(), 0, 7, true );
