@@ -11,7 +11,12 @@ if ( ! defined( 'ABSPATH' ) ) exit;
  * Modos (opción cn_alta_mail_modo, por defecto 'off'):
  *  - 'off': no hace nada (ni una consulta a MP).
  *  - 'log': solo registra en mp_log (alta_mail_simulado, email enmascarado) qué haría. NO manda mail.
- *  - 'on' : manda el mail (máx. 1 por suscripción).
+ *  - 'on' : manda el mail (máx. 1 por suscripción) y, si hace falta, UN recordatorio (máx. 2 mails en total).
+ *
+ * Recordatorio: si la suscripción sigue authorized y sin ficha y el link del primer mail ya venció (o le faltan menos de
+ * 24 hs), sale UN segundo mail ("Te falta un paso…") con un link firmado nuevo de TOKEN_DIAS días. Nunca un tercero.
+ * No se manda si la suscripción está en conflicto (sub_conflicto: la ficha ya tiene OTRA suscripción): ahí el link no
+ * sirve y hay que resolverlo a mano. En 'log' solo registra alta_mail_recordatorio_simulado ("reenviaría").
  * Al salir de 'off' Config guarda cn_alta_mail_desde = ahora: solo suscripciones creadas desde ese momento son elegibles
  * (el backlog de suscripciones sin vincular no se toca).
  *
@@ -27,6 +32,13 @@ class CN_Alta_Mail {
 	const OPT_AVISADOS  = 'cn_alta_mail_avisados'; // 'motivo|id' => timestamp (una sola línea en el cartel por caso)
 	const OPT_CHEQUEOS  = 'cn_alta_mail_chequeos'; // preapproval_id => timestamp del último chequeo de cobro de una suscripción vieja sin cobro aprobado
 	const OPT_INTENTOS  = 'cn_alta_mail_intentos'; // preapproval_id => intentos de envío del mail
+	const OPT_RECORDATORIOS      = 'cn_alta_mail_recordatorios';           // preapproval_id => timestamp del recordatorio (2º y último mail)
+	const OPT_REC_SIMULADOS      = 'cn_alta_mail_recordatorios_simulados'; // ídem para el modo 'log'
+	const OPT_REC_INTENTOS       = 'cn_alta_mail_recordatorios_intentos';  // preapproval_id => intentos de envío del recordatorio
+	const MAX_RECORDATORIOS      = 3;       // recordatorios por corrida
+	const RECORDATORIO_ANTES_SEG = 86400;   // se manda cuando al link le faltan menos de 24 hs (o ya venció)
+	const VENTANA_CONFLICTO_SEG  = 2592000; // 30 días de sub_conflicto en mp_log
+	const ASUNTO_RECORDATORIO    = 'Te falta un paso para entrar al Club Natureza';
 	const MAX_ACCIONES  = 3;    // suscripciones por corrida a las que se les manda (o simula) el mail
 	const MAX_CONSULTAS = 10;   // suscripciones NUEVAS (<= 72 hs) por corrida a las que se les consulta el cobro (acota los pedidos)
 	const EDAD_MIN_SEG  = 2700; // 45 min: antes de eso no se manda ni se simula (la clienta puede estar completando sus datos en la página de retorno). Es el valor por defecto de la opción cn_mail_recuperacion_min: ver espera_seg().
@@ -155,10 +167,10 @@ class CN_Alta_Mail {
 
 	// ---------------------------------------------------------------- corrida (la llama CN_Sync::correr)
 	/**
-	 * @return array{modo:string,candidatas:int,consultadas:int,acciones:int,motivo:string}
+	 * @return array{modo:string,candidatas:int,consultadas:int,acciones:int,recordatorios:int,motivo:string}
 	 */
 	public static function correr() {
-		$res  = array( 'modo' => self::modo(), 'candidatas' => 0, 'consultadas' => 0, 'acciones' => 0, 'motivo' => '' );
+		$res  = array( 'modo' => self::modo(), 'candidatas' => 0, 'consultadas' => 0, 'acciones' => 0, 'recordatorios' => 0, 'motivo' => '' );
 		$modo = $res['modo'];
 		if ( 'off' === $modo ) {
 			return $res;
@@ -183,8 +195,16 @@ class CN_Alta_Mail {
 		$enviados   = self::mapa( self::OPT_ENVIADOS );
 		$simulados  = self::mapa( self::OPT_SIMULADOS );
 		$candidatas = array();
+		$recordar   = array(); // ya recibieron el 1er mail, siguen authorized y el link venció (o vence en < 24 hs)
+		$recs       = self::mapa( self::OPT_RECORDATORIOS );
+		$recs_sim   = self::mapa( self::OPT_REC_SIMULADOS );
 		foreach ( $items as $it ) {
 			$id = isset( $it['id'] ) && is_string( $it['id'] ) ? strtolower( $it['id'] ) : '';
+			if ( CN_Vinculo_Manual::id_valido( $id ) && ( $it['status'] ?? '' ) === 'authorized' && isset( $enviados[ $id ] )
+				&& ! isset( $recs[ $id ] ) && ! ( 'log' === $modo && isset( $recs_sim[ $id ] ) )
+				&& (int) $enviados[ $id ] + self::TOKEN_DIAS * DAY_IN_SECONDS - self::RECORDATORIO_ANTES_SEG <= time() ) {
+				$recordar[ $id ] = array( 'item' => $it, 'creada' => 0 );
+			}
 			if ( ! CN_Vinculo_Manual::id_valido( $id ) || ( $it['status'] ?? '' ) !== 'authorized' || isset( $enviados[ $id ] ) || ( 'log' === $modo && isset( $simulados[ $id ] ) ) ) {
 				continue;
 			}
@@ -252,7 +272,111 @@ class CN_Alta_Mail {
 				$res['acciones']++;
 			}
 		}
+		if ( 'corte_429' !== $res['motivo'] ) {
+			$res['recordatorios'] = self::recordar( $modo, $recordar, $token, $pres );
+		}
 		return $res;
+	}
+
+	/** Recordatorios (2º y último mail) de la corrida. Devuelve cuántos se mandaron (o simularon en 'log'). */
+	protected static function recordar( $modo, $recordar, $token, &$pres ) {
+		$recordar = self::sacar_vinculadas( $recordar );
+		if ( ! $recordar ) {
+			return 0;
+		}
+		$conflicto = self::ids_en_conflicto( time() );
+		if ( null === $conflicto ) {
+			return 0; // error de base: ante la duda no se manda nada.
+		}
+		$hechos = 0;
+		foreach ( $recordar as $id => $c ) {
+			if ( $hechos >= self::MAX_RECORDATORIOS ) {
+				break;
+			}
+			if ( isset( $conflicto[ $id ] ) ) {
+				self::avisar_una_vez( 'alta_mail_recordatorio_conflicto', $id, array( 'detalle' => 'La ficha ya tiene OTRA suscripción: no se manda el recordatorio (resolvelo a mano).' ) );
+				continue;
+			}
+			$n = self::mapa( self::OPT_REC_INTENTOS );
+			if ( isset( $n[ $id ] ) && (int) $n[ $id ] >= self::MAX_ENVIOS ) {
+				continue;
+			}
+			$monto = $c['item']['auto_recurring']['transaction_amount'] ?? null;
+			$plan  = is_numeric( $monto ) && isset( self::MONTOS[ (int) round( (float) $monto ) ] ) ? self::MONTOS[ (int) round( (float) $monto ) ] : null;
+			$email = self::email_del_pagador( $id, $token, $pres );
+			if ( ! empty( $pres['corte_429'] ) ) {
+				break;
+			}
+			if ( null === $email ) {
+				continue;
+			}
+			$base = array( 'preapproval_id' => $id, 'email' => self::mascara_email( $email ), 'plan' => $plan, 'monto' => is_numeric( $monto ) ? (float) $monto : null );
+			if ( 'log' === $modo ) {
+				CN_Webhook::registrar_log_mp( 'alta_mail_recordatorio_simulado', $base + array( 'accion' => 'reenviaria' ) );
+				$s        = self::mapa( self::OPT_REC_SIMULADOS );
+				$s[ $id ] = time();
+				self::mapa_set( self::OPT_REC_SIMULADOS, $s );
+				$hechos++;
+				continue;
+			}
+			$url = self::url_pagina();
+			if ( '' === $url || ! CN_Retorno::activo() ) {
+				self::avisar_una_vez( '' === $url ? 'alta_mail_sin_pagina' : 'alta_mail_retorno_apagado', $id, array( 'detalle' => 'No se mandó el recordatorio: falta la página de retorno o está apagada (Config).' ) );
+				continue;
+			}
+			$n[ $id ] = ( isset( $n[ $id ] ) ? (int) $n[ $id ] : 0 ) + 1;
+			self::mapa_set( self::OPT_REC_INTENTOS, $n );
+			// Se marca ANTES de mandar (nunca un 3er mail); si el envío falla se desmarca y se reintenta (máx. MAX_ENVIOS intentos).
+			$r        = self::mapa( self::OPT_RECORDATORIOS );
+			$r[ $id ] = time();
+			self::mapa_set( self::OPT_RECORDATORIOS, $r );
+			if ( ! self::enviar_mail( $email, add_query_arg( array( 'cn_alta' => self::crear_token( $id ) ), $url ), true ) ) {
+				$r = self::mapa( self::OPT_RECORDATORIOS );
+				unset( $r[ $id ] );
+				self::mapa_set( self::OPT_RECORDATORIOS, $r );
+				self::avisar_una_vez( 'alta_mail_fallo_recordatorio', $id, array( 'detalle' => 'wp_mail no pudo enviar el recordatorio (máx. ' . self::MAX_ENVIOS . ' intentos).' ) );
+				continue;
+			}
+			CN_Webhook::registrar_log_mp( 'alta_mail_recordatorio_enviado', $base );
+			$hechos++;
+		}
+		return $hechos;
+	}
+
+	/**
+	 * preapproval_ids en conflicto: sub_conflicto en mp_log en los últimos 30 días (la ficha ya tenía OTRA suscripción; lo registran el
+	 * webhook, "Vincular por celular" y la página de retorno). Solo lectura. null ante un error de base.
+	 *
+	 * @return array<string,true>|null
+	 */
+	public static function ids_en_conflicto( $ahora ) {
+		global $wpdb;
+		$rows = $wpdb->get_results( $wpdb->prepare(
+			'SELECT payload FROM ' . CN_DB::tabla( 'mp_log' ) . ' WHERE tipo = %s AND fecha >= %s ORDER BY id DESC LIMIT 500',
+			'sub_conflicto',
+			gmdate( 'Y-m-d H:i:s', $ahora - self::VENTANA_CONFLICTO_SEG )
+		) );
+		if ( '' !== (string) $wpdb->last_error ) {
+			return null;
+		}
+		$ids = array();
+		foreach ( is_array( $rows ) ? $rows : array() as $r ) {
+			$p  = json_decode( (string) ( is_object( $r ) && isset( $r->payload ) ? $r->payload : '' ), true );
+			$id = is_array( $p ) && isset( $p['preapproval_nuevo'] ) ? strtolower( trim( (string) $p['preapproval_nuevo'] ) ) : '';
+			if ( '' !== $id ) {
+				$ids[ $id ] = true;
+			}
+		}
+		return $ids;
+	}
+
+	/** ¿El último link mandado (el del recordatorio si hubo; si no, el del 1er mail) ya venció? false si nunca se mandó. Solo lee options. */
+	public static function link_vencido( $id, $ahora ) {
+		$id  = strtolower( (string) $id );
+		$rec = self::mapa( self::OPT_RECORDATORIOS );
+		$env = self::mapa( self::OPT_ENVIADOS );
+		$ts  = isset( $rec[ $id ] ) ? (int) $rec[ $id ] : ( isset( $env[ $id ] ) ? (int) $env[ $id ] : 0 );
+		return $ts > 0 && $ts + self::TOKEN_DIAS * DAY_IN_SECONDS < $ahora;
 	}
 
 	/** Suscripciones authorized (hasta 4 páginas de 100), con reintentos ante 429. null si MP falló. */
@@ -365,8 +489,12 @@ class CN_Alta_Mail {
 	}
 
 	/** Mail con la marca de los demás (Georgia, verde #2f3b2c, crema #f5f3ef). Sin contraseñas ni datos sensibles. Contacto: responder el mail o hola@naturalesart.com (nada más). */
-	public static function enviar_mail( $email, $link ) {
-		$asunto  = 'Tu suscripción al Club Natureza está activa: completá tus datos';
+	public static function enviar_mail( $email, $link, $recordatorio = false ) {
+		$asunto  = $recordatorio ? self::ASUNTO_RECORDATORIO : 'Tu suscripción al Club Natureza está activa: completá tus datos';
+		$titulo  = $recordatorio ? 'Te falta un paso 🌿' : '¡Gracias por sumarte! 🎉';
+		$intro   = $recordatorio
+			? 'Tu suscripción al Club Natureza sigue activa, pero todavía no completaste tus datos para entrar. Te mandamos un link nuevo:'
+			: 'Tu suscripción al Club Natureza está activa. Para entrar al Club, completá tus datos en este botón:';
 		$cuerpo  = '<!DOCTYPE html><html><body style="margin:0;padding:0;background:#f5f3ef;font-family:Georgia,serif;">';
 		$cuerpo .= '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f5f3ef;padding:32px 16px;">';
 		$cuerpo .= '<tr><td align="center">';
@@ -374,8 +502,8 @@ class CN_Alta_Mail {
 		$cuerpo .= '<tr><td style="background:#2f3b2c;padding:28px 32px;text-align:center;">';
 		$cuerpo .= '<span style="color:#f5f3ef;font-size:22px;letter-spacing:1px;">🌿 Club Natureza</span></td></tr>';
 		$cuerpo .= '<tr><td style="padding:32px;">';
-		$cuerpo .= '<h1 style="font-size:20px;color:#2f3b2c;margin:0 0 16px;">¡Gracias por sumarte! 🎉</h1>';
-		$cuerpo .= '<p style="font-size:15px;color:#333;line-height:1.6;margin:0 0 20px;">Tu suscripción al Club Natureza está activa. Para entrar al Club, completá tus datos en este botón:</p>';
+		$cuerpo .= '<h1 style="font-size:20px;color:#2f3b2c;margin:0 0 16px;">' . $titulo . '</h1>';
+		$cuerpo .= '<p style="font-size:15px;color:#333;line-height:1.6;margin:0 0 20px;">' . $intro . '</p>';
 		$cuerpo .= '<table role="presentation" width="100%"><tr><td align="center">';
 		$cuerpo .= '<a href="' . esc_url( $link ) . '" style="display:inline-block;background:#2f3b2c;color:#f5f3ef;text-decoration:none;padding:14px 32px;border-radius:8px;font-size:15px;margin-bottom:24px;">Completar mis datos →</a>';
 		$cuerpo .= '</td></tr></table>';

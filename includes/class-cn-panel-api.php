@@ -508,8 +508,19 @@ class CN_Panel_API {
 				}
 			}
 		}
-		$items = array();
-		$algun = false;
+		$items      = array();
+		$algun      = false;
+		$nuevos     = method_exists( 'CN_Alta_Mail', 'ids_en_conflicto' ) && method_exists( 'CN_Alta_Mail', 'link_vencido' ); // deploy archivo por archivo: clase vieja => motivo null
+		$conflictos = $vistas && $nuevos ? CN_Alta_Mail::ids_en_conflicto( $ahora ) : array();
+		$conflictos = is_array( $conflictos ) ? $conflictos : array(); // error de base: sin dato de conflicto (no se inventa)
+		$por_motivo = array( 'sin_ficha' => 0, 'conflicto' => 0, 'link_vencido' => 0 );
+		foreach ( array_keys( $vistas ) as $id ) {
+			$m                    = $nuevos ? self::motivo_sin_ficha( $id, $conflictos, $ahora ) : null;
+			$vistas[ $id ]['mot'] = $m;
+			if ( null !== $m ) {
+				$por_motivo[ $m ]++;
+			}
+		}
 		foreach ( array_slice( $vistas, 0, self::MAX_SIN_FICHA, true ) as $id => $v ) {
 			$primer = strtotime( $v['primer_aviso'] . ' UTC' );
 			if ( isset( $altas[ $id ] ) ) {
@@ -527,9 +538,24 @@ class CN_Panel_API {
 				'horas_sin_vincular'  => $horas,
 				'primer_aviso'        => self::iso( $v['primer_aviso'] ),
 				'mas_de_72h'          => $mas,
+				'motivo'              => $v['mot'],
 			);
 		}
-		return array( 'cantidad' => count( $vistas ), 'mas_de_72h' => $algun, 'items' => $items );
+		return array( 'cantidad' => count( $vistas ), 'mas_de_72h' => $algun, 'por_motivo' => $por_motivo, 'items' => $items );
+	}
+
+	/**
+	 * Por qué una suscripción authorized sigue sin ficha (solo lectura: mp_log y options):
+	 *  - conflicto:    sub_conflicto (webhook, vinculación manual o página de retorno) encontró una ficha que ya tiene OTRA suscripción.
+	 *  - link_vencido: se le mandó el mail de alta (o el recordatorio) y el último link ya venció.
+	 *  - sin_ficha:    el resto.
+	 */
+	protected static function motivo_sin_ficha( $id, $conflictos, $ahora ) {
+		$id = strtolower( (string) $id );
+		if ( isset( $conflictos[ $id ] ) ) {
+			return 'conflicto';
+		}
+		return CN_Alta_Mail::link_vencido( $id, $ahora ) ? 'link_vencido' : 'sin_ficha';
 	}
 
 	/** Clientas esperando acceso (cartel de Socias). No usa CN_Retorno::pendientes_vigentes porque esa función limpia la opción (escribe). */
